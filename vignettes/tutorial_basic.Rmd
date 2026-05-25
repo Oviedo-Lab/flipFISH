@@ -96,18 +96,23 @@ Now try new function.
 bc_counts <- as.matrix(m1_summary_stats[,c("rates", "variance", "counts")])
 rownames(bc_counts) <- rownames(m1_summary_stats)
 cb <- as.matrix(codebook)
+t <- Sys.time()
 test_results <- mQC(
   bc_counts, 
   cb, 
   max_correctable_Hamming_distance,
   0.25,   # max_fr
-  1e-3,   # ctol
-  100,    # max_evals
-  "COBYLA", # COBYLA, CRS2, NELDERMEAD, SBPLX, PRAXIS, ESCH, ISRES, DIRECT, DIRECT_L, DIRECT_L_RAND, DIRECT_NOSCAL, DIRECT_L_NOSCAL
-  2,  # Number of times to rerun a simulation when predicting counts as a way to estimate likelihood of observed counts given a set of bit-flip rates; values >1 help to smooth out stochastic noise
-  1,  # Expected number of transcripts for least abundant barcode, used to set counts in simulations from rates
-  100 # Number of times to simulate a given set of flip rates, to get distribution of CR and PPV values
+  1e-6,   # ctol
+  1000*463,    # max_evals
+  "CRS2", # COBYLA, CRS2, NELDERMEAD, SBPLX, PRAXIS, ESCH, ISRES, DIRECT, DIRECT_L
+  4,  # Number of times to rerun a simulation when predicting counts as a way to estimate likelihood of observed counts given a set of bit-flip rates; values >1 help to smooth out stochastic noise
+  10,  # Expected number of transcripts for least abundant barcode, used to set counts in simulations from rates
+  100, # Number of times to simulate a given set of flip rates, to get distribution of CR and PPV values
+  10    # n_forks
   )
+d <- Sys.time() - t
+units(d) <- "secs"
+cat("\ntime:", d, "seconds\n")
 ```
 
 ```{r plot_results}
@@ -124,4 +129,5 @@ ggplot(plot_df, aes(x = bc)) +
   labs(title = "Observed vs Predicted Counts", x = "Barcode Index", y = "Counts") + 
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 hist(test_results[["nll_sim"]])
+plot(test_results[["eval_history"]])
 ```

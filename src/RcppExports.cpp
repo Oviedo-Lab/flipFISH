@@ -12,8 +12,8 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 // mQC
-List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int max_correctable_Hamming_distance, double max_fr, double ctol, int max_evals, std::string algorithm_name, int n_reruns, int least_bc_n, int n_resamples);
-RcppExport SEXP _FISHmQC_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP max_frSEXP, SEXP ctolSEXP, SEXP max_evalsSEXP, SEXP algorithm_nameSEXP, SEXP n_rerunsSEXP, SEXP least_bc_nSEXP, SEXP n_resamplesSEXP) {
+List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int max_correctable_Hamming_distance, double max_fr, double ctol, int max_evals, std::string algorithm_name, int n_reruns, int least_bc_n, int n_resamples, int n_forks);
+RcppExport SEXP _FISHmQC_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP max_frSEXP, SEXP ctolSEXP, SEXP max_evalsSEXP, SEXP algorithm_nameSEXP, SEXP n_rerunsSEXP, SEXP least_bc_nSEXP, SEXP n_resamplesSEXP, SEXP n_forksSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -27,13 +27,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type n_reruns(n_rerunsSEXP);
     Rcpp::traits::input_parameter< int >::type least_bc_n(least_bc_nSEXP);
     Rcpp::traits::input_parameter< int >::type n_resamples(n_resamplesSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, max_correctable_Hamming_distance, max_fr, ctol, max_evals, algorithm_name, n_reruns, least_bc_n, n_resamples));
+    Rcpp::traits::input_parameter< int >::type n_forks(n_forksSEXP);
+    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, max_correctable_Hamming_distance, max_fr, ctol, max_evals, algorithm_name, n_reruns, least_bc_n, n_resamples, n_forks));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_FISHmQC_mQC", (DL_FUNC) &_FISHmQC_mQC, 10},
+    {"_FISHmQC_mQC", (DL_FUNC) &_FISHmQC_mQC, 11},
     {NULL, NULL, 0}
 };
 
