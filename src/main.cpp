@@ -709,64 +709,43 @@ double logTR(
     return log_tr; 
   }
 
-Eigen::Matrix<uint64_t, Dynamic, Dynamic> find_transform_flips_all(
-    std::vector<uint64_t> barcodes,
-    int N_bits
-  ) {
-    int N_barcodes = barcodes.size();
-    // Initialize matrix to hold transforming flips
-    // ... T(i,j) = bit flips needed to get from barcode i to barcode j, and T(i,j) = T(j,i)
-    Eigen::Matrix<uint64_t, Dynamic, Dynamic> T(N_barcodes, N_barcodes);
-    for (int j = 0; j < N_barcodes; ++j) {
-      for (int i = j; i < N_barcodes; ++i) {
-        uint64_t flips = (barcodes[i] ^ barcodes[j]) & ((1ULL << N_bits) - 1);
-        T(i, j) = flips;
-        T(j, i) = flips;
-      } 
-    }
-    return T;
-  }
-
-std::vector<uint64_t> find_transform_flips(
+std::vector<std::vector<uint64_t>> find_transform_flips(
     std::vector<uint64_t> barcodes, // Possible true barcodes (e.g., from codebook)
-    uint64_t observed_barcode, // A single observed barcode (e.g., from a spot)
+    std::vector<uint64_t> observed_barcodes, // A single observed barcode (e.g., from a spot)
     int N_bits
   ) { 
     int N_barcodes = barcodes.size();
-    std::vector<uint64_t>  T;
-    T.reserve(N_barcodes);
-    for (int i = 0; i < N_barcodes; ++i) {
-      uint64_t flips = (barcodes[i] ^ observed_barcode) & ((1ULL << N_bits) - 1);
-      T.push_back(flips);
+    int N_correctable = observed_barcodes.size();
+    std::vector<std::vector<uint64_t>> T(N_correctable, std::vector<uint64_t>(N_barcodes));
+    for (int j = 0; j < N_correctable; ++j) {
+      for (int i = 0; i < N_barcodes; ++i) {
+        T[j][i] = (barcodes[i] ^ observed_barcodes[j]) & ((1ULL << N_bits) - 1);
+      }
     }
     return T; // For each possible true barcode, the bit-flips which would turn it into observed_barcode
   }
 
 // Number of B' incorrectly read as something corrected to B
 double expected_bc_count(
-    int k,                                        // Index of true barcode
-    const FlipRates& fr,                          // FlipRates struct holding rate10, rate01, and corr
-    const std::vector<int>& bc_counts_true,       // Vector of same length as true_barcodes, giving number of spots with each true barcode
-    const std::vector<uint64_t>& true_barcodes,   // Vector giving all possible true spot barcodes
-    const std::vector<uint64_t>& corrected_to_k,  // vector of barcodes that would be corrected to barcode indexed by k
-    const int max_Hamming
+    const FlipRates& fr,                            // FlipRates struct holding rate10, rate01, and corr
+    const std::vector<int>& bc_counts_true,         // Vector of same length as true_barcodes, giving number of spots with each true barcode
+    const std::vector<uint64_t>& true_barcodes,     // Vector giving all possible true spot barcodes
+    const std::vector<uint64_t>& corrected_to_BOI   // vector of barcodes that would be corrected to barcode of interest (BOI)
   ) {
     int N_bits = fr.rate10.size();
-    double misread_count = 0.0;
+    int N_correctable = corrected_to_BOI.size();
+    int N_barcodes = true_barcodes.size();
+    double count = 0.0;
     // For each possible barcode misread that would be corrected to the barcode indexed by k ...
-    for (uint64_t bcr : corrected_to_k) {
-      // Get bit-flips required to transform each true barcode into this misread barcode
-      std::vector<uint64_t> flips = find_transform_flips(true_barcodes, bcr, N_bits); 
-      // ^ ... Precomputing this step not worth the memory (tried it!!);
-      //   ... although, if precomputed, could be organized by hamming distance, then pruned down (to shrink the unordered map)
-      for (int i = 0; i < true_barcodes.size(); ++i) {
-        // Find transform rate ... if number of flips is greater than max_Hamming, the transformation is effectively impossible
-        double transform_rate = __builtin_popcountll(flips[i]) <= max_Hamming ? std::exp(logTR(true_barcodes[i], flips[i], fr)) : 0.0;
-        // Find expected count of spot misreads corrected to barcode k, from true barcode i, and add to total misread count
-        misread_count += transform_rate * (double)bc_counts_true[i];
+    for (int i = 0; i < N_correctable; ++i) {
+      for (int j = 0; j < N_barcodes; ++j) {
+        // Get bit-flips required to transform the true barcode into the misread barcode
+        uint64_t flips_to_k = (true_barcodes[j] ^ corrected_to_BOI[i]) & ((1ULL << N_bits) - 1);
+        // Find expected count of spot misreads corrected to barcode k, from true barcode j, and add to total misread count
+        count += std::exp(logTR(true_barcodes[j], flips_to_k, fr)) * (double)bc_counts_true[j];
       }
     }
-    return misread_count;
+    return count;
   }
 
 // Estimate expected barcode counts after correction,  as a function of flip rates and true barcode counts
@@ -780,18 +759,6 @@ std::vector<double> expected_bc_counts(
     int N_barcodes = true_barcodes.size();
     std::vector<double> expected_counts(N_barcodes, 0.0);
     int max_count = *std::max_element(bc_counts_true.begin(), bc_counts_true.end());
-    int max_Hamming = static_cast<int>(std::floor(1.0 + std::log2(max_count))) + 1;
-    // for (int k = 0; k < N_barcodes; ++k) {
-    //   Rcpp::Rcout << "Computing expected count for barcode " << k << " of " << N_barcodes << std::endl;
-    //   expected_counts[k] = expected_bc_count(
-    //     k, 
-    //     fr,
-    //     bc_counts_true, 
-    //     true_barcodes, 
-    //     correction_table_inverted.at(k), 
-    //     max_Hamming
-    //     );
-    // }
     
     // Construct batches of barcodes to simulate in parallel
     std::vector<std::vector<int>> barcode_batches(n_forks);
@@ -832,12 +799,10 @@ std::vector<double> expected_bc_counts(
           
           for (int b : barcode_batches[i]) {
             expected_counts_child[b] = expected_bc_count(
-              b, 
               fr,
               bc_counts_true, 
               true_barcodes, 
-              correction_table_inverted.at(b), 
-              max_Hamming
+              correction_table_inverted.at(b)
             );
           } 
           
@@ -912,12 +877,10 @@ std::vector<double> expected_bc_counts(
       // Run in serial
       for (int b : barcode_batches[0]) {
         expected_counts[b] = expected_bc_count(
-          b, 
           fr,
           bc_counts_true, 
           true_barcodes, 
-          correction_table_inverted.at(b), 
-          max_Hamming
+          correction_table_inverted.at(b)
         );
       }
     }

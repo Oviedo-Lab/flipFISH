@@ -103,12 +103,12 @@ test_results <- mQC(
   max_correctable_Hamming_distance,
   0.10,   # max_fr
   1e-6,   # ctol
-  200,    # max_evals
+  10,    # max_evals
   "COBYLA", # COBYLA, CRS2, NELDERMEAD, SBPLX, PRAXIS, ESCH, ISRES, DIRECT, DIRECT_L
   4,  # Number of times to rerun a simulation when predicting counts as a way to estimate likelihood of observed counts given a set of bit-flip rates; values >1 help to smooth out stochastic noise
   10,  # Expected number of transcripts for least abundant barcode, used to set counts in simulations from rates
   100, # Number of times to simulate a given set of flip rates, to get distribution of CR and PPV values
-  20    # n_forks
+  10    # n_forks
   )
 d <- Sys.time() - t
 units(d) <- "secs"
@@ -117,8 +117,8 @@ cat("\ntime:", d, "seconds\n")
 
 ```{r plot_results}
 plot_df <- data.frame(
-  observed = test_results$counts_simulated, 
-  predicted = colMeans(test_results[["corrected_counts_sim"]]), 
+  observed = test_results$counts_provided[,"counts"], 
+  predicted = test_results$expected_counts, 
   bc = seq_len(nrow(bc_counts))
   )
 ggplot(plot_df, aes(x = bc)) + 
@@ -128,6 +128,4 @@ ggplot(plot_df, aes(x = bc)) +
   scale_y_log10() +
   labs(title = "Observed vs Predicted Counts", x = "Barcode Index", y = "Counts") + 
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-hist(test_results[["nll_sim"]])
-plot(test_results[["eval_history"]])
 ```
