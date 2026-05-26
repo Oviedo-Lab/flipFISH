@@ -108,7 +108,7 @@ test_results <- mQC(
   4,  # Number of times to rerun a simulation when predicting counts as a way to estimate likelihood of observed counts given a set of bit-flip rates; values >1 help to smooth out stochastic noise
   10,  # Expected number of transcripts for least abundant barcode, used to set counts in simulations from rates
   100, # Number of times to simulate a given set of flip rates, to get distribution of CR and PPV values
-  5    # n_forks
+  20    # n_forks
   )
 d <- Sys.time() - t
 units(d) <- "secs"
