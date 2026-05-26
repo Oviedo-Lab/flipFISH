@@ -603,7 +603,7 @@ double observed_counts_nll_by_sim(
     int sim_num = ++d->sim_num;
     int call_freq = d->call_freq;
     
-    // Compute number of cells needed for a transcript count of 10 for the least abundant barcode
+    // Compute number of cells needed for a transcript count of least_bc_n for the least abundant barcode
     int N_cells = (int)std::round((double)least_bc_n / *std::min_element(bc_rates.begin(), bc_rates.end()));
    
     // Extract rate data
@@ -688,7 +688,7 @@ FlipRates estimate_flip_rates(
     opt.set_min_objective(fn, &STdata);
     opt.set_ftol_rel(ctol);       // stop when iteration changes objective fn value by less than this fraction 
     opt.set_maxeval(max_evals);   // Maximum number of evaluations to try
-    if (algorithm_name == "CRS2" || algorithm_name == "ISRER") {
+    if (algorithm_name == "CRS2" || algorithm_name == "ISRES") {
       Rcpp::Rcout << "Setting initial seed-population size for " << algorithm_name << " to " << n + 1 << std::endl;
       opt.set_population(n + 1);
     }
