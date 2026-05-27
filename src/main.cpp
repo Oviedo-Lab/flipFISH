@@ -44,7 +44,48 @@ struct FlipRates {
   std::vector<double> rate10; // P(1 -> 0) for each bit, so length = N_bits
   std::vector<double> rate01; // P(0 -> 1) for each bit, so length = N_bits
   MatrixXd corr; // N_bits x N_bits matrix of luminance noise correlations between bits
+  MatrixXd log_inv_corr; // Pre-computed matrix of log(1 - corr(i,j)) values, used in logTR calculation
 }; 
+
+MatrixXd make_corr_matrix(
+    const std::vector<double>& corr_flat, 
+    int N_bits
+  ) {
+    MatrixXd L = MatrixXd::Zero(N_bits, N_bits);
+    int idx = 0;
+    for (int i = 0; i < N_bits; ++i) {
+        // positive diagonal
+        L(i,i) = std::exp(corr_flat[idx++]);
+        for (int j = 0; j < i; ++j) {L(i,j) = corr_flat[idx++];}
+    }
+    MatrixXd S = L * L.transpose();
+    VectorXd d = S.diagonal().array().sqrt();
+    MatrixXd corr(N_bits, N_bits);
+    for (int i = 0; i < N_bits; ++i) {
+      for (int j = 0; j < N_bits; ++j) {corr(i,j) = S(i,j) / (d(i) * d(j));}
+    }
+    return corr;
+  }
+
+FlipRates pack_fr(
+    const std::vector<double>& rates_plus_corr,
+    int N_bits
+  ) {
+    FlipRates fr;
+    fr.rate10.assign(rates_plus_corr.begin(), rates_plus_corr.begin() + N_bits);
+    fr.rate01.assign(rates_plus_corr.begin() + N_bits, rates_plus_corr.begin() + 2*N_bits);
+    fr.corr = make_corr_matrix(
+      std::vector<double>(rates_plus_corr.begin() + 2*N_bits, rates_plus_corr.end()), 
+      N_bits
+    );
+    fr.log_inv_corr = MatrixXd::Zero(N_bits, N_bits);
+    for (int i = 0; i < N_bits; ++i) {
+      for (int j = 0; j < i; ++j) {
+        fr.log_inv_corr(i,j) = std::log(1.0 - fr.corr(i,j));
+      }
+    }
+    return fr;
+  }
 
 struct SpotSim {
   // For each barcode, the total number of spots read as that barcode, corrected to that barcode, and correctly read as that barcode
@@ -455,7 +496,7 @@ double compute_nll(
   ) {
     // Compute negative log likelihood of bc_counts, given corrected_counts as predicted counts
     double log_lik = 0.0;
-    double N_cells = STdata.bc_counts[1] / STdata.bc_rates[1]; // Estimate number of cells from observed counts and rates for one of the barcodes (here, barcode 1)
+    double N_cells = (double)STdata.bc_counts[0] / STdata.bc_rates[0]; // Estimate number of cells from observed counts and rates for one of the barcodes
     for (int i = 0; i < pred_counts.size(); ++i) {
       double pred_rate = pred_counts[i] / N_cells;
       if (pred_rate == 0.0) {pred_rate = 1e-12;} // Avoid zero predicted rates, which cause issues for the likelihood calculation
@@ -463,6 +504,21 @@ double compute_nll(
       log_lik += std::log(poisson_gamma_integral(STdata.bc_rates[i], pred_rate, gamma_variance));
     }
     return -log_lik;
+  }
+
+double compute_msle(
+    const std::vector<int>& obs_counts,
+    const std::vector<double>& pred_counts           // predicted corrected counts
+  ) {
+    int N_barcodes = obs_counts.size();
+    if (pred_counts.size() != N_barcodes) {Rcpp::stop("obs_counts and pred_counts must be the same length.");}
+    double msle = 0.0;
+    for (int b = 0; b < N_barcodes; ++b) {
+      double sle = std::log(pred_counts[b] + 1.0) - std::log((double)obs_counts[b] + 1.0);
+      msle += sle * sle;
+    }
+    msle /= (double)N_barcodes;
+    return msle;
   }
 
 uint64_t pack(
@@ -557,26 +613,6 @@ std::unordered_map<uint64_t, int> build_correction_table(
     return correction_table;
   }
 
-MatrixXd make_corr_matrix(
-    const std::vector<double>& corr_flat, 
-    int N_bits
-  ) {
-    MatrixXd L = MatrixXd::Zero(N_bits, N_bits);
-    int idx = 0;
-    for (int i = 0; i < N_bits; ++i) {
-        // positive diagonal
-        L(i,i) = std::exp(corr_flat[idx++]);
-        for (int j = 0; j < i; ++j) {L(i,j) = corr_flat[idx++];}
-    }
-    MatrixXd S = L * L.transpose();
-    VectorXd d = S.diagonal().array().sqrt();
-    MatrixXd corr(N_bits, N_bits);
-    for (int i = 0; i < N_bits; ++i) {
-      for (int j = 0; j < N_bits; ++j) {corr(i,j) = S(i,j) / (d(i) * d(j));}
-    }
-    return corr;
-  }
-
 std::pair<std::vector<int>, std::vector<double>> make_ground_truth_counts(
     int N_cells, 
     const ST_data& STdata,
@@ -636,13 +672,7 @@ double observed_counts_nll_by_sim(
     int N_cells = (int)std::round((double)least_bc_n / *std::min_element(bc_rates.begin(), bc_rates.end()));
    
     // Extract rate data
-    FlipRates fr;
-    fr.rate10.assign(rates_plus_corr.begin(), rates_plus_corr.begin() + N_bits);
-    fr.rate01.assign(rates_plus_corr.begin() + N_bits, rates_plus_corr.begin() + 2*N_bits);
-    fr.corr = make_corr_matrix(
-      std::vector<double>(rates_plus_corr.begin() + 2*N_bits, rates_plus_corr.end()), 
-      N_bits
-    );
+    FlipRates fr = pack_fr(rates_plus_corr, N_bits);
     
     // Extract simulated ground-truth counts and dispersion
     const auto& gtc = make_ground_truth_counts(N_cells, *d, fr);
@@ -675,7 +705,6 @@ using ObjectiveFn = double (*)(
   void*
 );
 
-
 /*
  * Functions to analytically compute expected count read from flip rates and true counts
  */
@@ -702,7 +731,7 @@ double logTR(
       double tr = flip ? F(bit, fr.rate10[i], fr.rate01[i]) : H(bit, fr.rate10[i], fr.rate01[i]);
       // Compute log-correlation adjustment for this bit 
       double log_c = 0.0;
-      for (int j = 0; j < i; ++j) {log_c += std::log(1.0 - fr.corr(i,j));}
+      for (int j = 0; j < i; ++j) {log_c += fr.log_inv_corr(i,j);}
       // Add adjusted log transformation rate for this bit to total log transformation rate
       log_tr += std::log(tr) - log_c;
     }
@@ -739,10 +768,12 @@ double expected_bc_count(
     // For each possible barcode misread that would be corrected to the barcode indexed by k ...
     for (int i = 0; i < N_correctable; ++i) {
       for (int j = 0; j < N_barcodes; ++j) {
-        // Get bit-flips required to transform the true barcode into the misread barcode
-        uint64_t flips_to_k = (true_barcodes[j] ^ corrected_to_BOI[i]) & ((1ULL << N_bits) - 1);
-        // Find expected count of spot misreads corrected to barcode k, from true barcode j, and add to total misread count
-        count += std::exp(logTR(true_barcodes[j], flips_to_k, fr)) * (double)bc_counts_true[j];
+        if (bc_counts_true[j] > 0) {
+          // Get bit-flips required to transform the true barcode into the misread barcode
+          uint64_t flips_to_k = (true_barcodes[j] ^ corrected_to_BOI[i]) & ((1ULL << N_bits) - 1);
+          // Find expected count of spot misreads corrected to barcode k, from true barcode j, and add to total misread count
+          count += std::exp(logTR(true_barcodes[j], flips_to_k, fr)) * (double)bc_counts_true[j];
+        }
       }
     }
     return count;
@@ -783,6 +814,7 @@ std::vector<double> expected_bc_counts(
       for (int i = 0; i < n_forks; i++) {
         
         pid_t pid = fork();
+        int N_barcodes_batch = barcode_batches[i].size();
         
         if (pid == 0) { // child process
           
@@ -795,20 +827,20 @@ std::vector<double> expected_bc_counts(
               close(pipes[j][1]);
             } 
           }
-          std::vector<int> expected_counts_child(N_barcodes, 0.0);
+          std::vector<double> expected_counts_child(N_barcodes_batch, 0.0);
           
-          for (int b : barcode_batches[i]) {
+          for (int b = 0; b < N_barcodes_batch; ++b) {
             expected_counts_child[b] = expected_bc_count(
               fr,
               bc_counts_true, 
               true_barcodes, 
-              correction_table_inverted.at(b)
+              correction_table_inverted.at(barcode_batches[i][b])
             );
           } 
           
           // Send result 
           const char* buffer = reinterpret_cast<const char*>(expected_counts_child.data());
-          size_t nbytes = sizeof(double) * N_barcodes;
+          size_t nbytes = sizeof(double) * expected_counts_child.size();
           size_t total_written = 0;
           while (total_written < nbytes) {
             ssize_t n_written = write(
@@ -838,11 +870,12 @@ std::vector<double> expected_bc_counts(
       
       // Fetch results from pipes
       for (int i = 0; i < n_forks; i++) {
-        std::vector<int> expected_counts_child(N_barcodes, 0);
+        int N_barcodes_batch = barcode_batches[i].size();
+        std::vector<double> expected_counts_child(N_barcodes_batch, 0.0);
         
         // Read the row from the pipe into the buffer
         char* buffer = reinterpret_cast<char*>(expected_counts_child.data());
-        size_t nbytes = sizeof(double) * N_barcodes;
+        size_t nbytes = sizeof(double) * expected_counts_child.size();
         size_t total_read = 0;
         while (total_read < nbytes) {
           ssize_t n_read = read(
@@ -852,20 +885,23 @@ std::vector<double> expected_bc_counts(
           );
           if (n_read == 0) {
             close(pipes[i][0]);
+            int status;
+            waitpid(pids[i], &status, WNOHANG);
             Rcpp::stop(
-              "Unexpected EOF while reading pipe. "
-              "Read " + std::to_string(total_read) +
-                " of " + std::to_string(nbytes) + " bytes."
+              "\nUnexpected EOF while reading pipe " + std::to_string(i) + " of " + std::to_string(n_forks) + ". "
+              "\nRead " + std::to_string(total_read) + " of " + std::to_string(nbytes) + " bytes." + 
+              "\nBatch size: " + std::to_string(barcode_batches[i].size()) + " barcodes, from " + std::to_string(barcode_batches[i][0]) + " to " + std::to_string(barcode_batches[i].back()) + "."
             );
           }
-          if (n_read <= 0) {
+          if (n_read < 0) {
+            if (errno == EINTR) continue; // Retry if interrupted
             close(pipes[i][0]);
             Rcpp::stop("Pipe read failed");
           }
           total_read += static_cast<size_t>(n_read);
         }
         
-        for (int j = 0; j < N_barcodes; ++j) {expected_counts[j] += expected_counts_child[j];}
+        for (int b = 0; b < N_barcodes_batch; ++b) {expected_counts[barcode_batches[i][b]] += expected_counts_child[b];}
         close(pipes[i][0]);           // Close read end
         int status;
         waitpid(pids[i], &status, 0);
@@ -904,13 +940,7 @@ double observed_counts_nll_analytic(
     int n_forks = d->n_forks;
    
     // Extract rate data
-    FlipRates fr;
-    fr.rate10.assign(rates_plus_corr.begin(), rates_plus_corr.begin() + N_bits);
-    fr.rate01.assign(rates_plus_corr.begin() + N_bits, rates_plus_corr.begin() + 2*N_bits);
-    fr.corr = make_corr_matrix(
-      std::vector<double>(rates_plus_corr.begin() + 2*N_bits, rates_plus_corr.end()), 
-      N_bits
-    );
+    FlipRates fr = pack_fr(rates_plus_corr, N_bits);
     
     // Set blanks to zero to approximate true barcodes
     std::vector<int> bc_counts_true = bc_counts; 
@@ -928,7 +958,8 @@ double observed_counts_nll_analytic(
     );
     
     // Compute negative log likelihood of observed barcodes given expected corrected counts as mean of Poisson distribution
-    double nll = compute_nll(*d, ecc);
+    //double nll = compute_nll(*d, ecc);
+    double nll = compute_msle(bc_counts, ecc); 
     
     Rcpp::Rcout << "nll: " << nll << std::endl;
     
@@ -952,9 +983,11 @@ FlipRates estimate_flip_rates(
     int N_bits = STdata.cb.N_bits; 
     int corr_free = N_bits*(N_bits + 1) / 2; // Number of free parameters in the correlation matrix (symmetric plus diagonal)
     size_t n = N_bits*2 + corr_free;
-    std::vector<double> rates_plus_corr(n, 0.025); // First N_bits are rate10, second N_bits are rate01, rest of bits are corr matrix
-    // initialize bit flip rates at 2.5%, which splits difference between expected 5% for 0 -> 1 and 1% for 1 -> 0
-    for (int i = 2*N_bits; i < n; ++i) {rates_plus_corr[i] = i % 2 * 0.1 - 0.05;} // Start with zero correlations
+    std::vector<double> rates_plus_corr(n, 0.0); // First N_bits are rate10, second N_bits are rate01, rest of bits are corr matrix
+    for (int i = 0; i < N_bits; ++i) {
+      rates_plus_corr[i] = 0.01; // rate10
+      rates_plus_corr[N_bits + i] = 0.05; // rate01
+    }
     Rcpp::Rcout << "n parameters to optimize: " << n << std::endl;
     
     // Get requested optimization algorithm
@@ -1004,14 +1037,9 @@ FlipRates estimate_flip_rates(
     }  
     
     // Extract rate10, rate01, and corr from rates_plus_corr vector and return
-    std::vector<double> rate10(rates_plus_corr.begin(), rates_plus_corr.begin() + N_bits);
-    std::vector<double> rate01(rates_plus_corr.begin() + N_bits, rates_plus_corr.begin() + 2*N_bits);
-    MatrixXd corr = make_corr_matrix(
-      std::vector<double>(rates_plus_corr.begin() + 2*N_bits, rates_plus_corr.end()), 
-      N_bits
-    );
+    FlipRates fr = pack_fr(rates_plus_corr, N_bits);
     
-    return {rate10, rate01, corr};
+    return fr;
   }
 
 ST_data load_STdata(
