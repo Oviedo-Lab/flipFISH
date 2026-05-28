@@ -925,46 +925,68 @@ std::vector<double> expected_bc_counts(
     return expected_counts;
   }
 
+std::vector<int> est_bc_counts_true(
+    const FlipRates& fr,
+    void* data
+  ) {
+    // Grab data
+    auto* d = static_cast<ST_data*>(data);
+    const auto& true_barcodes = d->cb.barcodes;
+    int N_barcodes = true_barcodes.size();
+    int N_bits = d->cb.N_bits;
+    
+    // Find expected decoding rate
+    double mean_Hamming_weight = 0.0; 
+    for (int i = 0; i < N_barcodes; ++i) {mean_Hamming_weight += (double)__builtin_popcountll(true_barcodes[i]);}
+    mean_Hamming_weight /= (double)N_barcodes;
+    double mean_rate10 = std::accumulate(fr.rate10.begin(), fr.rate10.end(), 0.0);
+    mean_rate10 /= (double)N_bits;
+    double mean_rate01 = std::accumulate(fr.rate01.begin(), fr.rate01.end(), 0.0);
+    mean_rate01 /= (double)N_bits;
+    double expected_flip_rate = (mean_rate10*mean_Hamming_weight + mean_rate01*((double)N_bits - mean_Hamming_weight)) / (double)N_bits;
+    double expected_decoding_rate = R::ppois(d->max_correctable_Hamming_distance, expected_flip_rate * (double)N_bits, true, false);
+    
+    // Adjust bc_counts for expected_decoding_rate
+    std::vector<int> bc_counts_true(N_barcodes, 0);
+    for (int i = 0; i < N_barcodes; ++i) {
+      bc_counts_true[i] = (int)std::round((double)d->bc_counts[i] / expected_decoding_rate);
+    }
+   
+    // Set blanks to zero
+    for (int idx : d->cb.blanks) {
+      bc_counts_true[idx] = 0;
+    }
+    
+    return bc_counts_true; 
+  }
+
 double observed_counts_nll_analytic(
     const std::vector<double>& rates_plus_corr, 
     std::vector<double>& grad,
     void* data                    
   ) {
    
-    // Extract data
+    // Grab data and advance sim number
     auto* d = static_cast<ST_data*>(data);
-    const auto& bc_counts = d->bc_counts;
-    const auto& blanks = d->cb.blanks;
-    const auto& N_bits = d->cb.N_bits;
-    const auto& true_barcodes = d->cb.barcodes;
-    const auto& correction_table_inverted = d->correction_table_inverted;
-    int n_forks = d->n_forks;
     int sim_num = ++d->sim_num;
-    int call_freq = d->call_freq;
    
     // Extract rate data
-    FlipRates fr = pack_fr(rates_plus_corr, N_bits);
-    
-    // Set blanks to zero to approximate true barcodes
-    std::vector<int> bc_counts_true = bc_counts; 
-    for (int idx : blanks) {
-      bc_counts_true[idx] = 0;
-    }
-    
+    FlipRates fr = pack_fr(rates_plus_corr, d->cb.N_bits);
+   
     // Compute expected corrected counts from these flip rates
     std::vector<double> ecc = expected_bc_counts(
       fr,
-      bc_counts_true, 
-      true_barcodes, 
-      correction_table_inverted,
-      n_forks
+      est_bc_counts_true(fr, data), 
+      d->cb.barcodes, 
+      d->correction_table_inverted,
+      d->n_forks
     );
     
     // Compute negative log likelihood of observed barcodes given expected corrected counts as mean of Poisson distribution
     //double nll = compute_nll(*d, ecc);
-    double nll = compute_msle(bc_counts, ecc); 
+    double nll = compute_msle(d->bc_counts, ecc); 
     
-    if (sim_num % call_freq == 0 || sim_num == 10) {
+    if (sim_num % d->call_freq == 0 || sim_num == 10) {
       Rcpp::Rcout << "Call: " << sim_num << ", nll: " << nll << std::endl;
     }
     
@@ -1146,16 +1168,10 @@ List mQC(
       algorithm_name
     );
     
-    // Set blanks to zero to approximate true barcodes
-    std::vector<int> bc_counts_true = STdata.bc_counts;  
-    for (int idx : STdata.cb.blanks) {
-      bc_counts_true[idx] = 0;
-    }
-    
     // Compute expected corrected counts from these flip rates
     std::vector<double> ecc = expected_bc_counts(
       fr,
-      bc_counts_true, 
+      est_bc_counts_true(fr, &STdata), 
       STdata.cb.barcodes, 
       STdata.correction_table_inverted,
       n_forks

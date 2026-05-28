@@ -101,9 +101,9 @@ test_results <- mQC(
   bc_counts, 
   cb, 
   max_correctable_Hamming_distance,
-  1.0,   # max_fr
+  0.1,   # max_fr
   1e-6,   # ctol
-  10,    # max_evals
+  100,    # max_evals
   "SBPLX", # COBYLA, CRS2, NELDERMEAD, SBPLX, PRAXIS, ESCH, ISRES, DIRECT, DIRECT_L
   4,  # Number of times to rerun a simulation when predicting counts as a way to estimate likelihood of observed counts given a set of bit-flip rates; values >1 help to smooth out stochastic noise
   10,  # Expected number of transcripts for least abundant barcode, used to set counts in simulations from rates
