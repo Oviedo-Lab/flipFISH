@@ -43,8 +43,12 @@ struct ST_data {
 struct FlipRates {
   std::vector<double> rate10; // P(1 -> 0) for each bit, so length = N_bits
   std::vector<double> rate01; // P(0 -> 1) for each bit, so length = N_bits
+  std::vector<double> log_rate10; // Pre-computed vector of log(rate10) values, used in logTR calculation
+  std::vector<double> log_rate01; // Pre-computed vector of log(rate01) values, used in logTR calculation
+  std::vector<double> log_rate11; // Pre-computed vector of 1-log(rate10) values, used in logTR calculation
+  std::vector<double> log_rate00; // Pre-computed vector of 1-log(rate01) values, used in logTR calculation
   MatrixXd corr; // N_bits x N_bits matrix of luminance noise correlations between bits
-  MatrixXd log_inv_corr; // Pre-computed matrix of log(1 - corr(i,j)) values, used in logTR calculation
+  std::vector<double> log_inv_corr; // Pre-computed vector of summed j<i values log(1 - corr(i,j)), used in logTR calculation
 }; 
 
 MatrixXd make_corr_matrix(
@@ -78,10 +82,18 @@ FlipRates pack_fr(
       std::vector<double>(rates_plus_corr.begin() + 2*N_bits, rates_plus_corr.end()), 
       N_bits
     );
-    fr.log_inv_corr = MatrixXd::Zero(N_bits, N_bits);
+    fr.log_inv_corr = std::vector<double>(N_bits, 0.0);
+    fr.log_rate00 = std::vector<double>(N_bits, 0.0);
+    fr.log_rate01 = std::vector<double>(N_bits, 0.0);
+    fr.log_rate10 = std::vector<double>(N_bits, 0.0);
+    fr.log_rate11 = std::vector<double>(N_bits, 0.0);
     for (int i = 0; i < N_bits; ++i) {
+      fr.log_rate10[i] = std::log(fr.rate10[i]);
+      fr.log_rate01[i] = std::log(fr.rate01[i]);
+      fr.log_rate00[i] = std::log(1.0 - fr.rate01[i]);
+      fr.log_rate11[i] = std::log(1.0 - fr.rate10[i]);
       for (int j = 0; j < i; ++j) {
-        fr.log_inv_corr(i,j) = std::log(1.0 - fr.corr(i,j));
+        fr.log_inv_corr[i] += std::log(1.0 - fr.corr(i,j));
       }
     }
     return fr;
@@ -709,10 +721,7 @@ using ObjectiveFn = double (*)(
  * Functions to analytically compute expected count read from flip rates and true counts
  */
 
-// Hold and flip rates by bit
-double H(const int bit, const double rate10, const double rate01) {return 1.0 - rate01 + (double)bit * (rate01 - rate10);}
-double F(const int bit, const double rate10, const double rate01) {return rate01 + (double)bit * (rate10 - rate01);}
-// ... log of the rate at which the sequence of flips transform_flips can be expected to occur for a spot with true barcode bc, given bit-flip rates rate10 and rate01 and correlation corr between bit-flips
+// Log of the rate at which the sequence of flips transform_flips can be expected to occur for a spot with true barcode bc, given bit-flip rates rate10 and rate01 and correlation corr between bit-flips
 double logTR(
     const uint64_t bc,
     const uint64_t transform_flips,
@@ -728,30 +737,20 @@ double logTR(
       // Extract whether bit i is flipped from transform_flips
       int flip = (transform_flips >> i) & 1ULL;
       // Compute independent transformation rate for this bit 
-      double tr = flip ? F(bit, fr.rate10[i], fr.rate01[i]) : H(bit, fr.rate10[i], fr.rate01[i]);
-      // Compute log-correlation adjustment for this bit 
-      double log_c = 0.0;
-      for (int j = 0; j < i; ++j) {log_c += fr.log_inv_corr(i,j);}
+      double log_tr_nocorr = fr.log_rate00[i];
+      if (flip) {
+        if (bit) {
+          log_tr_nocorr = fr.log_rate10[i];
+        } else {
+          log_tr_nocorr = fr.log_rate01[i];
+        }
+      } else if (bit) {
+        log_tr_nocorr = fr.log_rate11[i];
+      }
       // Add adjusted log transformation rate for this bit to total log transformation rate
-      log_tr += std::log(tr) - log_c;
+      log_tr += log_tr_nocorr - fr.log_inv_corr[i];
     }
     return log_tr; 
-  }
-
-std::vector<std::vector<uint64_t>> find_transform_flips(
-    std::vector<uint64_t> barcodes, // Possible true barcodes (e.g., from codebook)
-    std::vector<uint64_t> observed_barcodes, // A single observed barcode (e.g., from a spot)
-    int N_bits
-  ) { 
-    int N_barcodes = barcodes.size();
-    int N_correctable = observed_barcodes.size();
-    std::vector<std::vector<uint64_t>> T(N_correctable, std::vector<uint64_t>(N_barcodes));
-    for (int j = 0; j < N_correctable; ++j) {
-      for (int i = 0; i < N_barcodes; ++i) {
-        T[j][i] = (barcodes[i] ^ observed_barcodes[j]) & ((1ULL << N_bits) - 1);
-      }
-    }
-    return T; // For each possible true barcode, the bit-flips which would turn it into observed_barcode
   }
 
 // Number of B' incorrectly read as something corrected to B
@@ -766,14 +765,16 @@ double expected_bc_count(
     int N_barcodes = true_barcodes.size();
     double count = 0.0;
     // For each possible barcode misread that would be corrected to the barcode indexed by k ...
-    for (int i = 0; i < N_correctable; ++i) {
-      for (int j = 0; j < N_barcodes; ++j) {
-        if (bc_counts_true[j] > 0) {
+    for (int j = 0; j < N_barcodes; ++j) {
+      if (bc_counts_true[j] > 0) {
+        double tr = 0.0;
+        for (int i = 0; i < N_correctable; ++i) {
           // Get bit-flips required to transform the true barcode into the misread barcode
-          uint64_t flips_to_k = (true_barcodes[j] ^ corrected_to_BOI[i]) & ((1ULL << N_bits) - 1);
+          uint64_t flips_to_BOI = (true_barcodes[j] ^ corrected_to_BOI[i]) & ((1ULL << N_bits) - 1);
           // Find expected count of spot misreads corrected to barcode k, from true barcode j, and add to total misread count
-          count += std::exp(logTR(true_barcodes[j], flips_to_k, fr)) * (double)bc_counts_true[j];
+          tr += std::exp(logTR(true_barcodes[j], flips_to_BOI, fr));
         }
+        count += tr * (double)bc_counts_true[j];
       }
     }
     return count;
@@ -931,13 +932,15 @@ double observed_counts_nll_analytic(
   ) {
    
     // Extract data
-    const auto* d = static_cast<ST_data*>(data);
+    auto* d = static_cast<ST_data*>(data);
     const auto& bc_counts = d->bc_counts;
     const auto& blanks = d->cb.blanks;
     const auto& N_bits = d->cb.N_bits;
     const auto& true_barcodes = d->cb.barcodes;
     const auto& correction_table_inverted = d->correction_table_inverted;
     int n_forks = d->n_forks;
+    int sim_num = ++d->sim_num;
+    int call_freq = d->call_freq;
    
     // Extract rate data
     FlipRates fr = pack_fr(rates_plus_corr, N_bits);
@@ -961,7 +964,12 @@ double observed_counts_nll_analytic(
     //double nll = compute_nll(*d, ecc);
     double nll = compute_msle(bc_counts, ecc); 
     
-    Rcpp::Rcout << "nll: " << nll << std::endl;
+    if (sim_num % call_freq == 0 || sim_num == 10) {
+      Rcpp::Rcout << "Call: " << sim_num << ", nll: " << nll << std::endl;
+    }
+    
+    // Save evaluation record
+    d->eval_history.push_back(nll);
     
     // ... and return
     return nll;
