@@ -103,12 +103,12 @@ test_results <- mQC(
   max_correctable_Hamming_distance,
   0.1,   # max_fr
   1e-6,   # ctol
-  300,    # max_evals
+  100,    # max_evals
   "SBPLX", # COBYLA, CRS2, NELDERMEAD, SBPLX, PRAXIS, ESCH, ISRES, DIRECT, DIRECT_L
   4,  # Number of times to rerun a simulation when predicting counts as a way to estimate likelihood of observed counts given a set of bit-flip rates; values >1 help to smooth out stochastic noise
   10,  # Expected number of transcripts for least abundant barcode, used to set counts in simulations from rates
   100, # Number of times to simulate a given set of flip rates, to get distribution of CR and PPV values
-  20    # n_forks
+  5    # n_forks
   )
 d <- Sys.time() - t
 units(d) <- "secs"
@@ -130,4 +130,5 @@ ggplot(plot_df, aes(x = bc)) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 plot(test_results$rate01, col = "blue", pch = 16, xlab = "Bit Index", ylab = "Flip Rate", main = "Estimated Bit Flip Rates", ylim = c(0, max(c(test_results$rate01, test_results$rate10))+0.1))
 points(test_results$rate10, col = "red", pch = 16)
+plot(test_results$eval_history)
 ```

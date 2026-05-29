@@ -984,6 +984,9 @@ double observed_counts_nll_analytic(
     
     // Compute negative log likelihood of observed barcodes given expected corrected counts as mean of Poisson distribution
     //double nll = compute_nll(*d, ecc);
+    //std::vector<int> bc_sorted = d->bc_counts;
+    //std::sort(bc_sorted.begin(), bc_sorted.begin() + d->cb.blanks[0], std::greater<int>());
+    //std::sort(bc_sorted.begin() + d->cb.blanks[0], bc_sorted.end(), std::greater<int>());
     double nll = compute_msle(d->bc_counts, ecc); 
     
     if (sim_num % d->call_freq == 0 || sim_num == 10) {
@@ -1203,9 +1206,14 @@ List mQC(
     //   }
     // }
     
+    std::vector<double> ecc_sorted = ecc;
+    std::sort(ecc_sorted.begin(), ecc_sorted.begin() + STdata.cb.blanks[0], std::greater<double>());
+    std::sort(ecc_sorted.begin() + STdata.cb.blanks[0], ecc_sorted.end(), std::greater<double>());
+    
     return List::create(
       _["counts_provided"] = bc_counts,
       _["expected_counts"] = ecc,
+      _["expected_counts_sorted"] = ecc_sorted,
       //_["counts_simulated"] = counts_simulated,
       //_["corrected_counts_sim"] = corrected_counts_sim,
       //_["CR_sim"] = CR_sim,
@@ -1213,7 +1221,7 @@ List mQC(
       //_["nll_sim"] = nll_sim,
       _["rate10"] = fr.rate10,
       _["rate01"] = fr.rate01,
-      _["corr"] = fr.corr//,
-      //_["eval_history"] = STdata.eval_history
+      _["corr"] = fr.corr,
+      _["eval_history"] = STdata.eval_history
     );
   }
