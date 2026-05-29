@@ -1,11 +1,11 @@
-Package: FISHmQC
+Package: flipFISH
 Type: Package
 Title: Performs barcode-decoding quality control for FISH-based spatial transcriptomic runs
 Version: 1.0
-Date: 2026-05-11
+Date: 2026-05-29
 Author: Michael Barkasi
 Maintainer: Michael Barkasi <barkasi@wustl.edu>
-Description: Estimates the proportion of barcodes correctly decoded (i.e., "precision") in FISH-based spatial transcriptomics runs by estimating bit-flip rates using blank counts and dichotomized Gaussians.
+Description: Tools for estimating the proportion of barcodes correctly decoded (i.e., "precision") in FISH-based spatial transcriptomics runs, via estimating bit-flip rates using blank counts, conditional probabilities, and dichotomized Gaussians.
 License: GPL 3
 Imports: Rcpp (>= 1.0.13), RcppEigen, dplyr
 LinkingTo: Rcpp, RcppEigen

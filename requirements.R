@@ -1,7 +1,7 @@
 # https://stackoverflow.com/a/38928678
 
-load_libs <- function(bundle = "FISHmQC") {
-  if (length(bundle) == 1L && bundle == "FISHmQC") {
+load_libs <- function(bundle = "flipFISH") {
+  if (length(bundle) == 1L && bundle == "flipFISH") {
     packages <- c(
       "Rcpp",
       "RcppEigen",
@@ -30,4 +30,4 @@ load_libs <- function(bundle = "FISHmQC") {
 
 }
 
-load_libs("FISHmQC")
+load_libs("flipFISH")

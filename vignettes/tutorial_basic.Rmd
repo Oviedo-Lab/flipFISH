@@ -7,7 +7,7 @@ date: '`r Sys.Date()`'
 ```{r setup, include = FALSE}
 options(width = 10000)
 knitr::opts_chunk$set(class.output = "scroll-output", cache = TRUE)
-library(FISHmQC)
+library(flipFISH)
 ```
 
 ## Introduction 
@@ -18,7 +18,7 @@ Grab MERSCOPE codebook. Must have row names in the first column giving species n
 file_path <- system.file(
   "extdata",
   "codebook_obs.csv",
-  package = "FISHmQC"
+  package = "flipFISH"
 )
 codebook <- read.csv(file_path, row.names = 1)
 ```
@@ -59,7 +59,7 @@ for (i in seq_along(mice_masks)) {
 }
 write.csv(
   summary_stats_data,
-  file = "/Users/michaelbarkasi/projects_Oviedo_lab/R_packages/FISHmQC/inst/extdata/summary_stats_all_mice.csv",
+  file = "/Users/michaelbarkasi/projects_Oviedo_lab/R_packages/flipFISH/inst/extdata/summary_stats_all_mice.csv",
   row.names = TRUE
 )
 ```
@@ -68,7 +68,7 @@ write.csv(
 file_path <- system.file(
   "extdata",
   "summary_stats_all_mice.csv",
-  package = "FISHmQC"
+  package = "flipFISH"
 )
 summary_stats_data <- read.csv(file_path, row.names = 1)
 

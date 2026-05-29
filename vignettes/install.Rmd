@@ -11,8 +11,8 @@ date: "`r Sys.Date()`"
 
 ```bash
 rm -f src/*.o src/*.so
-rm -rf FISHmQC.Rcheck
-rm -f FISHmQC_*.tar.gz
+rm -rf flipFISH.Rcheck
+rm -f flipFISH_*.tar.gz
 ./build_install.sh
 ```
 
