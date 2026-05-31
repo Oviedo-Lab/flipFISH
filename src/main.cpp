@@ -821,7 +821,6 @@ List mQC(
     double max_fr = 0.25,
     double ctol = 1e-6,
     int n_steps = 1000,
-    std::string algorithm_name = "COBYLA",
     int n_forks = 4                             // Maximum number of parallel processes to fork when simulating spots; set to 1 to disable forking and run in serial
   ) {
     
