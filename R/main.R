@@ -377,6 +377,109 @@ run_MCMCSA <- function(
 
   }
 
+run_MCMCSA <- function(
+    codebook,
+    mouse_id,                      # m1, m2, m3, etc...
+    resamples,                     # Number of steps to take in random walk
+    burnin = NULL,
+    FR_search = NULL,
+    max_step_size = 0.2,         # Size of each step in the random walk
+    min_step_size_divider = 10,   # Scale step-size down linearly to max_step_size/min_step_size_divider over burnin
+    max_temperature = 0.2,     # Temperature for the MCMC simulation
+    min_temperature_scale = 0.5, # Scale temperature down linearly to max_temperature/(min_step_size_divider/min_temperature_scale) over burnin
+    max_blank_weight = NULL,
+    min_blank_weight = NULL,
+    n_tracker_updates = 100
+) {
+  
+  # Initialize step counter
+  step <- 0
+  
+  # Extract sim_mse of the initial simulation
+  sim_mse_current <- sim_results$sim_summary["sim_mse"]
+  cat("\nInitial mse:", round(sim_mse_current, 3))
+  
+  cat("\n\nRunning Markov chain steps: \n\nRunning initial steps ...")
+  while (step < n_steps) {
+    
+    # Generate random step (... this is the Markov chain)
+    flip_rate_10_next <- rnorm(n = N_bits, mean = flip_rate_10_current, sd = step_size_schedule[step + 1])
+    flip_rate_01_next <- rnorm(n = N_bits, mean = flip_rate_01_current, sd = step_size_schedule[step + 1])
+    lum_noise_correlations_next <- rnorm(N_corrs, mean = lum_noise_correlations_current, sd = step_size_schedule[step + 1])
+    
+    # Stochastically prune down
+    retained_bits_idx <- sort(sample(1:N_bits, n_retained_bits[step + 1], replace = FALSE), decreasing = FALSE)
+    retained_corrs_idx <- sort(sample(1:N_corrs, n_retained_corrs[step + 1], replace = FALSE), decreasing = FALSE)
+    if (length(retained_bits_idx) > 0) {
+      flip_rate_10_next[retained_bits_idx] <- flip_rate_10_current[retained_bits_idx]
+      flip_rate_01_next[retained_bits_idx] <- flip_rate_01_current[retained_bits_idx]
+    }
+    if (length(retained_corrs_idx) > 0) {
+      lum_noise_correlations_next[retained_corrs_idx] <- lum_noise_correlations_current[retained_corrs_idx]
+    }
+    
+    # Enforce flip-rate bounds of 0 and 1 ("oob" = "out of bounds")
+    oob_mask_10_next <- flip_rate_10_next < 0 | flip_rate_10_next > 1
+    oob_mask_01_next <- flip_rate_01_next < 0 | flip_rate_01_next > 1
+    flip_rate_10_next[oob_mask_10_next] <- flip_rate_10_current[oob_mask_10_next]
+    flip_rate_01_next[oob_mask_01_next] <- flip_rate_01_current[oob_mask_01_next]
+    # Enforce luminance noise correlation bounds of -1 and 1
+    oob_mask_next <- lum_noise_correlations_next < -1 | lum_noise_correlations_next > 1
+    lum_noise_correlations_next[oob_mask_next] <- lum_noise_correlations_current[oob_mask_next]
+    
+    # Run simulation with next parameters
+    # ... this is step 1 of the Monte Carlo method: performing deterministic calculation of FPQC metrics and simulation-to-data fit
+    sim_results <- run_simulation(
+      codebook = codebook,
+      summary_stats_genes = summary_stats_genes,
+      summary_stats_blanks = summary_stats_blanks,
+      flip_rate_10 = flip_rate_10_next,
+      flip_rate_01 = flip_rate_01_next,
+      max_correctable_Hamming_distance = 4,
+      bit_lum_noise_correlations = lum_noise_correlations_next,
+      blank_weight = blank_weight_schedule[step + 1],
+      maintain_gene_identity = maintain_gene_identity,
+      return_flip_rates = return_flip_rates,
+      verbose = FALSE
+    )
+    
+    # Extract log-likelihood of the next simulation
+    sim_mse_next <- sim_results$sim_summary["sim_mse"]
+    
+    # Use simulated annealing to decide whether to accept or reject the proposed step
+    
+    # Calculate acceptance probability
+    # ... idea: When mse decreases, probability of acceptance is 1; this formula
+    #      controls how quickly the probability of acceptance decreases as the mse increases
+    acceptance_prob <- min(1,exp(-(sim_mse_next - sim_mse_current)/temperature_schedule[step + 1]))
+    
+    # Accept or reject the proposed step
+    ran_draw <- runif(n = 1, min = 0, max = 1)
+    if (ran_draw < acceptance_prob) {
+      # Accept the new parameters
+      # ... this is updating for the Markov chain
+      flip_rate_10_current <- flip_rate_10_next
+      flip_rate_01_current <- flip_rate_01_next
+      lum_noise_correlations_current <- lum_noise_correlations_next
+      # Update the sim_mse
+      sim_mse_current <- sim_mse_next
+      # Advance step
+      step <- step + 1
+      # Save results
+      # ... this is step 2 of the Monte Carlo method: aggregate results
+      sim_summaries[step,] <- sim_results$sim_summary
+      PPV_genes[step,] <- sim_results$gene_summary$PPV
+      if (step == 1) colnames(PPV_genes) <- rownames(sim_results$gene_summary)
+      Counts_sorted_sim[step,] <- sim_results$counts_sorted$sim
+      Counts_sorted_obs[step,] <- sim_results$counts_sorted$obs
+      if (step == FR_sample_range[1] - 1 || step == FR_sample_range[length(FR_sample_range)] + 1) return_flip_rates <- !return_flip_rates
+    }
+    
+  }
+  
+}
+
+
 # Plot run QC (PPV cutoff)
 plot_PPV_cutoff <- function(
     PPV,

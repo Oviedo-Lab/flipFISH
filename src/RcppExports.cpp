@@ -12,26 +12,28 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 // mQC
-List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int max_correctable_Hamming_distance, double max_fr, double ctol, int max_evals, std::string algorithm_name, int n_forks);
-RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP max_frSEXP, SEXP ctolSEXP, SEXP max_evalsSEXP, SEXP algorithm_nameSEXP, SEXP n_forksSEXP) {
+List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int max_correctable_Hamming_distance, NumericVector step_size, NumericVector temp, double max_fr, double ctol, int n_steps, std::string algorithm_name, int n_forks);
+RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP step_sizeSEXP, SEXP tempSEXP, SEXP max_frSEXP, SEXP ctolSEXP, SEXP n_stepsSEXP, SEXP algorithm_nameSEXP, SEXP n_forksSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< NumericMatrix >::type bc_counts(bc_countsSEXP);
     Rcpp::traits::input_parameter< IntegerMatrix >::type codebook(codebookSEXP);
     Rcpp::traits::input_parameter< int >::type max_correctable_Hamming_distance(max_correctable_Hamming_distanceSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type step_size(step_sizeSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type temp(tempSEXP);
     Rcpp::traits::input_parameter< double >::type max_fr(max_frSEXP);
     Rcpp::traits::input_parameter< double >::type ctol(ctolSEXP);
-    Rcpp::traits::input_parameter< int >::type max_evals(max_evalsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_steps(n_stepsSEXP);
     Rcpp::traits::input_parameter< std::string >::type algorithm_name(algorithm_nameSEXP);
     Rcpp::traits::input_parameter< int >::type n_forks(n_forksSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, max_correctable_Hamming_distance, max_fr, ctol, max_evals, algorithm_name, n_forks));
+    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, max_correctable_Hamming_distance, step_size, temp, max_fr, ctol, n_steps, algorithm_name, n_forks));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 8},
+    {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 10},
     {NULL, NULL, 0}
 };
 

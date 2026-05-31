@@ -4,23 +4,17 @@
 #include <Rcpp.h>
 #include <RcppEigen.h>
 #include <random>
-#include <nlopt.hpp>
 #include <cmath>
 #include <unistd.h>     // fork, pipe, read, write, close
 #include <sys/wait.h>   // waitpid
 using namespace Rcpp;
 using namespace Eigen;
 
-using ObjectiveFn = double (*)(
-    const std::vector<double>&,
-    std::vector<double>&,
-    void*
-  );
-
 // Hamming distance
 // int dist = __builtin_popcountll(a ^ b);
 
 /*
+ * *********************************************************************************************************************
  * Basic data structures
  */
 
@@ -46,7 +40,7 @@ struct ST_data {
   std::vector<double> eval_history;
   int n_forks;
   int call_num;
-  int call_freq;
+  int report_freq;
 };
 
 std::pair<std::vector<double>, std::vector<double>> scale_initial_fr(
@@ -109,6 +103,7 @@ struct FlipRates {
 }; 
 
 /*
+ * *********************************************************************************************************************
  * Helper functions, mathematical
  */
 
@@ -206,6 +201,7 @@ double compute_nll(
   }
 
 /*
+ * *********************************************************************************************************************
  * Helper functions, data manipulation
  */
 
@@ -320,6 +316,7 @@ std::vector<uint64_t> neighbors(
   }
 
 /*
+ * *********************************************************************************************************************
  * Functions for spot decoding
  */
 
@@ -370,6 +367,7 @@ std::unordered_map<uint64_t, int> build_correction_table(
   }
 
 /*
+ * *********************************************************************************************************************
  * Functions for data loading 
  */
 
@@ -436,6 +434,7 @@ ST_data load_STdata(
   }
 
 /*
+ * *********************************************************************************************************************
  * Functions to analytically compute expected count read from flip rates and true counts
  */
 
@@ -691,21 +690,44 @@ std::vector<double> expected_bc_counts(
     return expected_counts;
   }
 
-// Objective function to minimize: mean squared log error between expected corrected counts and observed counts, as a function of flip rates
-double fr_msle(
-    const std::vector<double>& rates_plus_corr, 
-    std::vector<double>& grad,
-    void* data                    
+FlipRates MCMCSA(
+    const std::vector<double>& FR,
+    const std::vector<double>& ub,
+    const std::vector<double>& lb,
+    const std::vector<double>& step_size,
+    const std::vector<double>& temp, 
+    void* data,
+    int ran_seed = 12345
   ) {
-   
+    
+    // Set up steps
+    int step = 0;
+    int calls = 0; 
+    int last_reported = -1;
+    int n_steps = step_size.size(); 
+    if (temp.size() != n_steps) {
+      Rcpp::stop("step_size and temp vectors must be the same length");
+    }
+    
     // Grab data and advance sim number
     auto* d = static_cast<ST_data*>(data);
     int call_num = ++d->call_num;
-   
-    // Extract rate data
-    FlipRates fr = pack_fr(rates_plus_corr, d->cb.N_bits);
-   
+    
+    // Initialize parameter vectors
+    std::vector<double> FR_current = FR;
+    std::vector<double> FR_next = FR;
+    std::vector<double> FR_best = FR;
+    int n_FR = FR.size();
+    
+    // Check that initial parameters are within bounds
+    for (int i = 0; i < n_FR; ++i) {
+      if (FR[i] < lb[i] || FR[i] > ub[i]) {
+        Rcpp::stop("Initial parameters must be within bounds");
+      }
+    }
+    
     // Compute expected corrected counts from these flip rates
+    FlipRates fr = pack_fr(FR_current, d->cb.N_bits);
     std::vector<double> ecc = expected_bc_counts(
       fr,
       est_bc_counts_true(fr, data), 
@@ -713,33 +735,102 @@ double fr_msle(
       d->correction_table_inverted,
       d->n_forks
     );
+    double msle_current = compute_msle(d->bc_counts, ecc); 
+    double msle_next = msle_current;
+    double msle_least = msle_current;
+    Rcpp::Rcout << "Step: 0, msle: " << msle_current << std::endl;
+    d->eval_history.push_back(msle_current);
     
-    // Compute mean squared log error of expected corrected counts vs observed barcode counts, and return as objective function value to minimize
-    double msle = compute_msle(d->bc_counts, ecc); 
+    // Start random-number generator and initialize a uniform distribution
+    std::mt19937 rng(ran_seed);
+    std::uniform_real_distribution<> unif(0.0, 1.0);
     
-    if (call_num % d->call_freq == 0 || call_num == 10) {
-      Rcpp::Rcout << "Call: " << call_num << ", msle: " << msle << std::endl;
+    while (step < n_steps) {
+      
+      // Generate random step (... this is the Markov chain)
+      std::normal_distribution<double> norm(0.0, step_size[step]);
+      for (int i = 0; i < n_FR; ++i) {
+        FR_next[i] = FR_current[i] + norm(rng);
+        // Enforce bounds ... if out of bounds, reflect back into bounds
+        if (FR_next[i] < lb[i]) {
+          FR_next[i] = lb[i] + (lb[i] - FR_next[i]);
+          if (FR_next[i] > ub[i]) {FR_next[i] = lb[i];}
+        } else if (FR_next[i] > ub[i]) {
+          FR_next[i] = ub[i] - (FR_next[i] - ub[i]);
+          if (FR_next[i] < lb[i]) {FR_next[i] = ub[i];}
+        }
+      }
+      
+      // Compute expected corrected counts from these flip rates
+      fr = pack_fr(FR_next, d->cb.N_bits);
+      std::vector<double> ecc = expected_bc_counts(
+        fr,
+        est_bc_counts_true(fr, data), 
+        d->cb.barcodes, 
+        d->correction_table_inverted,
+        d->n_forks
+      );
+      msle_next = compute_msle(d->bc_counts, ecc); 
+      
+      // Calculate acceptance probability
+      // ... idea: When msle decreases, probability of acceptance is 1; this formula
+      //      controls how quickly the probability of acceptance decreases as the mse increases
+      double acceptance_prob = std::min(1.0, std::exp(-(msle_next - msle_current)/temp[step]));
+     
+      // Accept or reject the proposed step
+      if (unif(rng) < acceptance_prob) {
+        // Accept the new parameters ... this is updating for the Markov chain
+        FR_current = FR_next;
+        // Update msle
+        msle_current = msle_next;
+        if (msle_current < msle_least) {
+          msle_least = msle_current;
+          FR_best = FR_current;
+        }
+        // Advance step 
+        step++;
+        // Save results ... this is step 2 of the Monte Carlo method: aggregate results
+        d->eval_history.push_back(msle_current);
+      }
+      if (last_reported < step && (step % d->report_freq == 0 || step == 10)) {
+        Rcpp::Rcout << "Step: " << step << "/" << n_steps << ", msle: " << msle_current << std::endl;
+        last_reported = step;
+      }
+      calls++;
+      
     }
+    Rcpp::Rcout << "\nAcceptance rate: " << (double)n_steps / (double)calls << std::endl;
+    Rcpp::Rcout << "Best msle: " << msle_least << std::endl;
     
-    // Save evaluation record
-    d->eval_history.push_back(msle);
+    return pack_fr(FR_best, d->cb.N_bits);
     
-    // ... and return
-    return msle;
   }
 
-// Optimize flip rates and bit-flip correlations to minimize mean squared log error between expected corrected counts and observed count
-FlipRates estimate_flip_rates(
-    ST_data& STdata,
-    ObjectiveFn fn,
-    double max_fr,
-    double ctol,
-    int max_evals,
-    std::string algorithm_name
+/*
+ * *********************************************************************************************************************
+ * User-facing analysis functions
+ */
+
+// [[Rcpp::export]]
+List mQC( 
+    NumericMatrix bc_counts,
+    IntegerMatrix codebook,
+    int max_correctable_Hamming_distance,
+    NumericVector step_size, // = {0.01, 0.0, 0.01},
+    NumericVector temp, // = {1.0, 0.0, 1.0}
+    double max_fr = 0.25,
+    double ctol = 1e-6,
+    int n_steps = 1000,
+    std::string algorithm_name = "COBYLA",
+    int n_forks = 4                             // Maximum number of parallel processes to fork when simulating spots; set to 1 to disable forking and run in serial
   ) {
     
-    Rcpp::Rcout << "Estimating flip-rates ..." << std::endl;
-   
+    // Load in data
+    auto STdata = load_STdata(bc_counts, codebook, max_correctable_Hamming_distance);
+    // ... and hyperparameters into STdata struct for use in objective function
+    STdata.n_forks = n_forks;
+    STdata.report_freq = n_steps/10;
+    
     // Initialize rate10 and rate01 with some reasonable starting values, e.g., 0.01 for all bits
     int N_bits = STdata.cb.N_bits; 
     int corr_free = N_bits*(N_bits + 1) / 2; // Number of free parameters in the correlation matrix (symmetric plus diagonal)
@@ -751,93 +842,33 @@ FlipRates estimate_flip_rates(
       rates_plus_corr[i] = max_fr * 0.5 * initial_rates.first[i] / 5.0; // rate10, approximately 1/5th of rate01
       rates_plus_corr[N_bits + i] = max_fr * 0.5 * initial_rates.second[i]; // rate01
     }
-    //for (int i = 2*N_bits; i < n; ++i) {
-    //  rates_plus_corr[i] = R::runif(-max_fr/2.0, max_fr/2.0); // random initial correlations 
-    //}
-    Rcpp::Rcout << "n parameters to optimize: " << n << std::endl;
     
-    // Get requested optimization algorithm
-    static const std::unordered_map<std::string, nlopt::algorithm> alg_map = {
-      {"COBYLA", nlopt::LN_COBYLA},
-      {"CRS2", nlopt::GN_CRS2_LM},
-      {"NELDERMEAD", nlopt::LN_NELDERMEAD},
-      {"SBPLX", nlopt::LN_SBPLX},
-      {"PRAXIS", nlopt::LN_PRAXIS},
-      {"ESCH", nlopt::GN_ESCH},
-      {"ISRES", nlopt::GN_ISRES},
-      {"DIRECT", nlopt::GN_DIRECT},
-      {"DIRECT_L", nlopt::GN_DIRECT_L}
-    };
-    auto oa = alg_map.find(algorithm_name);
-    if (oa == alg_map.end()) {Rcpp::stop("Unknown optimization algorithm, available choices: COBYLA, CRS2, NELDERMEAD, SBPLX, PRAXIS, ESCH, ISRES, DIRECT, DIRECT_L");}
-    
-    // Set up NLopt optimizer
-    nlopt::srand(12345); // Set random seed for reproducibility of stochastic optimization algorithms
-    nlopt::opt opt(oa->second, n); 
-    opt.set_min_objective(fn, &STdata);
-    opt.set_ftol_rel(ctol);       // stop when iteration changes objective fn value by less than this fraction 
-    opt.set_maxeval(max_evals);   // Maximum number of evaluations to try
-    if (algorithm_name == "CRS2" || algorithm_name == "ISRES") {
-      Rcpp::Rcout << "Setting initial seed-population size for " << algorithm_name << " to " << n + 1 << std::endl;
-      opt.set_population(n + 1);
-    }
-    // ... add bounds 
+    // Set bounds for parameters
     std::vector<double> lb(n, 0.0);
     std::vector<double> ub(n, max_fr); 
     for (int i = 2*N_bits; i < n; ++i) {
       lb[i] = -1.0; 
       ub[i] = 1.0;  
     }
-    opt.set_lower_bounds(lb);
-    opt.set_upper_bounds(ub);
     
-    // Fit model
-    int success_code = 0;
-    double min_fx;
-    try {
-      nlopt::result sc = opt.optimize(rates_plus_corr, min_fx);
-      success_code = static_cast<int>(sc);
-    } catch (std::exception& e) {
-      Rcpp::Rcout << "Optimization failed: " << e.what() << std::endl;
-      success_code = 0;
-    }  
+    // Initialize step_size and temp vectors 
+    std::vector<double> step_size_schedule(n_steps, step_size[0]); 
+    std::vector<double> temp_schedule(n_steps, temp[0]);
+    for (int i = 1; i < n_steps; ++i) {
+      step_size_schedule[i] = step_size_schedule[i - 1] + step_size[1];;
+      temp_schedule[i] = temp_schedule[i - 1] + temp[1];
+      if (step_size_schedule[i] < step_size[2]) {step_size_schedule[i] = step_size[2];}
+      if (temp_schedule[i] < temp[2]) {temp_schedule[i] = temp[2];}
+    }
+    Rcpp::Rcout << "Step size and temperature schedules set." << std::endl;
     
-    // Extract rate10, rate01, and corr from rates_plus_corr vector and return
-    FlipRates fr = pack_fr(rates_plus_corr, N_bits);
-    
-    return fr;
-  }
-
-/*
- * User-facing analysis functions
- */
-
-// [[Rcpp::export]]
-List mQC( 
-    NumericMatrix bc_counts,
-    IntegerMatrix codebook,
-    int max_correctable_Hamming_distance,
-    double max_fr = 0.25,
-    double ctol = 1e-6,
-    int max_evals = 1000,
-    std::string algorithm_name = "COBYLA",
-    int n_forks = 4                             // Maximum number of parallel processes to fork when simulating spots; set to 1 to disable forking and run in serial
-  ) {
-    
-    // Load in data
-    auto STdata = load_STdata(bc_counts, codebook, max_correctable_Hamming_distance);
-    // ... and hyperparameters into STdata struct for use in objective function
-    STdata.n_forks = n_forks;
-    STdata.call_freq = max_evals/10;
-   
-    // Estimate flip rates
-    auto fr = estimate_flip_rates(
-      STdata, 
-      fr_msle, 
-      max_fr,
-      ctol,
-      max_evals,
-      algorithm_name
+    auto fr = MCMCSA(
+      rates_plus_corr, 
+      ub, 
+      lb, 
+      step_size_schedule, 
+      temp_schedule, 
+      &STdata
     );
     
     // Compute expected corrected counts from these flip rates
@@ -894,6 +925,7 @@ List mQC(
   }
 
 /*
+ * *********************************************************************************************************************
  * Old: DG simulation functions and related stuff
  */
 

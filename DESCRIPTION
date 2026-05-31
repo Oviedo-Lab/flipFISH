@@ -10,5 +10,5 @@ License: GPL 3
 Imports: Rcpp (>= 1.0.13), RcppEigen, dplyr
 LinkingTo: Rcpp, RcppEigen
 Depends: ggplot2, grid, gridExtra, colorspace
-SystemRequirements: NLopt
+SystemRequirements: 
 RoxygenNote: 7.3.3
