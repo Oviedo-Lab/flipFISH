@@ -82,45 +82,22 @@ Now try new function.
 ```{r new_initial_estimate}
 
 t <- Sys.time()
-qc <- mQC(
-  bc_counts, 
-  cb, 
-  max_correctable_Hamming_distance,
-  c(0.05, -(0.05 - 0.005)/100, 0.005), # step size, initial, slope, min
-  c(0.1, -(0.1 - 0.01)/100, 0.01), # temp, initial, slope, min
-  0.2,   # max_fr
-  1e-6,   # ctol
-  1000,    # n_steps
-  5    # n_forks
-  )
+qc <- misreadQC(
+    m1_summary_stats, # Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
+    codebook, # Codebook with row names as barcodes and columns as bits, must have barcode names as row names
+    max_fr = 0.2,
+    n_steps = 10,
+    n_forks = 20,
+    step_size_range = c(0.05, 0.005), # max and min step size for MCMCSA, will be decayed linearly over n_steps
+    temp_range = c(0.1, 0.01), # max and min temperature for MCMCSA, will be decayed linearly over n_steps
+    max_correctable_Hamming_distance = NULL
+    )
 d <- Sys.time() - t
 units(d) <- "secs"
 cat("\ntime:", d, "seconds\n")
 ```
 
 ```{r plot_results}
-plot_df <- data.frame(
-  observed = qc$results$count_observed, 
-  predicted = qc$results$expected_corrected_count, 
-  bc = seq_len(nrow(bc_counts))
-  )
-ggplot(plot_df, aes(x = bc)) + 
-  geom_point(aes(y = observed), color = "blue") + 
-  geom_point(aes(y = predicted), color = "red") + 
-  theme_minimal() + 
-  scale_y_log10() +
-  labs(title = "Observed vs Predicted Counts", x = "Barcode Index", y = "Counts") + 
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-plot(qc$rate01, col = "blue", pch = 16, xlab = "Bit Index", ylab = "Flip Rate", main = "Estimated Bit Flip Rates", ylim = c(0, max(c(qc$rate01, qc$rate10))+0.1))
-points(qc$rate10, col = "red", pch = 16)
-corrs <- c()
-for (i in seq_len(nrow(qc$corr))) {
-  for (j in seq_len(ncol(qc$corr))) {
-    if (j < i) corrs <- c(corrs, qc$corr[j,i])
-  }
-}
-plot(corrs)
-plot(qc$eval_history)
-
-plot_PPV_cutoff(qc$results$PPV)
+plot.PPV(qc)
+plot.counts(qc)
 ```
