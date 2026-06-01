@@ -73,29 +73,14 @@ file_path <- system.file(
 summary_stats_data <- read.csv(file_path, row.names = 1)
 
 m1_summary_stats <- summary_stats_data[summary_stats_data$mouse == 1,]
-
-species_names <- rownames(m1_summary_stats)
 rownames(codebook) <- gsub("-", ".", rownames(codebook))
-codebook <- codebook[species_names,]
-blank_mask <- grepl("Blank", species_names)
-gene_rate_order <- order(m1_summary_stats$rates[!blank_mask], decreasing = TRUE)
-blank_rate_order <- order(m1_summary_stats$rates[blank_mask], decreasing = TRUE)
-m1_summary_stats <- rbind(
-  m1_summary_stats[!blank_mask,][gene_rate_order,],
-  m1_summary_stats[blank_mask,][blank_rate_order,]
-)
-codebook <- rbind(
-  codebook[!blank_mask,][gene_rate_order,],
-  codebook[blank_mask,][blank_rate_order,]
-)
+
 ```
 
 Now try new function. 
 
 ```{r new_initial_estimate}
-bc_counts <- as.matrix(m1_summary_stats[,c("rates", "variance", "counts")])
-rownames(bc_counts) <- rownames(m1_summary_stats)
-cb <- as.matrix(codebook)
+
 t <- Sys.time()
 qc <- mQC(
   bc_counts, 
