@@ -20,21 +20,30 @@ NULL
 #' @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
 #' @param codebook Codebook with row names as barcodes and columns as bits, must have barcode names as row names
 #' @param max_fr Maximum flip rate to consider in the MCMCSA algorithm, default 0.2
+#' @param max_corr_scale Bit-flip correlations have upper and lower bounds this proportion of max_fr, default is 0.5
+#' @param rate10_scale Assume that 1>0 flips occur in this proportion to 0>1 flips, default is 0.2
+#' @param initial_corr Initial max absolute value for bit-flip correlation in the MCMCSA algorithm, default is 0.01
 #' @param n_steps Number of steps to run the MCMCSA algorithm, default is 1000
 #' @param n_forks Number of parallel forks to use for MCMCSA, default is 1 (must be 1 for Windows, can be >1 for Linux/Mac)
 #' @param step_size_range Numeric vector of length 2, giving the max and min step size for the MCMCSA algorithm, which will be decayed linearly over n_steps, defaults to c(0.05, 0.005)
 #' @param temp_range Numeric vector of length 2, giving the max and min temperature for the MCMCSA algorithm, which will be decayed linearly over n_steps, defaults to c(0.1, 0.01)
+#' @param corr_step_scale Numeric, giving the scale of the step size for bit-flip correlations in the MCMCSA algorithm relative to the step size for flip rates, default is 0.1
 #' @param max_correctable_Hamming_distance Maximum Hamming distance for misreads to be corrected, default is NULL which will set it to one less than the minimum Hamming distance between codebook entries
+#' @param ran_seed Random seed for MCMCSA algorithm, default is 12345
 #' @return List giving \code{STdata}, a dataframe giving the summary data from the ST run used in the simulation, \code{fliprates}, a matrix giving the estimated flip rates and bit-flip correlations from each iteration of the MCMCSA algorithm, \code{erc}, \code{ecc}, and \code{etc}, matrices giving the estimated expected read, error-corrected, and true (i.e., correctly corrected) counts for each barcode at each iteration of the MCMCSA walk, \code{CR} and \code{PPV}, matrices giving estimated confidence ratio and positive predictive values for each iteration of the MCMCSA walk, and \code{fliprates_summary} and \code{bc_summary}, which give summary statistics on the flip rates and error-corrected counts across all iterations of the MCMCSA algorithm. 
 #' @export
 misreadQC <- function(
     STdata, 
     codebook, 
     max_fr = 0.2,
+    max_corr_scale = 0.5,
+    rate10_scale = 0.2,
+    initial_corr = 0.01,
     n_steps = 1000,
     n_forks = 1,
     step_size_range = c(0.05, 0.005), 
     temp_range = c(0.1, 0.01), 
+    corr_step_scale = 0.1,
     max_correctable_Hamming_distance = NULL,
     ran_seed = 12345
   ) {
@@ -99,6 +108,10 @@ misreadQC <- function(
       c(max(step_size_range), -(max(step_size_range) - min(step_size_range))/n_steps, min(step_size_range)), # step size, initial, slope, min
       c(max(temp_range), -(max(temp_range) - min(temp_range))/n_steps, min(temp_range)), # temp, initial, slope, min
       max_fr,
+      max_corr_scale,
+      initial_corr,
+      corr_step_scale,
+      rate10_scale,
       n_steps,
       n_forks,
       ran_seed
@@ -124,8 +137,13 @@ misreadQC <- function(
     step_range <- c(round(n_steps/2):n_steps) # take second half of MCMCSA walk to compute means and CIs
     for (p in qc_names) {
       if (p == "STdata" || p == "msle") next
-      p_means = colMeans(qc[[p]][step_range,])
-      ci <- apply(qc[[p]][step_range,], 2, quantile, probs = c(0.025, 0.975))
+      if (n_steps == 1) {
+        p_means <- qc[[p]]
+        ci <- rbind(p_means, p_means)
+      } else {
+        p_means <- colMeans(qc[[p]][step_range,])
+        ci <- apply(qc[[p]][step_range,], 2, quantile, probs = c(0.025, 0.975))
+      }
       if (p == "fliprates") {
         fr[,"mean"] <- p_means
         fr[,"lower"] <- ci[1,]
@@ -138,6 +156,16 @@ misreadQC <- function(
     } 
     qc[["fliprates_summary"]] <- fr
     qc[["bc_summary"]] <- bc
+    
+    rate10_mean <- mean(fr[grepl("rate10", rownames(fr)), "mean"])
+    rate01_mean <- mean(fr[grepl("rate01", rownames(fr)), "mean"])
+    rate10_lower <- mean(fr[grepl("rate10", rownames(fr)), "lower"])
+    rate10_upper <- mean(fr[grepl("rate10", rownames(fr)), "upper"])
+    rate01_lower <- mean(fr[grepl("rate01", rownames(fr)), "lower"])
+    rate01_upper <- mean(fr[grepl("rate01", rownames(fr)), "upper"])
+    cat("\nEstimated flip rates (mean, 95% CI):")
+    cat("\n1>0: ", round(rate10_mean, 4), " (", round(rate10_lower, 4), "-", round(rate10_upper, 4), ")", sep = "")
+    cat("\n0>1: ", round(rate01_mean, 4), " (", round(rate01_lower, 4), "-", round(rate01_upper, 4), ")\n", sep = "")
     
     return(qc)
     

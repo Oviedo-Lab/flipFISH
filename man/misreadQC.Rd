@@ -8,10 +8,14 @@ misreadQC(
   STdata,
   codebook,
   max_fr = 0.2,
+  max_corr_scale = 0.5,
+  rate10_scale = 0.2,
+  initial_corr = 0.01,
   n_steps = 1000,
   n_forks = 1,
   step_size_range = c(0.05, 0.005),
   temp_range = c(0.1, 0.01),
+  corr_step_scale = 0.1,
   max_correctable_Hamming_distance = NULL,
   ran_seed = 12345
 )
@@ -23,6 +27,12 @@ misreadQC(
 
 \item{max_fr}{Maximum flip rate to consider in the MCMCSA algorithm, default 0.2}
 
+\item{max_corr_scale}{Bit-flip correlations have upper and lower bounds this proportion of max_fr, default is 0.5}
+
+\item{rate10_scale}{Assume that 1>0 flips occur in this proportion to 0>1 flips, default is 0.2}
+
+\item{initial_corr}{Initial max absolute value for bit-flip correlation in the MCMCSA algorithm, default is 0.01}
+
 \item{n_steps}{Number of steps to run the MCMCSA algorithm, default is 1000}
 
 \item{n_forks}{Number of parallel forks to use for MCMCSA, default is 1 (must be 1 for Windows, can be >1 for Linux/Mac)}
@@ -31,7 +41,11 @@ misreadQC(
 
 \item{temp_range}{Numeric vector of length 2, giving the max and min temperature for the MCMCSA algorithm, which will be decayed linearly over n_steps, defaults to c(0.1, 0.01)}
 
+\item{corr_step_scale}{Numeric, giving the scale of the step size for bit-flip correlations in the MCMCSA algorithm relative to the step size for flip rates, default is 0.1}
+
 \item{max_correctable_Hamming_distance}{Maximum Hamming distance for misreads to be corrected, default is NULL which will set it to one less than the minimum Hamming distance between codebook entries}
+
+\item{ran_seed}{Random seed for MCMCSA algorithm, default is 12345}
 }
 \value{
 List giving \code{STdata}, a dataframe giving the summary data from the ST run used in the simulation, \code{fliprates}, a matrix giving the estimated flip rates and bit-flip correlations from each iteration of the MCMCSA algorithm, \code{erc}, \code{ecc}, and \code{etc}, matrices giving the estimated expected read, error-corrected, and true (i.e., correctly corrected) counts for each barcode at each iteration of the MCMCSA walk, \code{CR} and \code{PPV}, matrices giving estimated confidence ratio and positive predictive values for each iteration of the MCMCSA walk, and \code{fliprates_summary} and \code{bc_summary}, which give summary statistics on the flip rates and error-corrected counts across all iterations of the MCMCSA algorithm.
