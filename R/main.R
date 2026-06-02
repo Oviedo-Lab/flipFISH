@@ -35,7 +35,8 @@ misreadQC <- function(
     n_forks = 1,
     step_size_range = c(0.05, 0.005), 
     temp_range = c(0.1, 0.01), 
-    max_correctable_Hamming_distance = NULL
+    max_correctable_Hamming_distance = NULL,
+    ran_seed = 12345
   ) {
     cat("\nRunning misread QC with MCMCSA")
     cat("\nMax flip rate:", max_fr)
@@ -99,7 +100,8 @@ misreadQC <- function(
       c(max(temp_range), -(max(temp_range) - min(temp_range))/n_steps, min(temp_range)), # temp, initial, slope, min
       max_fr,
       n_steps,
-      n_forks
+      n_forks,
+      ran_seed
     )
     
     # Make summary stats from qc results
@@ -119,7 +121,7 @@ misreadQC <- function(
     fr_names <- c(fr_names, paste0("rate01_bit", seq_len(N_bits)))
     fr_names <- c(fr_names, paste0("corr_", seq_len(ncol(qc$fliprates) - 2*N_bits)))
     rownames(fr) <- fr_names
-    step_range <- c(round(n_steps/2),n_steps) # take second half of MCMCSA walk to compute means and CIs
+    step_range <- c(round(n_steps/2):n_steps) # take second half of MCMCSA walk to compute means and CIs
     for (p in qc_names) {
       if (p == "STdata" || p == "msle") next
       p_means = colMeans(qc[[p]][step_range,])
@@ -154,6 +156,7 @@ misreadQC <- function(
 #' @param qc List, results from misreadQC function
 #' @param min_PPV Numeric, minimum 95% CI lower-bound PPV cutoff for "good" barcodes, defaults to 0.8
 #' @return ggplot object showing estimated PPV for each barcode with confidence intervals and cutoff
+#' @export
 plot.PPV <- function(
     qc, # List, results from misreadQC function
     min_PPV = 0.8
@@ -209,6 +212,7 @@ plot.PPV <- function(
 #' @usage plot.counts(qc)
 #' @param qc List, results from misreadQC function
 #' @return ggplot object showing predicted vs observed counts for each barcode with confidence intervals
+#' @export
 plot.counts <- function(
     qc
   ) {
@@ -280,4 +284,48 @@ plot.counts <- function(
     
     return(counts_sorted_plot)
     
+  }
+
+#' Plot estimated flip rate distributions from misread QC results
+#' 
+#' This function takes the results from the misreadQC function and makes a plot showing the distributions of the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1). The plot uses violin plots to show the distribution of flip rates across the second half of iterations of the MCMCSA walk, with separate facets for each flip type.
+#' 
+#' @name plot.fr
+#' @rdname plot-fr
+#' @usage plot.fr(qc)
+#' @param qc List, results from misreadQC function
+#' @return ggplot object showing distributions of estimated flip rates for each bit and flip type
+#' @export
+plot.fr <- function(
+    qc
+  ) {
+    fr_names <- rownames(qc$fliprates_summary)
+    mask10 <- grepl("rate10", fr_names)
+    mask01 <- grepl("rate01", fr_names)
+    n_samples <- nrow(qc$fliprates)
+    step_range <- c(round(n_samples/2):n_samples) # take second half of MCMCSA walk
+    n_samples <- length(step_range)
+    N_bits <- sum(mask10)
+    if (sum(mask01) != N_bits) stop("Number of rate10 and rate01 entries in fliprates_summary must be the same")
+    fr <- qc$fliprates
+    fr <- matrix(NA, nrow = 2*n_samples*N_bits, ncol = 3)
+    colnames(fr) <- c("value", "bit", "type")
+    fr <- as.data.frame(fr)
+    for (i in seq_len(N_bits)) {
+      idx10 <- (i-1)*n_samples + seq_len(n_samples)
+      idx01 <- (N_bits + i-1)*n_samples + seq_len(n_samples)
+      fr[idx10, "value"] <- qc$fliprates[step_range,paste0("rate10_bit", i) == fr_names]
+      fr[idx10, "bit"] <- i
+      fr[idx10, "type"] <- "1>0"
+      fr[idx01, "value"] <- qc$fliprates[step_range,paste0("rate01_bit", i) == fr_names]
+      fr[idx01, "bit"] <- i
+      fr[idx01, "type"] <- "0>1"
+    }
+    fr$bit <- as.factor(fr$bit)
+    plt <- ggplot(fr, aes(bit, value, fill = type)) +
+      geom_violin() +
+      labs(title = "Estimated Flip Rate Distributions", x = "Bit", y = "Flip Rate", color = "Flip Type") +
+      theme_minimal() +
+      facet_grid(type ~ .)
+    return(plt)
   }

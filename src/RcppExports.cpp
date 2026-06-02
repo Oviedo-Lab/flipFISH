@@ -23,8 +23,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // mQC
-List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int max_correctable_Hamming_distance, NumericVector step_size, NumericVector temp, double max_fr, int n_steps, int n_forks);
-RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP step_sizeSEXP, SEXP tempSEXP, SEXP max_frSEXP, SEXP n_stepsSEXP, SEXP n_forksSEXP) {
+List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int max_correctable_Hamming_distance, NumericVector step_size, NumericVector temp, double max_fr, int n_steps, int n_forks, int ran_seed);
+RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP step_sizeSEXP, SEXP tempSEXP, SEXP max_frSEXP, SEXP n_stepsSEXP, SEXP n_forksSEXP, SEXP ran_seedSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -36,14 +36,15 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type max_fr(max_frSEXP);
     Rcpp::traits::input_parameter< int >::type n_steps(n_stepsSEXP);
     Rcpp::traits::input_parameter< int >::type n_forks(n_forksSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, max_correctable_Hamming_distance, step_size, temp, max_fr, n_steps, n_forks));
+    Rcpp::traits::input_parameter< int >::type ran_seed(ran_seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, max_correctable_Hamming_distance, step_size, temp, max_fr, n_steps, n_forks, ran_seed));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
     {"_flipFISH_unique_Hamming_cb", (DL_FUNC) &_flipFISH_unique_Hamming_cb, 1},
-    {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 8},
+    {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 9},
     {NULL, NULL, 0}
 };
 

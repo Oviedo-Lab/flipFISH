@@ -5,7 +5,7 @@ unique_Hamming_cb <- function(codebook) {
     .Call(`_flipFISH_unique_Hamming_cb`, codebook)
 }
 
-mQC <- function(bc_counts, codebook, max_correctable_Hamming_distance, step_size, temp, max_fr = 0.25, n_steps = 1000L, n_forks = 4L) {
-    .Call(`_flipFISH_mQC`, bc_counts, codebook, max_correctable_Hamming_distance, step_size, temp, max_fr, n_steps, n_forks)
+mQC <- function(bc_counts, codebook, max_correctable_Hamming_distance, step_size, temp, max_fr = 0.25, n_steps = 1000L, n_forks = 4L, ran_seed = 12345L) {
+    .Call(`_flipFISH_mQC`, bc_counts, codebook, max_correctable_Hamming_distance, step_size, temp, max_fr, n_steps, n_forks, ran_seed)
 }
 

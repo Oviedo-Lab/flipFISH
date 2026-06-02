@@ -758,7 +758,7 @@ FlipRates MCMCSA(
     const std::vector<double>& step_size,
     const std::vector<double>& temp, 
     void* data,
-    int ran_seed = 12345
+    int ran_seed
   ) {
     
     // Set up steps
@@ -912,7 +912,8 @@ List mQC(
     NumericVector temp, // = {1.0, 0.0, 1.0}
     double max_fr = 0.25,
     int n_steps = 1000,
-    int n_forks = 4                             // Maximum number of parallel processes to fork when simulating spots; set to 1 to disable forking and run in serial
+    int n_forks = 4,                             // Maximum number of parallel processes to fork when simulating spots; set to 1 to disable forking and run in serial
+    int ran_seed = 12345
   ) {
     
     // Load in data
@@ -959,7 +960,8 @@ List mQC(
       lb, 
       step_size_schedule, 
       temp_schedule, 
-      &STdata
+      &STdata,
+      ran_seed
     );
     
     // Check eval history length

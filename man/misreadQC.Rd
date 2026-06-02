@@ -12,7 +12,8 @@ misreadQC(
   n_forks = 1,
   step_size_range = c(0.05, 0.005),
   temp_range = c(0.1, 0.01),
-  max_correctable_Hamming_distance = NULL
+  max_correctable_Hamming_distance = NULL,
+  ran_seed = 12345
 )
 }
 \arguments{
