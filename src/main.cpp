@@ -1014,7 +1014,7 @@ List mQC(
     NumericVector step_size, 
     NumericVector temp, 
     double max_fr,
-    double max_corr_scale,
+    double max_corr,
     double initial_corr,
     double corr_step_scale,
     double rate10_scale,
@@ -1052,8 +1052,8 @@ List mQC(
       ub[N_bits + i] = max_fr;
     }
     for (int i = 2*N_bits; i < n; ++i) {
-      lb[i] = std::max(-max_fr * max_corr_scale, -1.0); 
-      ub[i] = std::min(max_fr * max_corr_scale, 1.0);  
+      lb[i] = std::max(-max_corr, -1.0); 
+      ub[i] = std::min(max_corr, 1.0);  
     }
     
     // Initialize step_size and temp vectors 

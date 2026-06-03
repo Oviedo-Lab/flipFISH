@@ -19,8 +19,8 @@ NULL
 #'
 #' @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
 #' @param codebook Codebook with row names as barcodes and columns as bits, must have barcode names as row names
-#' @param max_fr Maximum flip rate to consider in the MCMCSA algorithm, default 0.2
-#' @param max_corr_scale Bit-flip correlations have upper and lower bounds this proportion of max_fr, default is 0.5
+#' @param max_fr Maximum flip rate to consider in the MCMCSA algorithm, default 0.1
+#' @param max_corr Bit-flip correlations have lower and upper bounds of -max_corr and max_corr, default is 0.2
 #' @param rate10_scale Assume that 1>0 flips occur in this proportion to 0>1 flips, default is 0.2
 #' @param initial_corr Initial max absolute value for bit-flip correlation in the MCMCSA algorithm, default is 0.01
 #' @param n_steps Number of steps to run the MCMCSA algorithm, default is 1000
@@ -35,8 +35,8 @@ NULL
 misreadQC <- function(
     STdata, 
     codebook, 
-    max_fr = 0.2,
-    max_corr_scale = 0.5,
+    max_fr = 0.1,
+    max_corr = 0.2,
     rate10_scale = 0.2,
     initial_corr = 0.01,
     n_steps = 1000,
@@ -108,7 +108,7 @@ misreadQC <- function(
       c(max(step_size_range), -(max(step_size_range) - min(step_size_range))/n_steps, min(step_size_range)), # step size, initial, slope, min
       c(max(temp_range), -(max(temp_range) - min(temp_range))/n_steps, min(temp_range)), # temp, initial, slope, min
       max_fr,
-      max_corr_scale,
+      max_corr,
       initial_corr,
       corr_step_scale,
       rate10_scale,
