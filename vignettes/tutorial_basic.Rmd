@@ -88,9 +88,9 @@ qc <- misreadQC(
     max_fr = 0.1,
     max_corr_scale = 5.0,
     rate10_scale = 0.2,
-    initial_corr = 0.01,
-    n_steps = 100,
-    n_forks = 20,
+    initial_corr = 0.05,
+    n_steps = 10,
+    n_forks = 5,
     step_size_range = c(0.05, 0.005), # max and min step size for MCMCSA, will be decayed linearly over n_steps
     temp_range = c(0.1, 0.01), # max and min temperature for MCMCSA, will be decayed linearly over n_steps
     corr_step_scale = 0.1,
