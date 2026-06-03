@@ -204,9 +204,9 @@ std::vector<double> compute_log_inv_corr(
       int bit = (bc >> i) & 1ULL;
       flip[i] = (flips >> i) & 1ULL;
       for (int j = 0; j < i; ++j) {
-        if (bit & flip[i] & flip[j]) {
+        if (bit & flip[j]) {
           log_inv_corr[i] += std::log(1.0 - fr.corr1[i * (i - 1) / 2 + j]);
-        } else if (flip[i] & flip[j]) {
+        } else if (flip[j]) {
           log_inv_corr[i] += std::log(1.0 - fr.corr0[i * (i - 1) / 2 + j]);
         }
       }
