@@ -890,11 +890,14 @@ FlipRates MCMCSA(
       }
     }
     
-    // Make weight vector for msle computation
+    // Make weight vector for msle computation, so blanks carry same overall weight as genes despite being fewer in number
     int N_barcodes = d->cb.barcodes.size();
     double blank_weight = (double)d->cb.genes.size()/(double)d->cb.blanks.size();
     std::vector<double> weights(N_barcodes, 1.0);
     for (int i : d->cb.blanks) {weights[i] = blank_weight;}
+    // ... normalize 
+    double weight_scaler = (double)N_barcodes/std::accumulate(weights.begin(), weights.end(), 0.0);
+    for (int i = 0; i < N_barcodes; ++i) {weights[i] *= weight_scaler;}
     
     // Compute expected corrected counts from these flip rates
     FlipRates fr = pack_fr(FR_current, N_bits);
