@@ -89,10 +89,10 @@ qc <- misreadQC(
     max_corr = 0.2,
     rate10_scale = 0.2,
     initial_corr = 0.05,
-    n_steps = 10,
-    n_forks = 5,
+    n_steps = 400,
+    n_forks = 50,
     step_size_range = c(0.05, 0.005), # max and min step size for MCMCSA, will be decayed linearly over n_steps
-    temp_range = c(0.1, 0.01), # max and min temperature for MCMCSA, will be decayed linearly over n_steps
+    temp_range = c(0.1, 0.025), # max and min temperature for MCMCSA, will be decayed linearly over n_steps
     corr_step_scale = 0.1,
     max_correctable_Hamming_distance = NULL,
     ran_seed = 12345
@@ -107,4 +107,8 @@ plot.PPV(qc)
 plot.counts(qc)
 plot.fr(qc)
 plot(qc$msle, type = "l")
+for (i in c(360:361)) {
+  plot(log10(qc[["ecc"]][i,]))
+lines(log10(qc[["STdata"]]$count_observed), col = "red")
+}
 ```

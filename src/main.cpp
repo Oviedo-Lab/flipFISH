@@ -92,14 +92,15 @@ MatrixXd make_corr_matrix(
 
 double compute_msle(
     const std::vector<int>& obs_counts,
-    const std::vector<double>& pred_counts           // predicted corrected counts
+    const std::vector<double>& pred_counts,           // predicted corrected counts
+    const std::vector<double>& weights
   ) {
     int N_barcodes = obs_counts.size();
-    if (pred_counts.size() != N_barcodes) {Rcpp::stop("obs_counts and pred_counts must be the same length.");}
+    if (pred_counts.size() != N_barcodes || weights.size() != N_barcodes) {Rcpp::stop("obs_counts, pred_counts, and weights must be the same length.");}
     double msle = 0.0;
     for (int b = 0; b < N_barcodes; ++b) {
       double sle = std::log(pred_counts[b] + 1.0) - std::log((double)obs_counts[b] + 1.0);
-      msle += sle * sle;
+      msle += sle * sle * weights[b];
     }
     msle /= (double)N_barcodes;
     return msle;
@@ -889,6 +890,12 @@ FlipRates MCMCSA(
       }
     }
     
+    // Make weight vector for msle computation
+    int N_barcodes = d->cb.barcodes.size();
+    double blank_weight = (double)d->cb.genes.size()/(double)d->cb.blanks.size();
+    std::vector<double> weights(N_barcodes, 1.0);
+    for (int i : d->cb.blanks) {weights[i] = blank_weight;}
+    
     // Compute expected corrected counts from these flip rates
     FlipRates fr = pack_fr(FR_current, N_bits);
     std::vector<int> bc_counts_true = est_bc_counts_true(fr, data);
@@ -899,7 +906,7 @@ FlipRates MCMCSA(
       d->correction_table_inverted,
       d->n_forks
     );
-    double msle_current = compute_msle(d->bc_counts, std::get<1>(erctc)); 
+    double msle_current = compute_msle(d->bc_counts, std::get<1>(erctc), weights); 
     double msle_next = msle_current;
     double msle_least = msle_current;
     Rcpp::Rcout << "\nResampling initial parameters with MCMCSA run:\nStep: 0, msle: " << msle_current << std::endl;
@@ -910,7 +917,6 @@ FlipRates MCMCSA(
     d->eval_history.erc.push_back(std::get<0>(erctc));
     
     // Compute and save expected CR and PPV for each barcode
-    int N_barcodes = d->cb.barcodes.size();
     d->eval_history.CR.push_back(std::vector<double>(N_barcodes, 0.0));
     d->eval_history.PPV.push_back(std::vector<double>(N_barcodes, 0.0));
     d->eval_history.est_true_bc_counts.push_back(std::vector<double>(N_barcodes, 0.0));
@@ -954,7 +960,7 @@ FlipRates MCMCSA(
         d->n_forks
       );
       std::vector<double> erc = std::get<0>(erctc);
-      msle_next = compute_msle(d->bc_counts, std::get<1>(erctc)); 
+      msle_next = compute_msle(d->bc_counts, std::get<1>(erctc), weights); 
       
       // Calculate acceptance probability
       // ... idea: When msle decreases, probability of acceptance is 1; this formula
