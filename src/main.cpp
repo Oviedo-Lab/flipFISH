@@ -932,16 +932,26 @@ FlipRates MCMCSA(
     // Start random-number generator and initialize a uniform distribution
     std::mt19937 rng(ran_seed);
     std::uniform_real_distribution<> unif(0.0, 1.0);
+    // ... for random shuffling
+    std::vector<int> all_indices(n_FR);
+    std::iota(all_indices.begin(), all_indices.end(), 0);
     
     while (step < n_steps) {
       
+      // Randomly select flip-rate parameters to shuffle
+      int n = (int)std::round(step / n_steps);
+      n = std::max(n, (int)(n_FR * 0.1));
+      std::shuffle(all_indices.begin(), all_indices.end(), rng);
+      std::vector<int> FR_sub(all_indices.begin(), all_indices.begin() + n);
+      
       // Generate random step (... this is the Markov chain)
       std::normal_distribution<double> norm(0.0, step_size[step]);
-      for (int i = 0; i < n_FR; ++i) {
+      FR_next = FR_current;
+      for (int i : FR_sub) {
         double sz = norm(rng);
-        if (i < N_bits) {sz *= rate10_scale;} // Take smaller steps for rate10
-        if (i >= 2*N_bits) {sz *= corr_step_scale;} // Take smaller steps for correlations, which are less influential and more sensitive to changes than flip rates
-        FR_next[i] = FR_current[i] + norm(rng);
+        if (i < N_bits) {sz *= rate10_scale;}
+        if (i >= 2*N_bits) {sz *= corr_step_scale;}
+        FR_next[i] += norm(rng);
         // Enforce bounds ... if out of bounds, reflect back into bounds
         if (FR_next[i] < lb[i]) {
           FR_next[i] = lb[i] + (lb[i] - FR_next[i]);
