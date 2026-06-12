@@ -951,7 +951,7 @@ FlipRates MCMCSA(
         double sz = norm(rng);
         if (i < N_bits) {sz *= rate10_scale;}
         if (i >= 2*N_bits) {sz *= corr_step_scale;}
-        FR_next[i] += norm(rng);
+        FR_next[i] += sz;
         // Enforce bounds ... if out of bounds, reflect back into bounds
         if (FR_next[i] < lb[i]) {
           FR_next[i] = lb[i] + (lb[i] - FR_next[i]);
@@ -1179,4 +1179,70 @@ List mQC(
       _["PPV"] = PPV,
       _["msle"] = STdata.eval_history.msle
     );
+  }
+
+// [[Rcpp::export]]
+List mQC_init(
+    NumericMatrix bc_counts,
+    IntegerMatrix codebook,
+    int max_correctable_Hamming_distance,
+    double max_fr,
+    double initial_corr,
+    double rate10_scale,
+    int n_forks
+  ) {
+    // Heap-allocate STdata so it survives past this call
+    auto* d = new ST_data(load_STdata(bc_counts, codebook, max_correctable_Hamming_distance));
+    d->n_forks = n_forks;
+    d->report_freq = 1;
+
+    int N_bits    = d->cb.N_bits;
+    int corr_free = N_bits * (N_bits - 1) / 2;
+    auto ir       = scale_initial_fr(*d);          // (rate10, rate01, corr1, corr0)
+    size_t n      = 2*N_bits + 2*corr_free;
+    std::vector<double> params(n, 0.0);
+
+    for (int i = 0; i < N_bits; ++i) {
+      params[i]          = max_fr * 0.5 * std::get<0>(ir)[i] * rate10_scale;
+      params[N_bits + i] = max_fr * 0.5 * std::get<1>(ir)[i];
+    }
+    for (int i = 0; i < corr_free; ++i) {
+      params[2*N_bits + i]             = initial_corr * std::get<2>(ir)[i];
+      params[2*N_bits + corr_free + i] = initial_corr * std::get<3>(ir)[i];
+    }
+
+    // XPtr takes ownership; R's GC will call `delete` when the pointer is collected
+    Rcpp::XPtr<ST_data> xptr(d, true);
+
+    return List::create(
+      _["params"]   = params,
+      _["data_ptr"] = xptr
+    );
+  }
+
+// [[Rcpp::export]]
+double mQC_msle(
+    NumericVector params,
+    SEXP data_ptr_sexp
+  ) {
+    Rcpp::XPtr<ST_data> xptr(data_ptr_sexp);
+    ST_data* d     = xptr.get();
+    int N_bits     = d->cb.N_bits;
+    int N_barcodes = d->cb.barcodes.size();
+
+    std::vector<double> FR(params.begin(), params.end());
+    FlipRates fr = pack_fr(FR, N_bits);
+
+    std::vector<int> bc_counts_true = est_bc_counts_true(fr, static_cast<void*>(d));
+    auto erctc = expected_bc_counts(
+      fr,
+      bc_counts_true,
+      d->cb.barcodes,
+      d->correction_table_inverted,
+      d->n_forks
+    );
+
+    // Uniform weights (ignoring blank upweighting)
+    std::vector<double> weights(N_barcodes, 1.0);
+    return compute_msle(d->bc_counts, std::get<1>(erctc), weights);
   }

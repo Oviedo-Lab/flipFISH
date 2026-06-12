@@ -45,10 +45,41 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// mQC_init
+List mQC_init(NumericMatrix bc_counts, IntegerMatrix codebook, int max_correctable_Hamming_distance, double max_fr, double initial_corr, double rate10_scale, int n_forks);
+RcppExport SEXP _flipFISH_mQC_init(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP max_frSEXP, SEXP initial_corrSEXP, SEXP rate10_scaleSEXP, SEXP n_forksSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type bc_counts(bc_countsSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type codebook(codebookSEXP);
+    Rcpp::traits::input_parameter< int >::type max_correctable_Hamming_distance(max_correctable_Hamming_distanceSEXP);
+    Rcpp::traits::input_parameter< double >::type max_fr(max_frSEXP);
+    Rcpp::traits::input_parameter< double >::type initial_corr(initial_corrSEXP);
+    Rcpp::traits::input_parameter< double >::type rate10_scale(rate10_scaleSEXP);
+    Rcpp::traits::input_parameter< int >::type n_forks(n_forksSEXP);
+    rcpp_result_gen = Rcpp::wrap(mQC_init(bc_counts, codebook, max_correctable_Hamming_distance, max_fr, initial_corr, rate10_scale, n_forks));
+    return rcpp_result_gen;
+END_RCPP
+}
+// mQC_msle
+double mQC_msle(NumericVector params, SEXP data_ptr_sexp);
+RcppExport SEXP _flipFISH_mQC_msle(SEXP paramsSEXP, SEXP data_ptr_sexpSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type params(paramsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type data_ptr_sexp(data_ptr_sexpSEXP);
+    rcpp_result_gen = Rcpp::wrap(mQC_msle(params, data_ptr_sexp));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_flipFISH_unique_Hamming_cb", (DL_FUNC) &_flipFISH_unique_Hamming_cb, 1},
     {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 13},
+    {"_flipFISH_mQC_init", (DL_FUNC) &_flipFISH_mQC_init, 7},
+    {"_flipFISH_mQC_msle", (DL_FUNC) &_flipFISH_mQC_msle, 2},
     {NULL, NULL, 0}
 };
 

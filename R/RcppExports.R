@@ -9,3 +9,11 @@ mQC <- function(bc_counts, codebook, max_correctable_Hamming_distance, step_size
     .Call(`_flipFISH_mQC`, bc_counts, codebook, max_correctable_Hamming_distance, step_size, temp, max_fr, max_corr, initial_corr, corr_step_scale, rate10_scale, n_steps, n_forks, ran_seed)
 }
 
+mQC_init <- function(bc_counts, codebook, max_correctable_Hamming_distance, max_fr, initial_corr, rate10_scale, n_forks) {
+    .Call(`_flipFISH_mQC_init`, bc_counts, codebook, max_correctable_Hamming_distance, max_fr, initial_corr, rate10_scale, n_forks)
+}
+
+mQC_msle <- function(params, data_ptr_sexp) {
+    .Call(`_flipFISH_mQC_msle`, params, data_ptr_sexp)
+}
+
