@@ -23,63 +23,44 @@ BEGIN_RCPP
 END_RCPP
 }
 // mQC
-List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int max_correctable_Hamming_distance, NumericVector step_size, NumericVector temp, double max_fr, double max_corr, double initial_corr, double corr_step_scale, double rate10_scale, int n_steps, int n_forks, int ran_seed);
-RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP step_sizeSEXP, SEXP tempSEXP, SEXP max_frSEXP, SEXP max_corrSEXP, SEXP initial_corrSEXP, SEXP corr_step_scaleSEXP, SEXP rate10_scaleSEXP, SEXP n_stepsSEXP, SEXP n_forksSEXP, SEXP ran_seedSEXP) {
+List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int max_correctable_Hamming_distance, double max_fr, double max_corr, int n_forks, int maxeval, double ftol_rel, double xtol_rel);
+RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP max_frSEXP, SEXP max_corrSEXP, SEXP n_forksSEXP, SEXP maxevalSEXP, SEXP ftol_relSEXP, SEXP xtol_relSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< NumericMatrix >::type bc_counts(bc_countsSEXP);
     Rcpp::traits::input_parameter< IntegerMatrix >::type codebook(codebookSEXP);
     Rcpp::traits::input_parameter< int >::type max_correctable_Hamming_distance(max_correctable_Hamming_distanceSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type step_size(step_sizeSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type temp(tempSEXP);
     Rcpp::traits::input_parameter< double >::type max_fr(max_frSEXP);
     Rcpp::traits::input_parameter< double >::type max_corr(max_corrSEXP);
-    Rcpp::traits::input_parameter< double >::type initial_corr(initial_corrSEXP);
-    Rcpp::traits::input_parameter< double >::type corr_step_scale(corr_step_scaleSEXP);
-    Rcpp::traits::input_parameter< double >::type rate10_scale(rate10_scaleSEXP);
-    Rcpp::traits::input_parameter< int >::type n_steps(n_stepsSEXP);
     Rcpp::traits::input_parameter< int >::type n_forks(n_forksSEXP);
-    Rcpp::traits::input_parameter< int >::type ran_seed(ran_seedSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, max_correctable_Hamming_distance, step_size, temp, max_fr, max_corr, initial_corr, corr_step_scale, rate10_scale, n_steps, n_forks, ran_seed));
+    Rcpp::traits::input_parameter< int >::type maxeval(maxevalSEXP);
+    Rcpp::traits::input_parameter< double >::type ftol_rel(ftol_relSEXP);
+    Rcpp::traits::input_parameter< double >::type xtol_rel(xtol_relSEXP);
+    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, max_correctable_Hamming_distance, max_fr, max_corr, n_forks, maxeval, ftol_rel, xtol_rel));
     return rcpp_result_gen;
 END_RCPP
 }
-// mQC_init
-List mQC_init(NumericMatrix bc_counts, IntegerMatrix codebook, int max_correctable_Hamming_distance, double max_fr, double initial_corr, double rate10_scale, int n_forks);
-RcppExport SEXP _flipFISH_mQC_init(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP max_frSEXP, SEXP initial_corrSEXP, SEXP rate10_scaleSEXP, SEXP n_forksSEXP) {
+// tr_sum_check
+double tr_sum_check(int bc, const std::vector<double>& rate10, const std::vector<double>& rate01, const std::vector<double>& corr1, const std::vector<double>& corr0);
+RcppExport SEXP _flipFISH_tr_sum_check(SEXP bcSEXP, SEXP rate10SEXP, SEXP rate01SEXP, SEXP corr1SEXP, SEXP corr0SEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericMatrix >::type bc_counts(bc_countsSEXP);
-    Rcpp::traits::input_parameter< IntegerMatrix >::type codebook(codebookSEXP);
-    Rcpp::traits::input_parameter< int >::type max_correctable_Hamming_distance(max_correctable_Hamming_distanceSEXP);
-    Rcpp::traits::input_parameter< double >::type max_fr(max_frSEXP);
-    Rcpp::traits::input_parameter< double >::type initial_corr(initial_corrSEXP);
-    Rcpp::traits::input_parameter< double >::type rate10_scale(rate10_scaleSEXP);
-    Rcpp::traits::input_parameter< int >::type n_forks(n_forksSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC_init(bc_counts, codebook, max_correctable_Hamming_distance, max_fr, initial_corr, rate10_scale, n_forks));
-    return rcpp_result_gen;
-END_RCPP
-}
-// mQC_msle
-double mQC_msle(NumericVector params, SEXP data_ptr_sexp);
-RcppExport SEXP _flipFISH_mQC_msle(SEXP paramsSEXP, SEXP data_ptr_sexpSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type params(paramsSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type data_ptr_sexp(data_ptr_sexpSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC_msle(params, data_ptr_sexp));
+    Rcpp::traits::input_parameter< int >::type bc(bcSEXP);
+    Rcpp::traits::input_parameter< const std::vector<double>& >::type rate10(rate10SEXP);
+    Rcpp::traits::input_parameter< const std::vector<double>& >::type rate01(rate01SEXP);
+    Rcpp::traits::input_parameter< const std::vector<double>& >::type corr1(corr1SEXP);
+    Rcpp::traits::input_parameter< const std::vector<double>& >::type corr0(corr0SEXP);
+    rcpp_result_gen = Rcpp::wrap(tr_sum_check(bc, rate10, rate01, corr1, corr0));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
     {"_flipFISH_unique_Hamming_cb", (DL_FUNC) &_flipFISH_unique_Hamming_cb, 1},
-    {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 13},
-    {"_flipFISH_mQC_init", (DL_FUNC) &_flipFISH_mQC_init, 7},
-    {"_flipFISH_mQC_msle", (DL_FUNC) &_flipFISH_mQC_msle, 2},
+    {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 9},
+    {"_flipFISH_tr_sum_check", (DL_FUNC) &_flipFISH_tr_sum_check, 5},
     {NULL, NULL, 0}
 };
 

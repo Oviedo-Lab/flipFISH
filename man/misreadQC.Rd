@@ -7,17 +7,13 @@
 misreadQC(
   STdata,
   codebook,
-  max_fr = 0.1,
-  max_corr = 0.2,
-  rate10_scale = 0.2,
-  initial_corr = 0.01,
-  n_steps = 1000,
+  max_fr = 1,
+  max_corr = 1,
   n_forks = 1,
-  step_size_range = c(0.05, 0.005),
-  temp_range = c(0.1, 0.01),
-  corr_step_scale = 0.1,
-  max_correctable_Hamming_distance = NULL,
-  ran_seed = 12345
+  maxeval = 1000,
+  ftol_rel = 1e-08,
+  xtol_rel = 1e-06,
+  max_correctable_Hamming_distance = NULL
 )
 }
 \arguments{
@@ -25,31 +21,23 @@ misreadQC(
 
 \item{codebook}{Codebook with row names as barcodes and columns as bits, must have barcode names as row names}
 
-\item{max_fr}{Maximum flip rate to consider in the MCMCSA algorithm, default 0.1}
+\item{max_fr}{Maximum flip rate allowed during optimization, default 0.1}
 
-\item{max_corr}{Bit-flip correlations have lower and upper bounds of -max_corr and max_corr, default is 0.2}
+\item{max_corr}{Absolute bound on bit-flip correlation parameters, default 0.2}
 
-\item{rate10_scale}{Assume that 1>0 flips occur in this proportion to 0>1 flips, default is 0.2}
+\item{n_forks}{Number of parallel forks to use for expected-count computation, default is 1 (must be 1 on Windows)}
 
-\item{initial_corr}{Initial max absolute value for bit-flip correlation in the MCMCSA algorithm, default is 0.01}
+\item{maxeval}{Maximum number of objective function evaluations for L-BFGS, default 1000}
 
-\item{n_steps}{Number of steps to run the MCMCSA algorithm, default is 1000}
+\item{ftol_rel}{Relative function value tolerance for L-BFGS convergence, default 1e-8}
 
-\item{n_forks}{Number of parallel forks to use for MCMCSA, default is 1 (must be 1 for Windows, can be >1 for Linux/Mac)}
+\item{xtol_rel}{Relative parameter tolerance for L-BFGS convergence, default 1e-6}
 
-\item{step_size_range}{Numeric vector of length 2, giving the max and min step size for the MCMCSA algorithm, which will be decayed linearly over n_steps, defaults to c(0.05, 0.005)}
-
-\item{temp_range}{Numeric vector of length 2, giving the max and min temperature for the MCMCSA algorithm, which will be decayed linearly over n_steps, defaults to c(0.1, 0.01)}
-
-\item{corr_step_scale}{Numeric, giving the scale of the step size for bit-flip correlations in the MCMCSA algorithm relative to the step size for flip rates, default is 0.1}
-
-\item{max_correctable_Hamming_distance}{Maximum Hamming distance for misreads to be corrected, default is NULL which will set it to one less than the minimum Hamming distance between codebook entries}
-
-\item{ran_seed}{Random seed for MCMCSA algorithm, default is 12345}
+\item{max_correctable_Hamming_distance}{Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries}
 }
 \value{
-List giving \code{STdata}, a dataframe giving the summary data from the ST run used in the simulation, \code{fliprates}, a matrix giving the estimated flip rates and bit-flip correlations from each iteration of the MCMCSA algorithm, \code{erc}, \code{ecc}, and \code{etc}, matrices giving the estimated expected read, error-corrected, and true (i.e., correctly corrected) counts for each barcode at each iteration of the MCMCSA walk, \code{CR} and \code{PPV}, matrices giving estimated confidence ratio and positive predictive values for each iteration of the MCMCSA walk, and \code{fliprates_summary} and \code{bc_summary}, which give summary statistics on the flip rates and error-corrected counts across all iterations of the MCMCSA algorithm.
+List giving \code{STdata}, a dataframe of the ST summary data, \code{fliprates}, a 1-row matrix of the optimal flip rates and bit-flip correlations, \code{erc}, \code{ecc}, and \code{etc}, 1-row matrices of the expected read, error-corrected, and true counts at the optimum, \code{CR} and \code{PPV}, 1-row matrices of the confidence ratio and PPV at the optimum, \code{msle}, the final objective value, and \code{fliprates_summary} and \code{bc_summary}, summary tables (point estimates; lower == upper == mean since L-BFGS returns a single solution).
 }
 \description{
-This function takes summary statistics from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs a Markov Chain Monte Carlo with Coupled Simulated Annealing (MCMCSA) algorithm to estimate the bit-flip rates and correlations, as well as the expected read, error-corrected, and true counts for each barcode. The function returns a list of these estimates across all iterations of the MCMCSA walk, as well as summary statistics on the flip rates and error-corrected counts. The aim is to compute both the "confidence ratio" (CR) and positive predictive value (PPV) for each barcode.
+This function takes summary statistics from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs L-BFGS (via nlopt) to estimate the bit-flip rates and correlations, as well as the expected read, error-corrected, and true counts for each barcode. The aim is to compute both the "confidence ratio" (CR) and positive predictive value (PPV) for each barcode.
 }

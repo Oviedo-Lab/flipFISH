@@ -15,41 +15,33 @@ NULL
 
 #' Run misread QC analysis on summary stats data from spatial transcriptomics experiment
 #'
-#' This function takes summary statistics from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs a Markov Chain Monte Carlo with Coupled Simulated Annealing (MCMCSA) algorithm to estimate the bit-flip rates and correlations, as well as the expected read, error-corrected, and true counts for each barcode. The function returns a list of these estimates across all iterations of the MCMCSA walk, as well as summary statistics on the flip rates and error-corrected counts. The aim is to compute both the "confidence ratio" (CR) and positive predictive value (PPV) for each barcode. 
+#' This function takes summary statistics from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs L-BFGS (via nlopt) to estimate the bit-flip rates and correlations, as well as the expected read, error-corrected, and true counts for each barcode. The aim is to compute both the "confidence ratio" (CR) and positive predictive value (PPV) for each barcode.
 #'
 #' @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
 #' @param codebook Codebook with row names as barcodes and columns as bits, must have barcode names as row names
-#' @param max_fr Maximum flip rate to consider in the MCMCSA algorithm, default 0.1
-#' @param max_corr Bit-flip correlations have lower and upper bounds of -max_corr and max_corr, default is 0.2
-#' @param rate10_scale Assume that 1>0 flips occur in this proportion to 0>1 flips, default is 0.2
-#' @param initial_corr Initial max absolute value for bit-flip correlation in the MCMCSA algorithm, default is 0.01
-#' @param n_steps Number of steps to run the MCMCSA algorithm, default is 1000
-#' @param n_forks Number of parallel forks to use for MCMCSA, default is 1 (must be 1 for Windows, can be >1 for Linux/Mac)
-#' @param step_size_range Numeric vector of length 2, giving the max and min step size for the MCMCSA algorithm, which will be decayed linearly over n_steps, defaults to c(0.05, 0.005)
-#' @param temp_range Numeric vector of length 2, giving the max and min temperature for the MCMCSA algorithm, which will be decayed linearly over n_steps, defaults to c(0.1, 0.01)
-#' @param corr_step_scale Numeric, giving the scale of the step size for bit-flip correlations in the MCMCSA algorithm relative to the step size for flip rates, default is 0.1
-#' @param max_correctable_Hamming_distance Maximum Hamming distance for misreads to be corrected, default is NULL which will set it to one less than the minimum Hamming distance between codebook entries
-#' @param ran_seed Random seed for MCMCSA algorithm, default is 12345
-#' @return List giving \code{STdata}, a dataframe giving the summary data from the ST run used in the simulation, \code{fliprates}, a matrix giving the estimated flip rates and bit-flip correlations from each iteration of the MCMCSA algorithm, \code{erc}, \code{ecc}, and \code{etc}, matrices giving the estimated expected read, error-corrected, and true (i.e., correctly corrected) counts for each barcode at each iteration of the MCMCSA walk, \code{CR} and \code{PPV}, matrices giving estimated confidence ratio and positive predictive values for each iteration of the MCMCSA walk, and \code{fliprates_summary} and \code{bc_summary}, which give summary statistics on the flip rates and error-corrected counts across all iterations of the MCMCSA algorithm. 
+#' @param max_fr Maximum flip rate allowed during optimization, default 0.1
+#' @param max_corr Absolute bound on bit-flip correlation parameters, default 0.2
+#' @param n_forks Number of parallel forks to use for expected-count computation, default is 1 (must be 1 on Windows)
+#' @param maxeval Maximum number of objective function evaluations for L-BFGS, default 1000
+#' @param ftol_rel Relative function value tolerance for L-BFGS convergence, default 1e-8
+#' @param xtol_rel Relative parameter tolerance for L-BFGS convergence, default 1e-6
+#' @param max_correctable_Hamming_distance Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries
+#' @return List giving \code{STdata}, a dataframe of the ST summary data, \code{fliprates}, a 1-row matrix of the optimal flip rates and bit-flip correlations, \code{erc}, \code{ecc}, and \code{etc}, 1-row matrices of the expected read, error-corrected, and true counts at the optimum, \code{CR} and \code{PPV}, 1-row matrices of the confidence ratio and PPV at the optimum, \code{msle}, the final objective value, and \code{fliprates_summary} and \code{bc_summary}, summary tables (point estimates; lower == upper == mean since L-BFGS returns a single solution).
 #' @export
 misreadQC <- function(
-    STdata, 
-    codebook, 
-    max_fr = 0.1,
-    max_corr = 0.2,
-    rate10_scale = 0.2,
-    initial_corr = 0.01,
-    n_steps = 1000,
-    n_forks = 1,
-    step_size_range = c(0.05, 0.005), 
-    temp_range = c(0.1, 0.01), 
-    corr_step_scale = 0.1,
-    max_correctable_Hamming_distance = NULL,
-    ran_seed = 12345
+    STdata,
+    codebook,
+    max_fr        = 1.0,
+    max_corr      = 1.0,
+    n_forks       = 1,
+    maxeval       = 1000,
+    ftol_rel      = 1e-8,
+    xtol_rel      = 1e-6,
+    max_correctable_Hamming_distance = NULL
   ) {
-    cat("\nRunning misread QC with MCMCSA")
+    cat("\nRunning misread QC with L-BFGS (nlopt)")
     cat("\nMax flip rate:", max_fr)
-    cat("\nNumber of steps:", n_steps)
+    cat("\nMax evaluations:", maxeval)
     
     # Confirm forking is possible and check number of cores
     if (!(Sys.info()["sysname"] == "Darwin" || Sys.info()["sysname"] == "Linux")) {
@@ -100,72 +92,57 @@ misreadQC <- function(
       stop(paste0("max_correctable_Hamming_distance must be less than the minimum Hamming distance between codebook entries (", min(codebook_distances), ")"))
     }
     
-    # Run misread QC algorithm with MCMCSA
+    # Run misread QC algorithm with L-BFGS
     qc <- mQC(
-      as.matrix(STdata), 
-      as.matrix(codebook), 
+      as.matrix(STdata),
+      as.matrix(codebook),
       max_correctable_Hamming_distance,
-      c(max(step_size_range), -(max(step_size_range) - min(step_size_range))/n_steps, min(step_size_range)), # step size, initial, slope, min
-      c(max(temp_range), -(max(temp_range) - min(temp_range))/n_steps, min(temp_range)), # temp, initial, slope, min
       max_fr,
       max_corr,
-      initial_corr,
-      corr_step_scale,
-      rate10_scale,
-      n_steps,
       n_forks,
-      ran_seed
+      maxeval,
+      ftol_rel,
+      xtol_rel
     )
     
-    # Make summary stats from qc results
-    cat("\nRunning summary stats on QC results")
-    sum_names <- c("mean", "lower", "upper")
-    qc_names <- names(qc)
-    bc_names <- qc_names[qc_names != "STdata" & qc_names != "fliprates"]
-    bc_sum_names <- c()
-    for (n in bc_names) {bc_sum_names <- c(bc_sum_names, paste0(n, "_", sum_names))}
-    fr <- matrix(NA, nrow = ncol(qc$fliprates), ncol = length(sum_names))
-    bc <- matrix(NA, nrow = ncol(qc$ecc), ncol = length(sum_names) * length(bc_names))
-    colnames(fr) <- sum_names 
-    colnames(bc) <- bc_sum_names
-    rownames(bc) <- qc$STdata$species
-    N_bits <- ncol(codebook)
-    fr_names <- paste0("rate10_bit", seq_len(N_bits))
-    fr_names <- c(fr_names, paste0("rate01_bit", seq_len(N_bits)))
-    fr_names <- c(fr_names, paste0("corr_", seq_len(ncol(qc$fliprates) - 2*N_bits)))
-    rownames(fr) <- fr_names
-    step_range <- c(round(n_steps/2):n_steps) # take second half of MCMCSA walk to compute means and CIs
+    # Build summary tables from the single optimal solution (lower = upper = mean)
+    cat("\nBuilding summary tables from optimal solution")
+    sum_names  <- c("mean", "lower", "upper")
+    qc_names   <- names(qc)
+    bc_names   <- qc_names[!(qc_names %in% c("STdata", "fliprates", "msle"))]
+    bc_sum_names <- unlist(lapply(bc_names, function(nm) paste0(nm, "_", sum_names)))
+    N_bits     <- ncol(codebook)
+    fr <- matrix(NA, nrow = ncol(qc$fliprates), ncol = length(sum_names),
+                 dimnames = list(
+                   c(paste0("rate10_bit", seq_len(N_bits)),
+                     paste0("rate01_bit", seq_len(N_bits)),
+                     paste0("corr_", seq_len(ncol(qc$fliprates) - 2*N_bits))),
+                   sum_names
+                 ))
+    bc <- matrix(NA, nrow = ncol(qc$ecc), ncol = length(sum_names) * length(bc_names),
+                 dimnames = list(qc$STdata$species, bc_sum_names))
     for (p in qc_names) {
-      if (p == "STdata" || p == "msle") next
-      if (n_steps == 1) {
-        p_means <- qc[[p]]
-        ci <- rbind(p_means, p_means)
-      } else {
-        p_means <- colMeans(qc[[p]][step_range,])
-        ci <- apply(qc[[p]][step_range,], 2, quantile, probs = c(0.025, 0.975))
-      }
+      if (p %in% c("STdata", "msle")) next
+      # Single-row matrix: point estimate only; lower == upper == mean
+      p_vals <- as.numeric(qc[[p]])
       if (p == "fliprates") {
-        fr[,"mean"] <- p_means
-        fr[,"lower"] <- ci[1,]
-        fr[,"upper"] <- ci[2,]
+        fr[, "mean"]  <- p_vals
+        fr[, "lower"] <- p_vals
+        fr[, "upper"] <- p_vals
       } else {
-        bc[,paste0(p, "_mean")] <- p_means
-        bc[,paste0(p, "_lower")] <- ci[1,]
-        bc[,paste0(p, "_upper")] <- ci[2,]
+        bc[, paste0(p, "_mean")]  <- p_vals
+        bc[, paste0(p, "_lower")] <- p_vals
+        bc[, paste0(p, "_upper")] <- p_vals
       }
-    } 
+    }
     qc[["fliprates_summary"]] <- fr
-    qc[["bc_summary"]] <- bc
+    qc[["bc_summary"]]        <- bc
     
     rate10_mean <- mean(fr[grepl("rate10", rownames(fr)), "mean"])
     rate01_mean <- mean(fr[grepl("rate01", rownames(fr)), "mean"])
-    rate10_lower <- mean(fr[grepl("rate10", rownames(fr)), "lower"])
-    rate10_upper <- mean(fr[grepl("rate10", rownames(fr)), "upper"])
-    rate01_lower <- mean(fr[grepl("rate01", rownames(fr)), "lower"])
-    rate01_upper <- mean(fr[grepl("rate01", rownames(fr)), "upper"])
-    cat("\nEstimated flip rates (mean, 95% CI):")
-    cat("\n1>0: ", round(rate10_mean, 4), " (", round(rate10_lower, 4), "-", round(rate10_upper, 4), ")", sep = "")
-    cat("\n0>1: ", round(rate01_mean, 4), " (", round(rate01_lower, 4), "-", round(rate01_upper, 4), ")\n", sep = "")
+    cat("\nEstimated flip rates (optimal):")
+    cat("\n1>0: ", round(rate10_mean, 4), sep = "")
+    cat("\n0>1: ", round(rate01_mean, 4), "\n", sep = "")
     
     return(qc)
     
@@ -314,45 +291,34 @@ plot.counts <- function(
     
   }
 
-#' Plot estimated flip rate distributions from misread QC results
+#' Plot estimated flip rates from misread QC results
 #' 
-#' This function takes the results from the misreadQC function and makes a plot showing the distributions of the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1). The plot uses violin plots to show the distribution of flip rates across the second half of iterations of the MCMCSA walk, with separate facets for each flip type.
+#' This function takes the results from the misreadQC function and makes a bar chart of the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1).
 #' 
 #' @name plot.fr
 #' @rdname plot-fr
 #' @usage plot.fr(qc)
 #' @param qc List, results from misreadQC function
-#' @return ggplot object showing distributions of estimated flip rates for each bit and flip type
+#' @return ggplot object showing estimated flip rates for each bit and flip type
 #' @export
 plot.fr <- function(
     qc
   ) {
     fr_names <- rownames(qc$fliprates_summary)
-    mask10 <- grepl("rate10", fr_names)
-    mask01 <- grepl("rate01", fr_names)
-    n_samples <- nrow(qc$fliprates)
-    step_range <- c(round(n_samples/2):n_samples) # take second half of MCMCSA walk
-    n_samples <- length(step_range)
-    N_bits <- sum(mask10)
+    mask10   <- grepl("rate10", fr_names)
+    mask01   <- grepl("rate01", fr_names)
+    N_bits   <- sum(mask10)
     if (sum(mask01) != N_bits) stop("Number of rate10 and rate01 entries in fliprates_summary must be the same")
-    fr <- qc$fliprates
-    fr <- matrix(NA, nrow = 2*n_samples*N_bits, ncol = 3)
-    colnames(fr) <- c("value", "bit", "type")
-    fr <- as.data.frame(fr)
-    for (i in seq_len(N_bits)) {
-      idx10 <- (i-1)*n_samples + seq_len(n_samples)
-      idx01 <- (N_bits + i-1)*n_samples + seq_len(n_samples)
-      fr[idx10, "value"] <- qc$fliprates[step_range,paste0("rate10_bit", i) == fr_names]
-      fr[idx10, "bit"] <- i
-      fr[idx10, "type"] <- "1>0"
-      fr[idx01, "value"] <- qc$fliprates[step_range,paste0("rate01_bit", i) == fr_names]
-      fr[idx01, "bit"] <- i
-      fr[idx01, "type"] <- "0>1"
-    }
-    fr$bit <- as.factor(fr$bit)
-    plt <- ggplot(fr, aes(bit, value, fill = type)) +
-      geom_violin() +
-      labs(title = "Estimated Flip Rate Distributions", x = "Bit", y = "Flip Rate", color = "Flip Type") +
+    df <- data.frame(
+      value = c(qc$fliprates_summary[mask10, "mean"], qc$fliprates_summary[mask01, "mean"]),
+      bit   = rep(seq_len(N_bits), 2),
+      type  = rep(c("1>0", "0>1"), each = N_bits)
+    )
+    df$bit  <- as.factor(df$bit)
+    df$type <- factor(df$type, levels = c("1>0", "0>1"))
+    plt <- ggplot(df, aes(x = bit, y = value, fill = type)) +
+      geom_col(position = "dodge") +
+      labs(title = "Estimated Flip Rates", x = "Bit", y = "Flip Rate", fill = "Flip Type") +
       theme_minimal() +
       facet_grid(type ~ .)
     return(plt)
