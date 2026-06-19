@@ -56,13 +56,13 @@ struct ST_data {
 struct FlipRates {
   std::vector<double> rate10; // P(1 -> 0) for each bit, so length = N_bits
   std::vector<double> rate01; // P(0 -> 1) for each bit, so length = N_bits
-  std::vector<double> log_rate10; // Pre-computed vector of log(rate10) values, used in logTR calculation
-  std::vector<double> log_rate01; // Pre-computed vector of log(rate01) values, used in logTR calculation
-  std::vector<double> log_rate11; // Pre-computed vector of 1-log(rate10) values, used in logTR calculation
-  std::vector<double> log_rate00; // Pre-computed vector of 1-log(rate01) values, used in logTR calculation
+  std::vector<double> log_rate10; // Pre-computed vector of log(rate10) values, used in TR calculation
+  std::vector<double> log_rate01; // Pre-computed vector of log(rate01) values, used in TR calculation
+  std::vector<double> log_rate11; // Pre-computed vector of 1-log(rate10) values, used in TR calculation
+  std::vector<double> log_rate00; // Pre-computed vector of 1-log(rate01) values, used in TR calculation
   std::vector<double> corr1; // Strict lower triangle of luminance noise correlations when bit i is 1 
   std::vector<double> corr0; // ... when bit i is 0
-  std::vector<std::vector<double>> log_inv_corr; // Pre-computed vector of summed j<i values log(1 - corr(i,j)), used in logTR calculation
+  std::vector<std::vector<double>> log_inv_corr; // Pre-computed vector of summed j<i values log(1 - corr(i,j)), used in TR calculation
 }; 
 
 /*
@@ -229,7 +229,7 @@ FlipRates pack_fr(
     // Assign correlations
     fr.corr1.assign(rates_plus_corr.begin() + 2*N_bits, rates_plus_corr.begin() + 2*N_bits + N_corrs);
     fr.corr0.assign(rates_plus_corr.begin() + 2*N_bits + N_corrs, rates_plus_corr.end());
-    // Precompute log of the rates and log of 1 - rates, which are used in the logTR calculation
+    // Precompute log of the rates and log of 1 - rates, which are used in the TR calculation
     fr.log_rate00 = std::vector<double>(N_bits, 0.0);
     fr.log_rate01 = std::vector<double>(N_bits, 0.0);
     fr.log_rate10 = std::vector<double>(N_bits, 0.0);
@@ -367,7 +367,6 @@ Codebook pack_codebook(
 IntegerVector unique_Hamming_cb(
     const IntegerMatrix& codebook
   ) {
-    int N_barcodes = codebook.nrow();
     Codebook cb = pack_codebook(codebook, false);
     std::vector<int> hamming_distances = unique_Hamming(cb.barcodes);
     return wrap(hamming_distances);
@@ -468,8 +467,7 @@ ST_data load_STdata(
 
 // Log of the rate at which the sequence of flips transform_flips can be expected to occur for a spot with true barcode bc, given bit-flip rates rate10 and rate01 and correlation corr between bit-flips
 // STOPPED ... rates need to be normalized so they add to 1 once correlations are included ?!?!?!?!
-double logTR(
-    int b,
+double TR(
     const uint64_t bc,
     const uint64_t transform_flips,
     const FlipRates& fr
@@ -487,18 +485,15 @@ double logTR(
       // Compute independent transformation rate for this bit 
       double log_tr_nocorr = fr.log_rate00[i];
       if (flip) {
-        if (bit) {
-          log_tr_nocorr = fr.log_rate10[i];
-        } else {
-          log_tr_nocorr = fr.log_rate01[i];
-        }
+        if (bit) {log_tr_nocorr = fr.log_rate10[i];} 
+        else {log_tr_nocorr = fr.log_rate01[i];}
       } else if (bit) {
         log_tr_nocorr = fr.log_rate11[i];
       }
       // Add adjusted log transformation rate for this bit to total log transformation rate
       log_tr += log_tr_nocorr - log_inv_corr[i];
     }
-    return log_tr; 
+    return std::exp(log_tr); 
   }
 
 // Function to compute the expected count for a given barcode of interest (BOI)
@@ -507,7 +502,7 @@ std::tuple<double, double, double> expected_bc_count(
     const FlipRates& fr,                            // FlipRates struct holding rate10, rate01, and corr
     const std::vector<int>& bc_counts_true,         // Vector of same length as true_barcodes, giving number of spots with each true barcode
     const std::vector<uint64_t>& true_barcodes,     // Vector giving all possible true spot barcodes
-    const std::vector<uint64_t>& corrected_to_BOI   // vector of barcodes that would be corrected to barcode of interest (BOI)
+    const std::vector<uint64_t>& corrected_to_BOI   // Vector of barcodes that would be corrected to barcode of interest (BOI)
   ) {
     int N_bits = fr.rate10.size();
     int N_barcodes = true_barcodes.size();
@@ -519,13 +514,26 @@ std::tuple<double, double, double> expected_bc_count(
     for (int j = 0; j < N_barcodes; ++j) {
       if (bc_counts_true[j] > 0) {
         double tr = 0.0;
+        // Populate transformation rates
+        std::vector<double> TRj(N_correctable);
         for (int i = 0; i < N_correctable; ++i) {
           // Get bit-flips required to transform the true barcode into the misread barcode
           uint64_t flips_to_BOI = (true_barcodes[j] ^ corrected_to_BOI[i]) & ((1ULL << N_bits) - 1);
           // Find expected count of spot misreads corrected to barcode BOI, from true barcode j, and add to total misread count
-          double tr_ = std::exp(logTR(j, true_barcodes[j], flips_to_BOI, fr));
-          tr += tr_;
-          if (corrected_to_BOI[i] == BOI) {count_read += tr_ * (double)bc_counts_true[j];}
+          TRj[i] = TR(true_barcodes[j], flips_to_BOI, fr);
+        }
+        // Sum transformation rates
+        double sum_TRj = std::accumulate(TRj.begin(), TRj.end(), 0.0);
+        if (sum_TRj > 0.0) {
+          for (int i = 0; i < N_correctable; ++i) {
+            // Normalize TRj to sum to 1
+            TRj[i] /= sum_TRj;
+            // Add to the transformation rate
+            tr += TRj[i];
+            if (corrected_to_BOI[i] == BOI) {count_read += TRj[i] * (double)bc_counts_true[j];}
+          }
+        } else {
+          Rcpp::stop("Error in computing transformation rates.");
         }
         count_corrected += tr * (double)bc_counts_true[j];
         if (true_barcodes[j] == BOI) {count_true += tr * (double)bc_counts_true[j];}
@@ -546,7 +554,6 @@ std::tuple<std::vector<double>, std::vector<double>, std::vector<double>> expect
     std::vector<double> ecc(N_barcodes, 0.0); // expected corrected counts
     std::vector<double> erc(N_barcodes, 0.0); // expected read counts
     std::vector<double> etc(N_barcodes, 0.0); // expected true (i.e., correctly read) counts
-    int max_count = *std::max_element(bc_counts_true.begin(), bc_counts_true.end());
     
     // Construct batches of barcodes to simulate in parallel
     std::vector<std::vector<int>> barcode_batches(n_forks);
@@ -932,22 +939,13 @@ FlipRates MCMCSA(
     // Start random-number generator and initialize a uniform distribution
     std::mt19937 rng(ran_seed);
     std::uniform_real_distribution<> unif(0.0, 1.0);
-    // ... for random shuffling
-    std::vector<int> all_indices(n_FR);
-    std::iota(all_indices.begin(), all_indices.end(), 0);
     
     while (step < n_steps) {
-      
-      // Randomly select flip-rate parameters to shuffle
-      int n = (int)std::round(step / n_steps);
-      n = std::max(n, (int)(n_FR * 0.1));
-      std::shuffle(all_indices.begin(), all_indices.end(), rng);
-      std::vector<int> FR_sub(all_indices.begin(), all_indices.begin() + n);
       
       // Generate random step (... this is the Markov chain)
       std::normal_distribution<double> norm(0.0, step_size[step]);
       FR_next = FR_current;
-      for (int i : FR_sub) {
+      for (int i = 0; i < n_FR; ++i) {
         double sz = norm(rng);
         if (i < N_bits) {sz *= rate10_scale;}
         if (i >= 2*N_bits) {sz *= corr_step_scale;}
