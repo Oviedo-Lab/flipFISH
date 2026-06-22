@@ -707,11 +707,21 @@ std::vector<int> est_bc_counts_true(
     mean_rate01       /= (double)N_bits;
     double expected_flip_rate = (mean_rate10*mean_Hamming_weight + mean_rate01*((double)N_bits - mean_Hamming_weight)) / (double)N_bits;
     // ... find degree of freedom
-    double mean_corr1  = std::accumulate(fr.corr1.begin(), fr.corr1.end(), 0.0);
-    mean_corr1        /= (double)fr.corr1.size();
-    double mean_corr0  = std::accumulate(fr.corr0.begin(), fr.corr0.end(), 0.0);
-    mean_corr0        /= (double)fr.corr0.size();
-    double DoF         = (1.0 - mean_corr1)*mean_Hamming_weight + (1.0 - mean_corr0)*((double)N_bits - mean_Hamming_weight);
+    double mean_corr1 = std::accumulate(
+      fr.corr1.begin(), fr.corr1.end(), 0.0,
+      [](double sum, double x) {
+        return sum + std::abs(x);
+      }
+    ) / static_cast<double>(fr.corr1.size());
+    double mean_corr0 = std::accumulate(
+      fr.corr0.begin(), fr.corr0.end(), 0.0,
+      [](double sum, double x) {
+        return sum + std::abs(x);
+      }
+    ) / static_cast<double>(fr.corr0.size());
+    double DoF =
+      (1.0 - mean_corr1) * mean_Hamming_weight +
+      (1.0 - mean_corr0) * (static_cast<double>(N_bits) - mean_Hamming_weight);
     // ... find expected decoding rate
     double expected_decoding_rate = R::ppois(
       d->max_correctable_Hamming_distance, // Max number of bits that can flip and still be decoded
@@ -808,7 +818,7 @@ List mQC(
     STdata.n_forks     = n_forks;
     STdata.report_freq = 1; //std::max(1, maxeval / 10); // print ~10 progress lines
     
-    // Initialize parameters: rate10 = 0.01, rate01 = 0.05, corr = 0
+    // Initialize parameters: rate10 = 0.01, rate01 = 0.05
     int    N_bits     = STdata.cb.N_bits;
     int    corr_free  = N_bits * (N_bits - 1) / 2;
     size_t n          = 2*N_bits + 2*corr_free;
@@ -817,7 +827,10 @@ List mQC(
       x0[i]          = 0.01;
       x0[N_bits + i] = 0.05;
     }
-    // corr parameters stay at 0
+    // Random corr parameters with mean absolute value of 0.1
+    for (int i = 2*N_bits; i < n; ++i) {
+      x0[i] = R::runif(-0.2, 0.2); 
+    }
     
     // Estimate true counts based on initial flip rates 
     STdata.bc_counts_true = est_bc_counts_true(pack_fr(x0, N_bits), &STdata);
