@@ -53,6 +53,7 @@ struct ST_data {
   EvalHist         eval_history;
   std::vector<int> bc_counts_true;
   double           best_msle;
+  double           assumed_mean_corr;  // Mostly for initial bc count estimate, to increase number of spots
   int              n_forks;
   int              report_freq;
 };
@@ -313,6 +314,7 @@ std::unordered_map<uint64_t, int> build_correction_table(
 ST_data load_STdata(
     NumericMatrix bc_count_data,
     IntegerMatrix codebook,
+    double        assumed_mean_corr,
     int           max_correctable_Hamming_distance
   ) {
     
@@ -364,7 +366,8 @@ ST_data load_STdata(
       max_correctable_Hamming_distance,
       correction_table, correction_table_inverted,
       eval_history, std::vector<int>(N_barcodes, 0), // placeholders
-      std::numeric_limits<double>::infinity(), 0, 0  // placeholders
+      std::numeric_limits<double>::infinity(), assumed_mean_corr, 
+      0, 0  // placeholders
     };
     
   }
@@ -726,8 +729,8 @@ std::vector<int> est_bc_counts_true(
         return sum + std::abs(x);
       }
     ) / static_cast<double>(fr.corr0.size());
-    if (mean_corr1 == 0.0) {mean_corr1 = 0.1;}
-    if (mean_corr0 == 0.0) {mean_corr0 = 0.1;}
+    if (mean_corr1 == 0.0) {mean_corr1 = d->assumed_mean_corr;}
+    if (mean_corr0 == 0.0) {mean_corr0 = d->assumed_mean_corr;}
     double DoF =
       (1.0 - mean_corr1) * mean_Hamming_weight +
       (1.0 - mean_corr0) * (static_cast<double>(N_bits) - mean_Hamming_weight);
@@ -768,7 +771,6 @@ static double nlopt_mQC_msle(
     bool     do_grad    = !grad.empty();
     
     FlipRates            fr              = pack_fr(x, N_bits);
-    //std::vector<int>     bc_counts_true  = est_bc_counts_true(fr, static_cast<void*>(d));
     std::vector<double>  grad_ecc_flat;
     if (do_grad) grad_ecc_flat.assign(N_barcodes * n_params, 0.0);
     
@@ -816,6 +818,7 @@ List mQC(
     int           max_correctable_Hamming_distance,
     double        max_fr,
     double        max_corr,
+    double        assumed_mean_corr, 
     int           n_forks,
     int           maxeval   = 1000,
     double        ftol_rel  = 1e-8,
@@ -823,7 +826,7 @@ List mQC(
   ) {
     
     // Load in data
-    auto STdata = load_STdata(bc_counts, codebook, max_correctable_Hamming_distance);
+    auto STdata = load_STdata(bc_counts, codebook, assumed_mean_corr, max_correctable_Hamming_distance);
     STdata.n_forks     = n_forks;
     STdata.report_freq = 1; //std::max(1, maxeval / 10); // print ~10 progress lines
     

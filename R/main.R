@@ -19,8 +19,9 @@ NULL
 #'
 #' @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
 #' @param codebook Codebook with row names as barcodes and columns as bits, must have barcode names as row names
-#' @param max_fr Maximum flip rate allowed during optimization, default 0.1
-#' @param max_corr Absolute bound on bit-flip correlation parameters, default 0.2
+#' @param max_fr Maximum flip rate allowed during optimization, default 1.0
+#' @param max_corr Absolute bound on bit-flip correlation parameters, default 1.0
+#' @param assumed_mean_corr Assumed mean correlation between bit-flips, used to make initial estimate of true barcode counts, default 0.2
 #' @param n_forks Number of parallel forks to use for expected-count computation, default is 1 (must be 1 on Windows)
 #' @param maxeval Maximum number of objective function evaluations for L-BFGS, default 1000
 #' @param ftol_rel Relative function value tolerance for L-BFGS convergence, default 1e-8
@@ -31,12 +32,13 @@ NULL
 misreadQC <- function(
     STdata,
     codebook,
-    max_fr        = 1.0,
-    max_corr      = 1.0,
-    n_forks       = 1,
-    maxeval       = 1000,
-    ftol_rel      = 1e-8,
-    xtol_rel      = 1e-6,
+    max_fr                           = 1.0,
+    max_corr                         = 1.0,
+    assumed_mean_corr                = 0.2, 
+    n_forks                          = 1,
+    maxeval                          = 1000,
+    ftol_rel                         = 1e-8,
+    xtol_rel                         = 1e-6,
     max_correctable_Hamming_distance = NULL
   ) {
     cat("\nRunning misread QC with L-BFGS (nlopt)")
