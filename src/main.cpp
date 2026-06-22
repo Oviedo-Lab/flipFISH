@@ -719,6 +719,8 @@ std::vector<int> est_bc_counts_true(
         return sum + std::abs(x);
       }
     ) / static_cast<double>(fr.corr0.size());
+    if (mean_corr1 == 0.0) {mean_corr1 = 0.1;}
+    if (mean_corr0 == 0.0) {mean_corr0 = 0.1;}
     double DoF =
       (1.0 - mean_corr1) * mean_Hamming_weight +
       (1.0 - mean_corr0) * (static_cast<double>(N_bits) - mean_Hamming_weight);
@@ -818,7 +820,7 @@ List mQC(
     STdata.n_forks     = n_forks;
     STdata.report_freq = 1; //std::max(1, maxeval / 10); // print ~10 progress lines
     
-    // Initialize parameters: rate10 = 0.01, rate01 = 0.05
+    // Initialize parameters: rate10 = 0.01, rate01 = 0.05, corr = 0
     int    N_bits     = STdata.cb.N_bits;
     int    corr_free  = N_bits * (N_bits - 1) / 2;
     size_t n          = 2*N_bits + 2*corr_free;
@@ -826,10 +828,6 @@ List mQC(
     for (int i = 0; i < N_bits; ++i) {
       x0[i]          = 0.01;
       x0[N_bits + i] = 0.05;
-    }
-    // Random corr parameters with mean absolute value of 0.1
-    for (int i = 2*N_bits; i < n; ++i) {
-      x0[i] = R::runif(-0.2, 0.2); 
     }
     
     // Estimate true counts based on initial flip rates 
