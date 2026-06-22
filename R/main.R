@@ -21,8 +21,11 @@ NULL
 #' @param codebook Codebook with row names as barcodes and columns as bits, must have barcode names as row names
 #' @param max_fr Maximum flip rate allowed during optimization, default 1.0
 #' @param max_corr Absolute bound on bit-flip correlation parameters, default 1.0
-#' @param assumed_mean_corr Assumed mean correlation between bit-flips, used to make initial estimate of true barcode counts, default 0.2
+#' @param initial_corr_scale Assumed mean correlation between bit-flips, used to make crude estimate of true barcode counts from observed counts, default 0.1
+#' @param ah_hoc_rescale Additional rescaling of observed counts when estimating true counts, default is 1.1
 #' @param n_forks Number of parallel forks to use for expected-count computation, default is 1 (must be 1 on Windows)
+#' @param max_flips When computing expected counts per barcode, ignore misreads larger than this hamming distance, default is 0, interpreted as no limit
+#' @param report_freq Divisor specifying report frequency during optimization; will print updates every report_freq accepted calls, default 1
 #' @param maxeval Maximum number of objective function evaluations for L-BFGS, default 1000
 #' @param ftol_rel Relative function value tolerance for L-BFGS convergence, default 1e-8
 #' @param xtol_rel Relative parameter tolerance for L-BFGS convergence, default 1e-6
@@ -34,8 +37,11 @@ misreadQC <- function(
     codebook,
     max_fr                           = 1.0,
     max_corr                         = 1.0,
-    assumed_mean_corr                = 0.2, 
+    initial_corr_scale               = 0.1, 
+    ah_hoc_rescale                   = 1.1, 
     n_forks                          = 1,
+    max_flips                        = 0,
+    report_freq                      = 1,
     maxeval                          = 1000,
     ftol_rel                         = 1e-8,
     xtol_rel                         = 1e-6,
@@ -101,7 +107,11 @@ misreadQC <- function(
       max_correctable_Hamming_distance,
       max_fr,
       max_corr,
-      n_forks,
+      initial_corr_scale,
+      ah_hoc_rescale,
+      as.integer(n_forks),
+      as.integer(max_flips),
+      as.integer(report_freq),
       maxeval,
       ftol_rel,
       xtol_rel

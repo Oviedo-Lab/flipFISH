@@ -9,7 +9,11 @@ misreadQC(
   codebook,
   max_fr = 1,
   max_corr = 1,
+  initial_corr_scale = 0.1,
+  ah_hoc_rescale = 1.1,
   n_forks = 1,
+  max_flips = 0,
+  report_freq = 1,
   maxeval = 1000,
   ftol_rel = 1e-08,
   xtol_rel = 1e-06,
@@ -21,11 +25,19 @@ misreadQC(
 
 \item{codebook}{Codebook with row names as barcodes and columns as bits, must have barcode names as row names}
 
-\item{max_fr}{Maximum flip rate allowed during optimization, default 0.1}
+\item{max_fr}{Maximum flip rate allowed during optimization, default 1.0}
 
-\item{max_corr}{Absolute bound on bit-flip correlation parameters, default 0.2}
+\item{max_corr}{Absolute bound on bit-flip correlation parameters, default 1.0}
+
+\item{initial_corr_scale}{Assumed mean correlation between bit-flips, used to make crude estimate of true barcode counts from observed counts, default 0.1}
+
+\item{ah_hoc_rescale}{Additional rescaling of observed counts when estimating true counts, default is 1.1}
 
 \item{n_forks}{Number of parallel forks to use for expected-count computation, default is 1 (must be 1 on Windows)}
+
+\item{max_flips}{When computing expected counts per barcode, ignore misreads larger than this hamming distance, default is 0, interpreted as no limit}
+
+\item{report_freq}{Divisor specifying report frequency during optimization; will print updates every report_freq accepted calls, default 1}
 
 \item{maxeval}{Maximum number of objective function evaluations for L-BFGS, default 1000}
 

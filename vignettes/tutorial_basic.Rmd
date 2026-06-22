@@ -87,8 +87,12 @@ qc <- misreadQC(
     codebook,         # Codebook with row names as barcodes and columns as bits, must have barcode names as row names
     max_fr       = 1.0,
     max_corr     = 1.0,
-    n_forks      = 20,
-    maxeval      = 100,
+    initial_corr_scale               = 0.1, 
+    ah_hoc_rescale                   = 1.0, 
+    n_forks                          = 4,
+    max_flips                        = 7,
+    report_freq                      = 1,
+    maxeval                          = 1,
     max_correctable_Hamming_distance = NULL
     )
 d <- Sys.time() - t

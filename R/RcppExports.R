@@ -5,8 +5,8 @@ unique_Hamming_cb <- function(codebook) {
     .Call(`_flipFISH_unique_Hamming_cb`, codebook)
 }
 
-mQC <- function(bc_counts, codebook, max_correctable_Hamming_distance, max_fr, max_corr, n_forks, maxeval = 1000L, ftol_rel = 1e-8, xtol_rel = 1e-6) {
-    .Call(`_flipFISH_mQC`, bc_counts, codebook, max_correctable_Hamming_distance, max_fr, max_corr, n_forks, maxeval, ftol_rel, xtol_rel)
+mQC <- function(bc_counts, codebook, max_correctable_Hamming_distance, max_fr, max_corr, initial_corr_scale, ad_hoc_rescale, n_forks, max_flips, report_freq = 1L, maxeval = 1000L, ftol_rel = 1e-8, xtol_rel = 1e-6) {
+    .Call(`_flipFISH_mQC`, bc_counts, codebook, max_correctable_Hamming_distance, max_fr, max_corr, initial_corr_scale, ad_hoc_rescale, n_forks, max_flips, report_freq, maxeval, ftol_rel, xtol_rel)
 }
 
 tr_sum_check <- function(bc, rate10, rate01, corr1, corr0) {
