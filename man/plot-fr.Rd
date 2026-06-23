@@ -2,7 +2,7 @@
 % Please edit documentation in R/main.R
 \name{plot.fr}
 \alias{plot.fr}
-\title{Plot estimated flip rates from misread QC results}
+\title{Plot estimated flip rate distributions from misread QC results}
 \usage{
 plot.fr(qc)
 }
@@ -10,8 +10,8 @@ plot.fr(qc)
 \item{qc}{List, results from misreadQC function}
 }
 \value{
-ggplot object showing estimated flip rates for each bit and flip type
+ggplot object showing distributions of estimated flip rates for each bit and flip type
 }
 \description{
-This function takes the results from the misreadQC function and makes a bar chart of the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1).
+This function takes the results from the misreadQC function and makes a plot showing the distributions of the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1). The plot uses violin plots to show the distribution of flip rates across the second half of iterations of the MCMCSA walk, with separate facets for each flip type.
 }

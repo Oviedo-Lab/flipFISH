@@ -11,6 +11,7 @@ misreadQC(
   max_corr = 1,
   initial_corr_scale = 0.1,
   ah_hoc_rescale = 1.1,
+  n_resamples = 100,
   n_forks = 1,
   max_flips = 0,
   report_freq = 1,

@@ -28,15 +28,14 @@ struct Codebook {
   std::vector<int>         genes; 
 };
 
-struct EvalHist {
-  std::vector<double>              msle;
-  std::vector<std::vector<double>> fr;
-  std::vector<std::vector<double>> etc;
-  std::vector<std::vector<double>> ecc; 
-  std::vector<std::vector<double>> erc;
-  std::vector<std::vector<double>> CR;
-  std::vector<std::vector<double>> PPV;
-  int                              n_evals = 0; 
+struct EvalResults {
+  std::vector<double> msle_hist;
+  std::vector<double> etc;
+  std::vector<double> ecc; 
+  std::vector<double> erc;
+  std::vector<double> CR;
+  std::vector<double> PPV;
+  int                 n_evals = 0; 
 };
 
 struct ST_data {
@@ -52,7 +51,7 @@ struct ST_data {
   std::unordered_map<uint64_t, int>              correction_table;
   std::unordered_map<int, std::vector<uint64_t>> correction_table_inverted;
   // Parameter estimation
-  EvalHist         eval_history;
+  EvalResults      eval_results;
   std::vector<int> bc_counts_true;
   double           best_msle;
   double           initial_corr_scale;  // Mostly for initial bc count estimate, to increase number of spots
@@ -398,13 +397,12 @@ ST_data load_STdata(
     Rcpp::Rcout << "Correction table inverted." << std::endl;
     
     // Return parsed ST data
-    EvalHist eval_history;
     return {
       bc_rates, bc_variance, bc_dispersion, bc_counts, bc_counts_redraw,
       cb, 
       max_correctable_Hamming_distance,
       correction_table, correction_table_inverted,
-      eval_history, std::vector<int>(N_barcodes, 0), // placeholders
+      EvalResults(), std::vector<int>(N_barcodes, 0), // placeholders
       std::numeric_limits<double>::infinity(), initial_corr_scale, 
       1, max_flips, 10  // n_forks, max_flips, report_freq
     };
@@ -744,7 +742,8 @@ std::tuple<std::vector<double>, std::vector<double>, std::vector<double>> expect
 // ... merely intended to prevent low msle from lack of spots
 std::vector<int> rescale_obs_counts_redraw(
     const FlipRates& fr,
-    void*            data
+    void*            data,
+    double           ad_hoc_rescale
   ) {
     // Grab data
     auto*       d             = static_cast<ST_data*>(data);
@@ -798,6 +797,15 @@ std::vector<int> rescale_obs_counts_redraw(
       counts_scaled[idx] = 0;
     }
     
+    // Apply ad hoc rescaling
+    if (ad_hoc_rescale != 1.0) {
+      for (int& bcc : counts_scaled) {
+        bcc = static_cast<int>(
+          std::round(static_cast<double>(bcc) * ad_hoc_rescale)
+        );
+      }
+    }
+    
     return counts_scaled; 
   }
 
@@ -846,25 +854,24 @@ static double mQC_msle(
     }
     
     // Advance eval counter
-    d->eval_history.n_evals++; 
+    d->eval_results.n_evals++; 
     if (msle < d->best_msle) {
-      int call_n = d->eval_history.n_evals;
+      int call_n = d->eval_results.n_evals;
       if (call_n == 1 || call_n % d->report_freq == 0) {
         Rcpp::Rcout << "  eval " << call_n << ", msle: " << msle << std::endl;
       }
       // Save eval history 
-      d->eval_history.msle.push_back(msle);
-      // d->eval_history.fr.push_back(fr);
-      // d->eval_history.etc.push_back(std::get<2>(erctc));
-      // d->eval_history.ecc.push_back(std::get<1>(erctc));
-      // d->eval_history.erc.push_back(std::get<0>(erctc));
-      // // Compute and save expected CR and PPV for each barcode
-      // d->eval_history.CR.push_back(std::vector<double>(N_barcodes, 0.0));
-      // d->eval_history.PPV.push_back(std::vector<double>(N_barcodes, 0.0));
-      // for (int i = 0; i < N_barcodes; ++i) {
-      //   d->eval_history.CR[0][i] = std::get<1>(erctc)[i] > 0.0 ? std::get<0>(erctc)[i] / std::get<1>(erctc)[i] : 0.0;
-      //   d->eval_history.PPV[0][i] = std::get<1>(erctc)[i] > 0.0 ? std::get<2>(erctc)[i] / std::get<1>(erctc)[i] : 0.0;
-      // }
+      d->eval_results.msle_hist.push_back(msle);
+      d->eval_results.etc = std::get<2>(erctc);
+      d->eval_results.ecc = std::get<1>(erctc);
+      d->eval_results.erc = std::get<0>(erctc);
+      // Compute and save expected CR and PPV for each barcode
+      d->eval_results.CR  = std::vector<double>(N_barcodes, 0.0);
+      d->eval_results.PPV = std::vector<double>(N_barcodes, 0.0);
+      for (int i = 0; i < N_barcodes; ++i) {
+        d->eval_results.CR[i]  = std::get<1>(erctc)[i] > 0.0 ? std::get<0>(erctc)[i] / std::get<1>(erctc)[i] : 0.0;
+        d->eval_results.PPV[i] = std::get<1>(erctc)[i] > 0.0 ? std::get<2>(erctc)[i] / std::get<1>(erctc)[i] : 0.0;
+      }
       // Save best_msle
       d->best_msle = msle;
     }
@@ -882,6 +889,7 @@ List mQC(
     double        max_corr,
     double        initial_corr_scale, 
     double        ad_hoc_rescale,
+    int           n_resamples, 
     int           n_forks,
     int           max_flips, 
     int           report_freq = 1,
@@ -902,14 +910,16 @@ List mQC(
     STdata.report_freq = report_freq;
     
     // Initialize parameters: rate10 = 0.01, rate01 = 0.05, corr = 0
-    int N_bits    = STdata.cb.N_bits;
-    int corr_free = N_bits * (N_bits - 1) / 2;
-    size_t n      = 2*N_bits + 2*corr_free;
+    int N_bits     = STdata.cb.N_bits;
+    int N_barcodes = STdata.cb.barcodes.size(); 
+    int corr_free  = N_bits * (N_bits - 1) / 2;
+    size_t n       = 2*N_bits + 2*corr_free;
     std::vector<double> x0(n, 0.0);
     for (int i = 0; i < N_bits; ++i) {
       x0[i]          = 0.01;
       x0[N_bits + i] = 0.05;
     }
+    std::vector<double> x0_ = x0; 
     
     // Parameter bounds
     std::vector<double> lb(n, 0.0);
@@ -925,65 +935,55 @@ List mQC(
     
     // Rescale observed (and redrawn) counts by flip rates as crude estimate of true counts
     // ... first pass, redrawn counts are just observed counts
-    STdata.bc_counts_true = rescale_obs_counts_redraw(pack_fr(x0, N_bits), &STdata);
-    // ... apply additional ah hoc rescaling 
-    for (int& bcc : STdata.bc_counts_true) {
-      bcc = static_cast<int>(
-        std::round(static_cast<double>(bcc) * ad_hoc_rescale)
-      );
-    }
+    FlipRates fr0 = pack_fr(x0, N_bits);
+    STdata.bc_counts_true = rescale_obs_counts_redraw(fr0, &STdata, ad_hoc_rescale);
     
-    // Run L-BFGS via nlopt
-    Rcpp::Rcout << "\nRunning L-BFGS (nlopt::LD_LBFGS), maxeval=" << maxeval
-                << ", ftol_rel=" << ftol_rel << ", xtol_rel=" << xtol_rel << std::endl;
-    nlopt::opt opt(nlopt::LD_LBFGS, n);
-    opt.set_lower_bounds(lb);
-    opt.set_upper_bounds(ub);
-    opt.set_min_objective(mQC_msle, &STdata);
-    opt.set_ftol_rel(ftol_rel);
-    opt.set_xtol_rel(xtol_rel);
-    opt.set_maxeval(maxeval);
+    // Initialize matrices to hold results 
+    NumericMatrix fr(n_resamples, n),  ecc(n_resamples, N_barcodes), erc(n_resamples, N_barcodes),
+    etc(n_resamples, N_barcodes), CR(n_resamples, N_barcodes), PPV(n_resamples, N_barcodes);
+    NumericVector msle_final(n_resamples);
     
-    double minf = std::numeric_limits<double>::quiet_NaN();
-    try {
-      nlopt::result res = opt.optimize(x0, minf);
-      Rcpp::Rcout << "\nL-BFGS finished (result code " << (int)res << "), final msle: " << minf << std::endl;
-    } catch (const std::exception& e) {
-      Rcpp::Rcout << "\nL-BFGS warning: " << e.what()
-                  << "\nProceeding with best parameters found so far." << std::endl;
-    }
-    
-    // Compute final quantities from optimal parameters
-    FlipRates fr_best = pack_fr(x0, N_bits);
-    auto erctc = expected_bc_counts(
-      fr_best,
-      STdata.bc_counts_true,
-      STdata.cb.barcodes,
-      STdata.correction_table_inverted,
-      STdata.n_forks,
-      STdata.max_flips
-    );
-    const auto& erc_final = std::get<0>(erctc);
-    const auto& ecc_final = std::get<1>(erctc);
-    const auto& etc_final = std::get<2>(erctc);
-    
-    int N_barcodes = STdata.cb.barcodes.size();
-    std::vector<double> CR_final(N_barcodes), PPV_final(N_barcodes);
-    for (int i = 0; i < N_barcodes; ++i) {
-      CR_final[i]  = ecc_final[i] > 0.0 ? erc_final[i] / ecc_final[i] : 0.0;
-      PPV_final[i] = ecc_final[i] > 0.0 ? etc_final[i] / ecc_final[i] : 0.0;
-    }
-    
-    // Pack results into 1-row matrices (one row = the single optimal solution)
-    NumericMatrix FR_mat(1, n),  ecc_mat(1, N_barcodes), erc_mat(1, N_barcodes),
-                  etc_mat(1, N_barcodes), CR_mat(1, N_barcodes), PPV_mat(1, N_barcodes);
-    for (int k = 0; k < (int)n; ++k)    FR_mat(0, k)  = x0[k];
-    for (int i = 0; i < N_barcodes; ++i) {
-      ecc_mat(0, i) = ecc_final[i];
-      erc_mat(0, i) = erc_final[i];
-      etc_mat(0, i) = etc_final[i];
-      CR_mat(0, i)  = CR_final[i];
-      PPV_mat(0, i) = PPV_final[i];
+    // Run fits with samples 
+    for (int s = 0; s < n_resamples; ++s) {
+      
+      // Run L-BFGS via nlopt
+      Rcpp::Rcout << "\nRunning L-BFGS (nlopt::LD_LBFGS), maxeval=" << maxeval
+                  << ", ftol_rel=" << ftol_rel << ", xtol_rel=" << xtol_rel << std::endl;
+      nlopt::opt opt(nlopt::LD_LBFGS, n);
+      opt.set_lower_bounds(lb);
+      opt.set_upper_bounds(ub);
+      opt.set_min_objective(mQC_msle, &STdata);
+      opt.set_ftol_rel(ftol_rel);
+      opt.set_xtol_rel(xtol_rel);
+      opt.set_maxeval(maxeval);
+      
+      double minf = std::numeric_limits<double>::quiet_NaN();
+      try {
+        nlopt::result res = opt.optimize(x0, minf);
+        Rcpp::Rcout << "\nL-BFGS finished (result code " << (int)res << "), final msle: " << minf << std::endl;
+      } catch (const std::exception& e) {
+        Rcpp::Rcout << "\nL-BFGS warning: " << e.what()
+                    << "\nProceeding with best parameters found so far." << std::endl;
+      }
+      
+      // Pack results into matrices
+      msle_final[s] = minf;
+      for (int k = 0; k < (int)n; ++k) {fr(s, k)  = x0[k];}
+      for (int i = 0; i < N_barcodes; ++i) {
+        ecc(s, i) = STdata.eval_results.ecc[i];
+        erc(s, i) = STdata.eval_results.erc[i];
+        etc(s, i) = STdata.eval_results.etc[i];
+        CR(s, i)  = STdata.eval_results.CR[i];
+        PPV(s, i) = STdata.eval_results.PPV[i];
+      }
+      
+      // Reset for next pass
+      x0 = x0_; 
+      redraw_bc_counts(STdata);
+      STdata.bc_counts_true = rescale_obs_counts_redraw(fr0, &STdata, ad_hoc_rescale);
+      STdata.eval_results = EvalResults(); 
+      STdata.best_msle = std::numeric_limits<double>::infinity();
+      
     }
     
     return List::create(
@@ -994,13 +994,13 @@ List mQC(
         _["barcode_variance"] = STdata.bc_variance,
         _["count_observed"]   = STdata.bc_counts
       ),
-      _["fliprates"] = FR_mat,
-      _["erc"]       = erc_mat,
-      _["ecc"]       = ecc_mat,
-      _["etc"]       = etc_mat,
-      _["CR"]        = CR_mat,
-      _["PPV"]       = PPV_mat,
-      _["msle"]      = minf
+      _["fliprates"] = fr,
+      _["erc"]       = erc,
+      _["ecc"]       = ecc,
+      _["etc"]       = etc,
+      _["CR"]        = CR,
+      _["PPV"]       = PPV,
+      _["msle"]      = msle_final
     );
   }
 

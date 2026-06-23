@@ -80,19 +80,19 @@ rownames(codebook) <- gsub("-", ".", rownames(codebook))
 Now try new function. 
 
 ```{r new_initial_estimate}
-
 t <- Sys.time()
 qc <- misreadQC(
-    m1_summary_stats, # Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
-    codebook,         # Codebook with row names as barcodes and columns as bits, must have barcode names as row names
-    max_fr       = 1.0,
-    max_corr     = 1.0,
+    m1_summary_stats,                        # Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
+    codebook,                                # Codebook with row names as barcodes and columns as bits, must have barcode names as row names
+    max_fr                           = 1.0,
+    max_corr                         = 1.0,
     initial_corr_scale               = 0.1, 
-    ah_hoc_rescale                   = 1.0, 
+    ah_hoc_rescale                   = 1.1, 
+    n_resamples                      = 10,
     n_forks                          = 4,
-    max_flips                        = 7,
-    report_freq                      = 1,
-    maxeval                          = 1,
+    max_flips                        = 3,
+    report_freq                      = 10,
+    maxeval                          = 50,
     max_correctable_Hamming_distance = NULL
     )
 d <- Sys.time() - t

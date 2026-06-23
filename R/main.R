@@ -39,6 +39,7 @@ misreadQC <- function(
     max_corr                         = 1.0,
     initial_corr_scale               = 0.1, 
     ah_hoc_rescale                   = 1.1, 
+    n_resamples                      = 100,
     n_forks                          = 1,
     max_flips                        = 0,
     report_freq                      = 1,
@@ -109,6 +110,7 @@ misreadQC <- function(
       max_corr,
       initial_corr_scale,
       ah_hoc_rescale,
+      as.integer(n_resamples), 
       as.integer(n_forks),
       as.integer(max_flips),
       as.integer(report_freq),
@@ -117,34 +119,40 @@ misreadQC <- function(
       xtol_rel
     )
     
-    # Build summary tables from the single optimal solution (lower = upper = mean)
-    cat("\nBuilding summary tables from optimal solution")
-    sum_names  <- c("mean", "lower", "upper")
-    qc_names   <- names(qc)
-    bc_names   <- qc_names[!(qc_names %in% c("STdata", "fliprates", "msle"))]
-    bc_sum_names <- unlist(lapply(bc_names, function(nm) paste0(nm, "_", sum_names)))
-    N_bits     <- ncol(codebook)
-    fr <- matrix(NA, nrow = ncol(qc$fliprates), ncol = length(sum_names),
-                 dimnames = list(
-                   c(paste0("rate10_bit", seq_len(N_bits)),
-                     paste0("rate01_bit", seq_len(N_bits)),
-                     paste0("corr_", seq_len(ncol(qc$fliprates) - 2*N_bits))),
-                   sum_names
-                 ))
-    bc <- matrix(NA, nrow = ncol(qc$ecc), ncol = length(sum_names) * length(bc_names),
-                 dimnames = list(qc$STdata$species, bc_sum_names))
+    # Make summary stats from qc results
+    cat("\nRunning summary stats on QC results")
+    sum_names <- c("mean", "lower", "upper")
+    qc_names <- names(qc)
+    bc_names <- qc_names[qc_names != "STdata" & qc_names != "fliprates"]
+    bc_sum_names <- c()
+    for (n in bc_names) {bc_sum_names <- c(bc_sum_names, paste0(n, "_", sum_names))}
+    fr <- matrix(NA, nrow = ncol(qc$fliprates), ncol = length(sum_names))
+    bc <- matrix(NA, nrow = ncol(qc$ecc), ncol = length(sum_names) * length(bc_names))
+    colnames(fr) <- sum_names 
+    colnames(bc) <- bc_sum_names
+    rownames(bc) <- qc$STdata$species
+    N_bits <- ncol(codebook)
+    fr_names <- paste0("rate10_bit", seq_len(N_bits))
+    fr_names <- c(fr_names, paste0("rate01_bit", seq_len(N_bits)))
+    fr_names <- c(fr_names, paste0("corr_", seq_len(ncol(qc$fliprates) - 2*N_bits)))
+    rownames(fr) <- fr_names
     for (p in qc_names) {
-      if (p %in% c("STdata", "msle")) next
-      # Single-row matrix: point estimate only; lower == upper == mean
-      p_vals <- as.numeric(qc[[p]])
-      if (p == "fliprates") {
-        fr[, "mean"]  <- p_vals
-        fr[, "lower"] <- p_vals
-        fr[, "upper"] <- p_vals
+      if (p == "STdata" || p == "msle") next
+      if (n_resamples == 1) {
+        p_means <- qc[[p]]
+        ci <- rbind(p_means, p_means)
       } else {
-        bc[, paste0(p, "_mean")]  <- p_vals
-        bc[, paste0(p, "_lower")] <- p_vals
-        bc[, paste0(p, "_upper")] <- p_vals
+        p_means <- colMeans(qc[[p]])
+        ci <- apply(qc[[p]], 2, quantile, probs = c(0.025, 0.975))
+      }
+      if (p == "fliprates") {
+        fr[,"mean"] <- p_means
+        fr[,"lower"] <- ci[1,]
+        fr[,"upper"] <- ci[2,]
+      } else {
+        bc[,paste0(p, "_mean")] <- p_means
+        bc[,paste0(p, "_lower")] <- ci[1,]
+        bc[,paste0(p, "_upper")] <- ci[2,]
       }
     }
     qc[["fliprates_summary"]] <- fr
@@ -152,9 +160,13 @@ misreadQC <- function(
     
     rate10_mean <- mean(fr[grepl("rate10", rownames(fr)), "mean"])
     rate01_mean <- mean(fr[grepl("rate01", rownames(fr)), "mean"])
-    cat("\nEstimated flip rates (optimal):")
-    cat("\n1>0: ", round(rate10_mean, 4), sep = "")
-    cat("\n0>1: ", round(rate01_mean, 4), "\n", sep = "")
+    rate10_lower <- mean(fr[grepl("rate10", rownames(fr)), "lower"])
+    rate10_upper <- mean(fr[grepl("rate10", rownames(fr)), "upper"])
+    rate01_lower <- mean(fr[grepl("rate01", rownames(fr)), "lower"])
+    rate01_upper <- mean(fr[grepl("rate01", rownames(fr)), "upper"])
+    cat("\nEstimated flip rates (mean, 95% CI):")
+    cat("\n1>0: ", round(rate10_mean, 4), " (", round(rate10_lower, 4), "-", round(rate10_upper, 4), ")", sep = "")
+    cat("\n0>1: ", round(rate01_mean, 4), " (", round(rate01_lower, 4), "-", round(rate01_upper, 4), ")\n", sep = "")
     
     return(qc)
     
@@ -303,34 +315,43 @@ plot.counts <- function(
     
   }
 
-#' Plot estimated flip rates from misread QC results
+#' Plot estimated flip rate distributions from misread QC results
 #' 
-#' This function takes the results from the misreadQC function and makes a bar chart of the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1).
+#' This function takes the results from the misreadQC function and makes a plot showing the distributions of the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1). The plot uses violin plots to show the distribution of flip rates across the second half of iterations of the MCMCSA walk, with separate facets for each flip type.
 #' 
 #' @name plot.fr
 #' @rdname plot-fr
 #' @usage plot.fr(qc)
 #' @param qc List, results from misreadQC function
-#' @return ggplot object showing estimated flip rates for each bit and flip type
+#' @return ggplot object showing distributions of estimated flip rates for each bit and flip type
 #' @export
 plot.fr <- function(
     qc
   ) {
     fr_names <- rownames(qc$fliprates_summary)
-    mask10   <- grepl("rate10", fr_names)
-    mask01   <- grepl("rate01", fr_names)
-    N_bits   <- sum(mask10)
+    mask10 <- grepl("rate10", fr_names)
+    mask01 <- grepl("rate01", fr_names)
+    n_samples <- nrow(qc$fliprates)
+    N_bits <- sum(mask10)
     if (sum(mask01) != N_bits) stop("Number of rate10 and rate01 entries in fliprates_summary must be the same")
-    df <- data.frame(
-      value = c(qc$fliprates_summary[mask10, "mean"], qc$fliprates_summary[mask01, "mean"]),
-      bit   = rep(seq_len(N_bits), 2),
-      type  = rep(c("1>0", "0>1"), each = N_bits)
-    )
-    df$bit  <- as.factor(df$bit)
-    df$type <- factor(df$type, levels = c("1>0", "0>1"))
-    plt <- ggplot(df, aes(x = bit, y = value, fill = type)) +
-      geom_col(position = "dodge") +
-      labs(title = "Estimated Flip Rates", x = "Bit", y = "Flip Rate", fill = "Flip Type") +
+    fr <- qc$fliprates
+    fr <- matrix(NA, nrow = 2*n_samples*N_bits, ncol = 3)
+    colnames(fr) <- c("value", "bit", "type")
+    fr <- as.data.frame(fr)
+    for (i in seq_len(N_bits)) {
+      idx10 <- (i-1)*n_samples + seq_len(n_samples)
+      idx01 <- (N_bits + i-1)*n_samples + seq_len(n_samples)
+      fr[idx10, "value"] <- qc$fliprates[,paste0("rate10_bit", i) == fr_names]
+      fr[idx10, "bit"] <- i
+      fr[idx10, "type"] <- "1>0"
+      fr[idx01, "value"] <- qc$fliprates[,paste0("rate01_bit", i) == fr_names]
+      fr[idx01, "bit"] <- i
+      fr[idx01, "type"] <- "0>1"
+    }
+    fr$bit <- as.factor(fr$bit)
+    plt <- ggplot(fr, aes(bit, value, fill = type)) +
+      geom_violin() +
+      labs(title = "Estimated Flip Rate Distributions", x = "Bit", y = "Flip Rate", color = "Flip Type") +
       theme_minimal() +
       facet_grid(type ~ .)
     return(plt)
