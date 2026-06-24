@@ -52,10 +52,10 @@ struct ST_data {
   std::unordered_map<int, std::vector<uint64_t>> correction_table_inverted;
   // Parameter estimation
   EvalResults      eval_results;
-  std::vector<int> bc_counts_true;
+  std::vector<int> bc_counts_true;      // For storing 
   double           best_msle;
   double           initial_corr_scale;  // Mostly for initial bc count estimate, to increase number of spots
-  int              n_forks;
+  int              n_forks;             // For computing expected counts in parallel
   int              max_flips;           // For approximating expected counts estimate by ignoring highly unlikely misreads
   int              report_freq;
 };
@@ -947,8 +947,8 @@ List mQC(
     for (int s = 0; s < n_resamples; ++s) {
       
       // Run L-BFGS via nlopt
-      Rcpp::Rcout << "\nRunning L-BFGS (nlopt::LD_LBFGS), maxeval=" << maxeval
-                  << ", ftol_rel=" << ftol_rel << ", xtol_rel=" << xtol_rel << std::endl;
+      Rcpp::Rcout << "\nRunning L-BFGS (nlopt::LD_LBFGS), resample " << s << "/" << n_resamples 
+                  << ", maxeval=" << maxeval << ", ftol_rel=" << ftol_rel << ", xtol_rel=" << xtol_rel << std::endl;
       nlopt::opt opt(nlopt::LD_LBFGS, n);
       opt.set_lower_bounds(lb);
       opt.set_upper_bounds(ub);

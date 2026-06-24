@@ -88,11 +88,11 @@ qc <- misreadQC(
     max_corr                         = 1.0,
     initial_corr_scale               = 0.1, 
     ah_hoc_rescale                   = 1.1, 
-    n_resamples                      = 10,
+    n_resamples                      = 10,   # 100
     n_forks                          = 4,
-    max_flips                        = 3,
+    max_flips                        = 3,    # Suggest min of 6, 7 or 8 better
     report_freq                      = 10,
-    maxeval                          = 50,
+    maxeval                          = 50,   # Suggest min of 100, 150 or 250 probably better
     max_correctable_Hamming_distance = NULL
     )
 d <- Sys.time() - t

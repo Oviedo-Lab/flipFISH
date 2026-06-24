@@ -1,6 +1,4 @@
 
-# 1. Setup #############################################################################################################
-
 # By Mike Barkasi
 # GNU GPLv3: https://www.gnu.org/licenses/gpl-3.0.en.html
 #   Copyright (c) 2026
@@ -15,35 +13,35 @@ NULL
 
 #' Run misread QC analysis on summary stats data from spatial transcriptomics experiment
 #'
-#' This function takes summary statistics from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs L-BFGS (via nlopt) to estimate the bit-flip rates and correlations, as well as the expected read, error-corrected, and true counts for each barcode. The aim is to compute both the "confidence ratio" (CR) and positive predictive value (PPV) for each barcode.
+#' This function takes summary statistics from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs L-BFGS (via nlopt) over gamma-convolved Poisson resamples to estimate the bit-flip rates and correlations, as well as the expected read, error-corrected, and true counts for each barcode. The aim is to compute both the "confidence ratio" (CR) and positive predictive value (PPV) for each barcode.
 #'
-#' @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
-#' @param codebook Codebook with row names as barcodes and columns as bits, must have barcode names as row names
-#' @param max_fr Maximum flip rate allowed during optimization, default 1.0
-#' @param max_corr Absolute bound on bit-flip correlation parameters, default 1.0
-#' @param initial_corr_scale Assumed mean correlation between bit-flips, used to make crude estimate of true barcode counts from observed counts, default 0.1
-#' @param ah_hoc_rescale Additional rescaling of observed counts when estimating true counts, default is 1.1
-#' @param n_forks Number of parallel forks to use for expected-count computation, default is 1 (must be 1 on Windows)
-#' @param max_flips When computing expected counts per barcode, ignore misreads larger than this hamming distance, default is 0, interpreted as no limit
-#' @param report_freq Divisor specifying report frequency during optimization; will print updates every report_freq accepted calls, default 1
-#' @param maxeval Maximum number of objective function evaluations for L-BFGS, default 1000
-#' @param ftol_rel Relative function value tolerance for L-BFGS convergence, default 1e-8
-#' @param xtol_rel Relative parameter tolerance for L-BFGS convergence, default 1e-6
-#' @param max_correctable_Hamming_distance Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries
-#' @return List giving \code{STdata}, a dataframe of the ST summary data, \code{fliprates}, a 1-row matrix of the optimal flip rates and bit-flip correlations, \code{erc}, \code{ecc}, and \code{etc}, 1-row matrices of the expected read, error-corrected, and true counts at the optimum, \code{CR} and \code{PPV}, 1-row matrices of the confidence ratio and PPV at the optimum, \code{msle}, the final objective value, and \code{fliprates_summary} and \code{bc_summary}, summary tables (point estimates; lower == upper == mean since L-BFGS returns a single solution).
+#' @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts". Must have barcode names as row names.
+#' @param codebook Codebook with barcodes as row names and bits as columns.
+#' @param max_fr Maximum flip rate allowed during optimization, default 1.0.
+#' @param max_corr Absolute bound on bit-flip correlation parameters, default 1.0.
+#' @param initial_corr_scale Assumed mean correlation between bit-flips, used to make crude estimate of true barcode counts from observed counts, default 0.1. Recommend leaving at default. 
+#' @param ad_hoc_rescale Additional rescaling of observed counts when estimating true counts, default is 1.1. More spots must be assumed to be of each barcode than was counted, or else bit-flips will necessarily imply lower-than-observed counts. This argument and \code{initial_corr_scale} function to estimate how many more spots are needed of each barcode, over the observed number. 
+#' @param n_forks Number of parallel forks to use for expected-count computation, default is 1. (Must be 1 on Windows.)
+#' @param max_flips When computing expected corrected counts per barcode, ignore misreads larger than this hamming distance, default is 0, which is interpreted as no limit. Using all misreads will likely be prohibitively slow; a value between six and ten is probably advisable. 
+#' @param report_freq Divisor specifying report frequency during optimization; will print updates every report_freq accepted calls, default 1.
+#' @param maxeval Maximum number of objective function evaluations for L-BFGS, default 100
+#' @param ftol_rel Relative function value tolerance for L-BFGS convergence, default 1e-8.
+#' @param xtol_rel Relative parameter tolerance for L-BFGS convergence, default 1e-6.
+#' @param max_correctable_Hamming_distance Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries.
+#' @return List giving \code{STdata}, a dataframe giving the summary data from the ST run used in the simulation, \code{fliprates}, a matrix giving the estimated flip rates and bit-flip correlations from each iteration of the MCMCSA algorithm, \code{erc}, \code{ecc}, and \code{etc}, matrices giving the estimated expected read, error-corrected, and true (i.e., correctly corrected) counts for each barcode at each resample, \code{CR} and \code{PPV}, matrices giving estimated confidence ratio and positive predictive values for each resample, and \code{fliprates_summary} and \code{bc_summary}, which give summary statistics on the flip rates and error-corrected counts across all resamples. 
 #' @export
-misreadQC <- function(
+misread.qc <- function(
     STdata,
     codebook,
     max_fr                           = 1.0,
     max_corr                         = 1.0,
     initial_corr_scale               = 0.1, 
-    ah_hoc_rescale                   = 1.1, 
+    ad_hoc_rescale                   = 1.1, 
     n_resamples                      = 100,
     n_forks                          = 1,
     max_flips                        = 0,
     report_freq                      = 1,
-    maxeval                          = 1000,
+    maxeval                          = 200,
     ftol_rel                         = 1e-8,
     xtol_rel                         = 1e-6,
     max_correctable_Hamming_distance = NULL
@@ -109,7 +107,7 @@ misreadQC <- function(
       max_fr,
       max_corr,
       initial_corr_scale,
-      ah_hoc_rescale,
+      ad_hoc_rescale,
       as.integer(n_resamples), 
       as.integer(n_forks),
       as.integer(max_flips),
@@ -174,7 +172,7 @@ misreadQC <- function(
 
 #' Plot estimated PPV by barcode from misread QC results
 #'
-#' This function takes the results from the misreadQC function and makes a plot of the estimated positive predictive value (PPV) for each barcode, with error bars showing the 95% confidence intervals. Barcodes are sorted by decreasing lower bound of the PPV confidence interval, and a dashed red line indicates the minimum PPV cutoff for "good" barcodes. Barcodes whose entire confidence interval is above the cutoff are colored blue, while those that are not are colored black. 
+#' This function takes the results from the misread.qc function and makes a plot of the estimated positive predictive value (PPV) for each barcode, with error bars showing the 95% confidence intervals. Barcodes are sorted by decreasing lower bound of the PPV confidence interval, and a dashed red line indicates the minimum PPV cutoff for "good" barcodes. Barcodes whose entire confidence interval is above the cutoff are colored blue, while those that are not are colored black. 
 #'
 #' @name plot.PPV
 #' @rdname plot-PPV
@@ -182,15 +180,16 @@ misreadQC <- function(
 #'  qc,
 #'  min_PPV = 0.8
 #' )
-#' @param qc List, results from misreadQC function
+#' @param qc List, results from misread.qc function
 #' @param min_PPV Numeric, minimum 95% CI lower-bound PPV cutoff for "good" barcodes, defaults to 0.8
 #' @return ggplot object showing estimated PPV for each barcode with confidence intervals and cutoff
 #' @export
 plot.PPV <- function(
-    qc, # List, results from misreadQC function
+    qc, # List, results from misread.qc function
     min_PPV = 0.8
   ) {
     
+    # Grab data
     PPV_mean <- qc$bc_summary[,"PPV_mean"]
     PPV_ci_lower <- qc$bc_summary[,"PPV_lower"]
     PPV_ci_upper <- qc$bc_summary[,"PPV_upper"]
@@ -234,34 +233,38 @@ plot.PPV <- function(
 
 #' Plot predicted vs observed counts from misread QC results
 #' 
-#' This function takes the results from the misreadQC function and makes a plot comparing the predicted error-corrected counts (ecc) to the observed counts for each barcode. Both predicted and observed counts are plotted on a log scale for better visibility, with error bars showing the 95% confidence intervals for the predicted counts. Barcodes are sorted by decreasing observed count, with gene barcodes shown first and blank barcodes shown second. A dashed vertical line indicates the separation between gene and blank barcodes.
+#' This function takes the results from the misread.qc function and makes a plot comparing the predicted error-corrected counts (ecc) to the observed counts for each barcode. Both predicted and observed counts are plotted on a log scale for better visibility, with error bars showing the 95% confidence intervals for the predicted counts. Barcodes are sorted by decreasing observed count, with gene barcodes shown first and blank barcodes shown second. A dashed vertical line indicates the separation between gene and blank barcodes.
 #' 
 #' @name plot.counts 
 #' @rdname plot-counts
 #' @usage plot.counts(qc)
-#' @param qc List, results from misreadQC function
+#' @param qc List, results from misread.qc function
 #' @return ggplot object showing predicted vs observed counts for each barcode with confidence intervals
 #' @export
 plot.counts <- function(
     qc
   ) {
     
+    # Set colors
     bc_type_colors <- c(
       "Gene (pred)" = "skyblue1", "Blank (pred)" = "gray",
       "Gene (obs)" = "skyblue4", "Blank (obs)" = "gray20"
     )
     
+    # Grab data
     count_obs <- qc[["STdata"]]$count_observed
     count_pred <- qc[["bc_summary"]][,"ecc_mean"] 
     count_lower <- qc[["bc_summary"]][,"ecc_lower"]
     count_upper <- qc[["bc_summary"]][,"ecc_upper"]
     
+    # Mask data
     blank_mask <- grepl("Blank", qc[["STdata"]]$species)
     bc_type <- rep("Gene (pred)", length(count_pred))
     bc_type[blank_mask] <- "Blank (pred)"
     bc_type_obs <- rep("Gene (obs)", length(count_obs))
     bc_type_obs[blank_mask] <- "Blank (obs)"
     
+    # Prepare data frame for plotting
     df <- data.frame(
       index = c(seq_along(count_pred), seq_along(count_obs)), 
       Count = c(count_pred, count_obs),
@@ -277,6 +280,7 @@ plot.counts <- function(
       )
     )
     
+    # Prepare data frame for plotting
     df_pred <- data.frame(
       index = seq_along(count_pred),
       Count = count_pred,
@@ -293,6 +297,7 @@ plot.counts <- function(
       )
     )
     
+    # Make plot
     N_genes <- sum(!blank_mask)
     counts_sorted_plot <- ggplot(df) +
       geom_errorbar(data = df_pred, aes(x = index, ymin = lower, ymax = upper, color = bc_type), width = 0.2, alpha = 0.5) +
@@ -317,24 +322,25 @@ plot.counts <- function(
 
 #' Plot estimated flip rate distributions from misread QC results
 #' 
-#' This function takes the results from the misreadQC function and makes a plot showing the distributions of the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1). The plot uses violin plots to show the distribution of flip rates across the second half of iterations of the MCMCSA walk, with separate facets for each flip type.
+#' This function takes the results from the misread.qc function and makes a plot showing the distributions of the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1). 
 #' 
 #' @name plot.fr
 #' @rdname plot-fr
 #' @usage plot.fr(qc)
-#' @param qc List, results from misreadQC function
+#' @param qc List, results from misread.qc function
 #' @return ggplot object showing distributions of estimated flip rates for each bit and flip type
 #' @export
 plot.fr <- function(
     qc
   ) {
+    # Make masks
     fr_names <- rownames(qc$fliprates_summary)
     mask10 <- grepl("rate10", fr_names)
     mask01 <- grepl("rate01", fr_names)
     n_samples <- nrow(qc$fliprates)
     N_bits <- sum(mask10)
     if (sum(mask01) != N_bits) stop("Number of rate10 and rate01 entries in fliprates_summary must be the same")
-    fr <- qc$fliprates
+    # Grab data
     fr <- matrix(NA, nrow = 2*n_samples*N_bits, ncol = 3)
     colnames(fr) <- c("value", "bit", "type")
     fr <- as.data.frame(fr)
@@ -349,6 +355,7 @@ plot.fr <- function(
       fr[idx01, "type"] <- "0>1"
     }
     fr$bit <- as.factor(fr$bit)
+    # Make plot
     plt <- ggplot(fr, aes(bit, value, fill = type)) +
       geom_violin() +
       labs(title = "Estimated Flip Rate Distributions", x = "Bit", y = "Flip Rate", color = "Flip Type") +
