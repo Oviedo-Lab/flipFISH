@@ -11,6 +11,18 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// correlation_from_params
+Eigen::MatrixXd correlation_from_params(const std::vector<double>& theta, int n);
+RcppExport SEXP _flipFISH_correlation_from_params(SEXP thetaSEXP, SEXP nSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const std::vector<double>& >::type theta(thetaSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    rcpp_result_gen = Rcpp::wrap(correlation_from_params(theta, n));
+    return rcpp_result_gen;
+END_RCPP
+}
 // unique_Hamming_cb
 IntegerVector unique_Hamming_cb(const IntegerMatrix& codebook);
 RcppExport SEXP _flipFISH_unique_Hamming_cb(SEXP codebookSEXP) {
@@ -46,6 +58,30 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// test_fr_recovery
+List test_fr_recovery(NumericMatrix bc_counts, IntegerMatrix codebook, int max_correctable_Hamming_distance, double max_fr, double max_corr, double initial_corr_scale, double ad_hoc_rescale, int n_resamples, int n_forks, int max_flips, int report_freq, int maxeval, double ftol_rel, double xtol_rel);
+RcppExport SEXP _flipFISH_test_fr_recovery(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP max_frSEXP, SEXP max_corrSEXP, SEXP initial_corr_scaleSEXP, SEXP ad_hoc_rescaleSEXP, SEXP n_resamplesSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP ftol_relSEXP, SEXP xtol_relSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type bc_counts(bc_countsSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type codebook(codebookSEXP);
+    Rcpp::traits::input_parameter< int >::type max_correctable_Hamming_distance(max_correctable_Hamming_distanceSEXP);
+    Rcpp::traits::input_parameter< double >::type max_fr(max_frSEXP);
+    Rcpp::traits::input_parameter< double >::type max_corr(max_corrSEXP);
+    Rcpp::traits::input_parameter< double >::type initial_corr_scale(initial_corr_scaleSEXP);
+    Rcpp::traits::input_parameter< double >::type ad_hoc_rescale(ad_hoc_rescaleSEXP);
+    Rcpp::traits::input_parameter< int >::type n_resamples(n_resamplesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_forks(n_forksSEXP);
+    Rcpp::traits::input_parameter< int >::type max_flips(max_flipsSEXP);
+    Rcpp::traits::input_parameter< int >::type report_freq(report_freqSEXP);
+    Rcpp::traits::input_parameter< int >::type maxeval(maxevalSEXP);
+    Rcpp::traits::input_parameter< double >::type ftol_rel(ftol_relSEXP);
+    Rcpp::traits::input_parameter< double >::type xtol_rel(xtol_relSEXP);
+    rcpp_result_gen = Rcpp::wrap(test_fr_recovery(bc_counts, codebook, max_correctable_Hamming_distance, max_fr, max_corr, initial_corr_scale, ad_hoc_rescale, n_resamples, n_forks, max_flips, report_freq, maxeval, ftol_rel, xtol_rel));
+    return rcpp_result_gen;
+END_RCPP
+}
 // tr_sum_check
 double tr_sum_check(int bc, const std::vector<double>& rate10, const std::vector<double>& rate01, const std::vector<double>& corr1, const std::vector<double>& corr0);
 RcppExport SEXP _flipFISH_tr_sum_check(SEXP bcSEXP, SEXP rate10SEXP, SEXP rate01SEXP, SEXP corr1SEXP, SEXP corr0SEXP) {
@@ -63,8 +99,10 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_flipFISH_correlation_from_params", (DL_FUNC) &_flipFISH_correlation_from_params, 2},
     {"_flipFISH_unique_Hamming_cb", (DL_FUNC) &_flipFISH_unique_Hamming_cb, 1},
     {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 14},
+    {"_flipFISH_test_fr_recovery", (DL_FUNC) &_flipFISH_test_fr_recovery, 14},
     {"_flipFISH_tr_sum_check", (DL_FUNC) &_flipFISH_tr_sum_check, 5},
     {NULL, NULL, 0}
 };

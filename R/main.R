@@ -11,6 +11,57 @@ NULL
 
 .onLoad <- function(libname, pkgname) {}
 
+# Helper function to check STdata and codebook 
+check_data <- function (
+    STdata, 
+    codebook,
+    max_correctable_Hamming_distance
+  ) {
+    # Prep codebook and STdata
+    # ... get species names
+    species_names <- rownames(STdata)
+    if (is.null(species_names)) stop("STdata must have row names as species names")
+    # ... align rows of codebook to STdata
+    if (is.null(rownames(codebook))) stop("codebook must have row names as species names")
+    if (!all(species_names %in% rownames(codebook))) stop("All species in STdata must be present in codebook")
+    codebook <- codebook[species_names,]
+    # ... make blank mask
+    blank_mask <- grepl("Blank", species_names, ignore.case = FALSE)
+    if (sum(blank_mask) == 0) stop("No blanks found in STdata row names, make sure blank species have 'Blank' in their names")
+    if (sum(blank_mask) == length(species_names)) stop("All species are blanks. Make sure non-blank species do not have 'Blank' in their names")
+    # ... sort species by decreasing rates, with genes first and blanks second 
+    gene_rate_order <- order(STdata$rates[!blank_mask], decreasing = TRUE)
+    blank_rate_order <- order(STdata$rates[blank_mask], decreasing = TRUE)
+    # ... remake STdata and codebook with this order
+    STdata <- rbind(
+      STdata[!blank_mask,][gene_rate_order,],
+      STdata[blank_mask,][blank_rate_order,]
+    )
+    codebook <- rbind(
+      codebook[!blank_mask,][gene_rate_order,],
+      codebook[blank_mask,][blank_rate_order,]
+    )
+    
+    # Check bit size 
+    if (ncol(codebook) > 64) stop("Codebook has more than the max-allowed 64 bits.")
+    
+    # Check and set max_correctable_Hamming_distance
+    codebook_distances <- unique_Hamming_cb(as.matrix(codebook))
+    if (is.null(max_correctable_Hamming_distance)) {
+      max_correctable_Hamming_distance <- min(codebook_distances) - 1
+    } else if (max_correctable_Hamming_distance >= min(codebook_distances)) {
+      stop(paste0("max_correctable_Hamming_distance must be less than the minimum Hamming distance between codebook entries (", min(codebook_distances), ")"))
+    }
+    
+    return(
+      list(
+        STdata = STdata,
+        codebook = codebook,
+        max_correctable_Hamming_distance = max_correctable_Hamming_distance
+      )
+    )
+  }
+
 #' Run misread QC analysis on summary stats data from spatial transcriptomics experiment
 #'
 #' This function takes summary statistics from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs L-BFGS (via nlopt) over gamma-convolved Poisson resamples to estimate the bit-flip rates and correlations, as well as the expected read, error-corrected, and true counts for each barcode. The aim is to compute both the "confidence ratio" (CR) and positive predictive value (PPV) for each barcode.
@@ -167,6 +218,62 @@ misread.qc <- function(
     cat("\n0>1: ", round(rate01_mean, 4), " (", round(rate01_lower, 4), "-", round(rate01_upper, 4), ")\n", sep = "")
     
     return(qc)
+    
+  }
+
+dichot_guass_benchmark <- function(
+    STdata,
+    codebook,
+    max_fr                           = 1.0,
+    max_corr                         = 1.0,
+    initial_corr_scale               = 0.1, 
+    ad_hoc_rescale                   = 1.1, 
+    n_resamples                      = 100,
+    n_forks                          = 1,
+    max_flips                        = 0,
+    report_freq                      = 1,
+    maxeval                          = 200,
+    ftol_rel                         = 1e-8,
+    xtol_rel                         = 1e-6,
+    max_correctable_Hamming_distance = NULL
+  ) {
+    cat("\nBenchmarking misread QC with dichotomized Gaussian simulation")
+    
+    # Confirm forking is possible and check number of cores
+    if (!(Sys.info()["sysname"] == "Darwin" || Sys.info()["sysname"] == "Linux")) {
+      if (n_forks > 1) {
+        cat("\nForking not available on Windows, setting n_forks to 1")
+        n_forks <- 1
+      }
+    } else if (n_forks > parallel::detectCores()) {
+      cat("\nn_forks exceeds available cores, setting n_forks to", parallel::detectCores())
+      n_forks <- parallel::detectCores()
+    } else {
+      cat("\nNumber of forks to use:", n_forks)
+    }
+    
+    # Check data 
+    data_check <- check_data(STdata, codebook, max_correctable_Hamming_distance)
+    
+    # Run misread QC algorithm with L-BFGS
+    resides <- test_fr_recovery(
+      as.matrix(data_check$STdata),
+      as.matrix(data_check$codebook),
+      data_check$max_correctable_Hamming_distance,
+      max_fr,
+      max_corr,
+      initial_corr_scale,
+      ad_hoc_rescale,
+      as.integer(n_resamples), 
+      as.integer(n_forks),
+      as.integer(max_flips),
+      as.integer(report_freq),
+      maxeval,
+      ftol_rel,
+      xtol_rel
+    )
+    
+    return(resides)
     
   }
 

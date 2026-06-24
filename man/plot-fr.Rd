@@ -7,11 +7,11 @@
 plot.fr(qc)
 }
 \arguments{
-\item{qc}{List, results from misreadQC function}
+\item{qc}{List, results from misread.qc function}
 }
 \value{
 ggplot object showing distributions of estimated flip rates for each bit and flip type
 }
 \description{
-This function takes the results from the misreadQC function and makes a plot showing the distributions of the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1). The plot uses violin plots to show the distribution of flip rates across the second half of iterations of the MCMCSA walk, with separate facets for each flip type.
+This function takes the results from the misread.qc function and makes a plot showing the distributions of the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1).
 }
