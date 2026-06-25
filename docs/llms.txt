@@ -1,0 +1,52 @@
+# flipFISH
+
+Performs barcode-decoding quality control for FISH-based spatial
+transcriptomic runs.
+
+It’s been known since the introduction of MERFISH that long barcodes,
+i.e., those more than twenty bits, can be expected to have around half
+of spots decoded as the wrong mRNA species [(Moffitt and Zhuang
+2016)](https://doi.org/10.1016/bs.mie.2016.03.020).
+
+# Package index
+
+## All functions
+
+- [`dichot.guass.benchmark()`](https://oviedolab.org/flipFISH/reference/dichot.guass.benchmark.md)
+  :
+
+  Benchmark `misread.qc` function with dichotomized-Gaussian simulations
+
+- [`misread.qc()`](https://oviedolab.org/flipFISH/reference/misread.qc.md)
+  : Run misread QC analysis on summary stats data from spatial
+  transcriptomics experiment
+
+- [`plot.PPV()`](https://oviedolab.org/flipFISH/reference/plot-PPV.md) :
+
+  Plot estimated PPV by barcode from `misread.qc` results
+
+- [`plot.counts()`](https://oviedolab.org/flipFISH/reference/plot-counts.md)
+  :
+
+  Plot predicted vs observed counts from `misread.qc` results
+
+- [`plot.fr()`](https://oviedolab.org/flipFISH/reference/plot-fr.md) :
+
+  Plot estimated flip rates from `misread.qc` results
+
+# Articles
+
+### Installation
+
+- [Installation
+  instructions](https://oviedolab.org/flipFISH/articles/install.md):
+
+### Tutorials
+
+- [Basic
+  demo](https://oviedolab.org/flipFISH/articles/tutorial_basic.md):
+
+### Legal
+
+- [Dependency
+  licenses](https://oviedolab.org/flipFISH/articles/license.md):

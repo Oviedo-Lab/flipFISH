@@ -2,7 +2,7 @@
 % Please edit documentation in R/main.R
 \name{plot.PPV}
 \alias{plot.PPV}
-\title{Plot estimated PPV by barcode from misread QC results}
+\title{Plot estimated PPV by barcode from \code{misread.qc} results}
 \usage{
 plot.PPV(
  qc,
@@ -10,13 +10,13 @@ plot.PPV(
 )
 }
 \arguments{
-\item{qc}{List, results from misread.qc function}
+\item{qc}{List, results from misread.qc function.}
 
-\item{min_PPV}{Numeric, minimum 95% CI lower-bound PPV cutoff for "good" barcodes, defaults to 0.8}
+\item{min_PPV}{Numeric, PPV cutoff for "good" barcodes, defaults to 0.8.}
 }
 \value{
-ggplot object showing estimated PPV for each barcode with confidence intervals and cutoff
+ggplot object showing estimated PPV for each barcode with cutoff.
 }
 \description{
-This function takes the results from the misread.qc function and makes a plot of the estimated positive predictive value (PPV) for each barcode, with error bars showing the 95% confidence intervals. Barcodes are sorted by decreasing lower bound of the PPV confidence interval, and a dashed red line indicates the minimum PPV cutoff for "good" barcodes. Barcodes whose entire confidence interval is above the cutoff are colored blue, while those that are not are colored black.
+This function takes the results from the misread.qc function and makes a plot of the estimated positive predictive value (PPV) for each barcode. Barcodes are sorted by PPV value, in decreasing order, and a dashed red line indicates the minimum PPV cutoff for "good" barcodes. Barcodes above the cutoff are colored blue, while those that are not are colored black.
 }

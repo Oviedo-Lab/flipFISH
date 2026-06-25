@@ -1,0 +1,257 @@
+---
+title: "Basic demo"
+author: "Michael Barkasi"
+date: '`r Sys.Date()`'
+---
+
+```{r setup, include = FALSE}
+options(width = 10000)
+knitr::opts_chunk$set(class.output = "scroll-output", cache = TRUE)
+library(flipFISH)
+```
+
+## Introduction 
+
+Grab MERSCOPE codebook. Must have row names in the first column giving species names. 
+
+```{r get_codebook}
+file_path <- system.file(
+  "extdata",
+  "codebook_obs.csv",
+  package = "flipFISH"
+)
+codebook <- read.csv(file_path, row.names = 1)
+```
+
+Some text here. 
+
+```{r set_max_Hamming}
+max_correctable_Hamming_distance <- 3
+```
+
+Get summary stats 
+
+```{r make_count_data, eval = FALSE}
+data_path_cells <- "/Users/michaelbarkasi/projects_Oviedo_lab/_molecular_mechanisms_of_ACx_lateralization/data_ACx_cells"
+count_data <- wispack::make_count_data(
+  data_path = data_path_cells, 
+  remove_L1 = FALSE, 
+  ROI_only = FALSE,
+  raw = TRUE,
+  drop_blanks = FALSE,
+  verbose = TRUE
+)
+count_data <- count_data$count_data
+```
+
+Now make summary stats, for each mouse 
+
+```{r summary_stats, eval = FALSE}
+# Extract summary statistics (mean, variance, summed counts) from data
+# ...  it will return a list holding two data.frames formatted like those imported below from the csv files
+summary_stats_from_data <- function(
+    obs_data         # data frame, columns as barcodes (genes or blanks), rows as cells, elements as spot counts
+  ) {
+    
+    # Extract summary statistics
+    observed_rates         <- colMeans(obs_data)
+    observed_variance      <- rep(NA, length(observed_rates))
+    for (i in 1:length(observed_variance)) {
+      observed_variance[i] <- sd(obs_data[,i])^2
+    }
+    observed_counts        <- colSums(obs_data)
+    
+    # Collect summary stats
+    data <- data.frame(
+      rates    = observed_rates,
+      variance = observed_variance,
+      counts   = observed_counts
+    )
+    rownames(data) <- colnames(obs_data)
+    
+    return(data)
+    
+  }
+
+mice <- unique(count_data$mouse)
+mice_masks <- lapply(mice, function(m) count_data$mouse == m)
+count_data <- count_data[,13:(ncol(count_data)-6)]
+summary_stats_data <- data.frame(mouse = c(), rates = c(), variance = c(), counts = c())
+for (i in seq_along(mice_masks)) {
+  ss <- summary_stats_from_data(count_data[mice_masks[[i]],])
+  ss <- cbind(mouse = i, ss)
+  summary_stats_data <- rbind(summary_stats_data, ss)
+}
+write.csv(
+  summary_stats_data,
+  file = "/Users/michaelbarkasi/projects_Oviedo_lab/R_packages/flipFISH/inst/extdata/summary_stats_all_mice.csv",
+  row.names = TRUE
+)
+```
+
+```{r align_names}
+file_path <- system.file(
+  "extdata",
+  "summary_stats_all_mice.csv",
+  package = "flipFISH"
+)
+summary_stats_data <- read.csv(file_path, row.names = 1)
+
+m1_summary_stats <- summary_stats_data[summary_stats_data$mouse == 1,]
+rownames(codebook) <- gsub("-", ".", rownames(codebook))
+
+```
+
+Now try new function. 
+
+```{r new_initial_estimate}
+t <- Sys.time()
+resids <- dichot_guass_benchmark(
+    m1_summary_stats,                        # Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
+    codebook,                                # Codebook with row names as barcodes and columns as bits, must have barcode names as row names
+    n_sims                           = 10,   # 100
+    n_forks                          = 20,
+    max_flips                        = 4,    # Suggest min of 6, 7 or 8 better
+    report_freq                      = 10,
+    maxeval                          = 100,   # Suggest min of 100, 150 or 250 probably better
+    max_correctable_Hamming_distance = NULL
+    )
+d <- Sys.time() - t
+units(d) <- "secs"
+cat("\ntime:", d, "seconds\n")
+
+
+```
+
+
+```{r} 
+
+pred_resids <- colMeans(resids[["fr_est"]])
+#pred_resids <- resids[["fr_est"]][1,]
+stip <- resids[["fr_stipulated"]]
+l <- length(stip)
+plot(stip[1:56], pred_resids[1:56])
+plot(stip[57:l], pred_resids[57:l])
+fr_cor <- cor(stip[1:56], pred_resids[1:56])
+corr_cor <- cor(stip[57:l], pred_resids[57:l])
+n <- 1000
+shuffled_cors_fr <- rep(NA, n)
+shuffled_cors_corr <- rep(NA, n)
+for (i in 1:n) {
+  shuff <- sample(57:l, l-56, replace = FALSE)
+  shuffled_cors_corr[i] <- cor(stip[shuff], pred_resids[57:l])
+  shuff <- sample(1:56, 56, replace = FALSE)
+  shuffled_cors_fr[i] <- cor(stip[shuff], pred_resids[1:56])
+}
+fr_p <- sum(abs(shuffled_cors_fr) >= abs(fr_cor))/n
+corr_p <- sum(abs(shuffled_cors_corr) >= abs(corr_cor))/n
+cat("\nfr_cor:", fr_cor)
+cat("\ncorr_cor:", corr_cor)
+cat("\nfr_p:", fr_p)
+cat("\ncorr_p:", corr_p)
+```
+
+
+```{r} 
+
+pred_ppv <- colMeans(resids[["PPV_est"]])
+pred_ecc <- colMeans(resids[["ecc_est"]])
+pred_counts <- colMeans(resids[["sim_counts"]])
+#pred_ppv <- resids[["PPV_est"]][1,]
+stip <- resids[["PPV_expected"]]
+stip_ecc <- resids[["ecc_expected"]]
+l <- 719
+plot(stip[1:l], pred_ppv[1:l])
+plot(stip_ecc[1:l], pred_ecc[1:l])
+plot(stip_ecc[1:l], pred_counts[1:l])
+ppv_cor <- cor(stip[1:l], pred_ppv[1:l])
+ecc_cor <- cor(stip_ecc[1:l], pred_ecc[1:l])
+counts_cor <- cor(stip_ecc[1:l], pred_counts[1:l]) 
+n <- 1000
+shuffled_cors <- rep(NA, n)
+shuffled_cors_ecc <- rep(NA, n)
+shuffled_cors_count <- rep(NA, n)
+for (i in 1:n) {
+  shuff <- sample(1:l, l, replace = FALSE)
+  shuffled_cors[i] <- cor(stip[shuff], pred_ppv[1:l])
+  shuffled_cors_ecc[i] <- cor(stip_ecc[shuff], pred_ecc[1:l])
+  shuffled_cors_count[i] <- cor(stip_ecc[shuff], pred_counts[1:l])
+}
+ppv_p <- sum(abs(shuffled_cors) >= abs(ppv_cor))/n
+ecc_p <- sum(abs(shuffled_cors_ecc) >= abs(ecc_cor))/n
+count_p <- sum(abs(shuffled_cors_count) >= abs(ecc_cor))/n
+cat("\nppv_corr:", ppv_cor)
+cat("\nppv_p:", ppv_p)
+cat("\n")
+cat("\necc_corr:", ecc_cor)
+cat("\necc_p:", ecc_p)
+cat("\n") 
+cat("\ncount_corr:", counts_cor) 
+cat("\ncount_p:", count_p)
+
+```
+
+```{r}
+
+library(ggplot2)
+
+plot_fr_histograms <- function(n, resids, bins = 30) {
+  fr_est <- resids[["ecc_est"]]
+  fr_stipulated <- resids[["ecc_expected"]]
+
+  stopifnot(is.matrix(fr_est))
+  stopifnot(length(fr_stipulated) == ncol(fr_est))
+
+  n <- min(n, ncol(fr_est))
+
+  for (j in seq_len(n)) {
+    df <- data.frame(value = fr_est[, j])
+
+    p <- ggplot(df, aes(x = value)) +
+      geom_histogram(bins = bins, color = "black", fill = "grey80") +
+      geom_vline(
+        xintercept = fr_stipulated[j],
+        color = "red",
+        linewidth = 1
+      ) +
+      labs(
+        title = paste("Column", j),
+        x = "Estimated flip rate",
+        y = "Count"
+      ) +
+      theme_bw()
+
+    print(p)
+  }
+}
+
+plot_fr_histograms(50, resids, 10)
+
+
+
+```
+
+
+
+```{r new_initial_estimate}
+t <- Sys.time()
+qc <- misread.qc(
+    m1_summary_stats,                        # Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
+    codebook,                                # Codebook with row names as barcodes and columns as bits, must have barcode names as row names
+    n_forks                          = 20,
+    max_flips                        = 6,    # Suggest min of 6, 7 or 8 better
+    report_freq                      = 1,
+    maxeval                          = 250,   # Suggest min of 100, 150 or 250 probably better
+    max_correctable_Hamming_distance = NULL
+    )
+d <- Sys.time() - t
+units(d) <- "secs"
+cat("\ntime:", d, "seconds\n")
+```
+
+```{r plot_results}
+plot.PPV(qc)
+plot.counts(qc)
+plot.fr(qc)
+plot(qc$msle, type = "l")
+```

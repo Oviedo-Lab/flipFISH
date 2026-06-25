@@ -1,0 +1,67 @@
+/* Apply to all H1s inside articles, reference, and main pages */
+.container h1 {
+  border-bottom: 1px solid var(--bs-border-color);
+  padding-bottom: 0.3em;
+  margin-top: 2em;
+  margin-bottom: 1em;
+  font-weight: 500;
+  line-height: 1.2;
+}
+.container h2 {
+  border-bottom: 1.5px solid var(--bs-border-color);
+  padding-bottom: 0.3em;
+  margin-top: 2em;
+  margin-bottom: 1em;
+  font-weight: 500;
+  line-height: 1.2;
+}
+.container h3 {
+  border-bottom: 1px solid var(--bs-border-color);
+  padding-bottom: 0.15em;
+  margin-top: 2em;
+  margin-bottom: 1em;
+}
+.page-header {
+  border-bottom: none !important;
+}
+.figure {
+  text-align: center;
+  margin: 2em 0;
+}
+img {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 4px;
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
+.figure .caption {
+  font-style: italic;
+  color: #555;
+  margin-top: 0.5em;
+}
+math[display="block"] {
+  margin: 1em 0;
+}
+.scroll-output {
+  max-height: 400px;
+  overflow-y: auto;
+  display: block;
+}
+img.r-plt {
+  filter: none !important;
+}
+div.sourceCode pre {
+  max-height: 400px;
+  overflow-y: auto;
+}
+.function {
+  font-weight: bold;
+}
+.code_variable {
+  font-weight: bold;
+}
+.gene {
+  text-transform: uppercase;
+}

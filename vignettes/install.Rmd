@@ -1,7 +1,7 @@
 ---
 title: "Installation instructions"
 author: "Michael Barkasi"
-date: "`r Sys.Date()`"
+date: "July 6, 2026 (v1.0)"
 ---
 
 1. Clone and `cd` into this git repo

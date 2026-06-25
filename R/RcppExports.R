@@ -9,12 +9,12 @@ unique_Hamming_cb <- function(codebook) {
     .Call(`_flipFISH_unique_Hamming_cb`, codebook)
 }
 
-mQC <- function(bc_counts, codebook, max_correctable_Hamming_distance, max_fr, max_corr, initial_corr_scale, ad_hoc_rescale, n_resamples, n_forks, max_flips, report_freq = 1L, maxeval = 1000L, ftol_rel = 1e-8, xtol_rel = 1e-6) {
-    .Call(`_flipFISH_mQC`, bc_counts, codebook, max_correctable_Hamming_distance, max_fr, max_corr, initial_corr_scale, ad_hoc_rescale, n_resamples, n_forks, max_flips, report_freq, maxeval, ftol_rel, xtol_rel)
+mQC <- function(bc_counts, codebook, max_correctable_Hamming_distance, n_forks, max_flips, report_freq = 1L, maxeval = 1000L, fliprate_priors) {
+    .Call(`_flipFISH_mQC`, bc_counts, codebook, max_correctable_Hamming_distance, n_forks, max_flips, report_freq, maxeval, fliprate_priors)
 }
 
-test_fr_recovery <- function(bc_counts, codebook, max_correctable_Hamming_distance, max_fr, max_corr, initial_corr_scale, ad_hoc_rescale, n_resamples, n_forks, max_flips, report_freq = 1L, maxeval = 1000L, ftol_rel = 1e-8, xtol_rel = 1e-6) {
-    .Call(`_flipFISH_test_fr_recovery`, bc_counts, codebook, max_correctable_Hamming_distance, max_fr, max_corr, initial_corr_scale, ad_hoc_rescale, n_resamples, n_forks, max_flips, report_freq, maxeval, ftol_rel, xtol_rel)
+test_fr_recovery <- function(bc_counts, codebook, n_sims, max_correctable_Hamming_distance, n_forks, max_flips, report_freq, maxeval, fliprate_priors) {
+    .Call(`_flipFISH_test_fr_recovery`, bc_counts, codebook, n_sims, max_correctable_Hamming_distance, n_forks, max_flips, report_freq, maxeval, fliprate_priors)
 }
 
 tr_sum_check <- function(bc, rate10, rate01, corr1, corr0) {

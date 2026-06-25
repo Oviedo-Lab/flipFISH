@@ -1,0 +1,36 @@
+url: https://oviedolab.org/flipFISH/
+template:
+  bootstrap: 5
+  light-switch: true
+  math-rendering: katex
+
+navbar:
+  structure:
+    left:  [intro, reference, articles, tutorials, news]
+    right: [search, github, lightswitch]
+  components:
+    intro:
+      text: Introduction
+      href: index.html
+    reference:
+      text: Package Functions
+      href: reference/index.html
+    github:
+      icon: fab fa-github
+      href: https://github.com/Oviedo-Lab/flipFISH
+
+articles:
+- title: Installation
+  navbar: Installation
+  contents:
+  - install
+
+- title: Tutorials
+  navbar: Tutorials
+  contents: 
+  - tutorial_basic
+
+- title: Legal
+  navbar: Legal
+  contents:
+  - license

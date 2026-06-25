@@ -2,16 +2,16 @@
 % Please edit documentation in R/main.R
 \name{plot.counts}
 \alias{plot.counts}
-\title{Plot predicted vs observed counts from misread QC results}
+\title{Plot predicted vs observed counts from \code{misread.qc} results}
 \usage{
 plot.counts(qc)
 }
 \arguments{
-\item{qc}{List, results from misread.qc function}
+\item{qc}{List, results from misread.qc function.}
 }
 \value{
-ggplot object showing predicted vs observed counts for each barcode with confidence intervals
+ggplot object showing predicted vs observed counts for each barcode.
 }
 \description{
-This function takes the results from the misread.qc function and makes a plot comparing the predicted error-corrected counts (ecc) to the observed counts for each barcode. Both predicted and observed counts are plotted on a log scale for better visibility, with error bars showing the 95% confidence intervals for the predicted counts. Barcodes are sorted by decreasing observed count, with gene barcodes shown first and blank barcodes shown second. A dashed vertical line indicates the separation between gene and blank barcodes.
+This function takes the results from the misread.qc function and makes a plot comparing the predicted error-corrected counts (ecc) to the observed counts for each barcode. Both predicted and observed counts are plotted on a log scale for better visibility. Barcodes are sorted by decreasing observed count, with gene barcodes shown first and blank barcodes shown second. A dashed vertical line indicates the separation between gene and blank barcodes.
 }

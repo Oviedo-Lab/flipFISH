@@ -1,0 +1,26 @@
+# Installation instructions
+
+1.  Clone and `cd` into this git repo
+2.  Make `build_install.sh` executable by running
+    `chmod +x build_install.sh` in bash terminal  
+3.  In terminal, run `./build_install.sh` to build and install the
+    package  
+4.  To ensure a clean start, run:
+
+``` bash
+rm -f src/*.o src/*.so
+rm -rf flipFISH.Rcheck
+rm -f flipFISH_*.tar.gz
+./build_install.sh
+```
+
+## Build documentation
+
+In R, run:
+
+``` r
+
+devtools::document()
+pkgdown::build_site()
+pkgdown::build_article("<article name>")
+```

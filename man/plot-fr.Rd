@@ -2,16 +2,16 @@
 % Please edit documentation in R/main.R
 \name{plot.fr}
 \alias{plot.fr}
-\title{Plot estimated flip rate distributions from misread QC results}
+\title{Plot estimated flip rates from \code{misread.qc} results}
 \usage{
 plot.fr(qc)
 }
 \arguments{
-\item{qc}{List, results from misread.qc function}
+\item{qc}{List, results from misread.qc function.}
 }
 \value{
-ggplot object showing distributions of estimated flip rates for each bit and flip type
+ggplot object showing distributions of estimated flip rates for each bit and flip type.
 }
 \description{
-This function takes the results from the misread.qc function and makes a plot showing the distributions of the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1).
+This function takes the results from the misread.qc function and makes a plot showing the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1).
 }

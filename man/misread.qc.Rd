@@ -7,50 +7,41 @@
 misread.qc(
   STdata,
   codebook,
-  max_fr = 1,
-  max_corr = 1,
-  initial_corr_scale = 0.1,
-  ad_hoc_rescale = 1.1,
-  n_resamples = 100,
   n_forks = 1,
   max_flips = 0,
-  report_freq = 1,
-  maxeval = 200,
-  ftol_rel = 1e-08,
-  xtol_rel = 1e-06,
+  report_freq = 10,
+  maxeval = 500,
   max_correctable_Hamming_distance = NULL
 )
 }
 \arguments{
-\item{STdata}{Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts". Must have barcode names as row names.}
+\item{STdata}{Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts". Must have barcode names (e.g., gene or protein species) as row names.}
 
-\item{codebook}{Codebook with barcodes as row names and bits as columns.}
+\item{codebook}{Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0, depending on whether an mRNA molecule of the species represented by the row is expected to luminescence in the bit represented by the column. All row names from \code{STdata} must be included in the row names for \code{codebook}.}
 
-\item{max_fr}{Maximum flip rate allowed during optimization, default 1.0.}
+\item{n_forks}{Number of process forks to use for expected-count computation (i.e., parallel computation), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.}
 
-\item{max_corr}{Absolute bound on bit-flip correlation parameters, default 1.0.}
+\item{max_flips}{When analytically computing expected corrected counts per barcode, the function will ignore misreads larger than this Hamming distance. The default is 0, which is interpreted as no limit. Using all misreads will likely be prohibitively slow; a value between six and ten is probably advisable. Values of 3 or 4 work well for initial trouble shooting and testing.}
 
-\item{initial_corr_scale}{Assumed mean correlation between bit-flips, used to make crude estimate of true barcode counts from observed counts, default 0.1. Recommend leaving at default.}
+\item{report_freq}{Divisor specifying report frequency during optimization; will print updates every \code{report_freq} accepted calls, default 10.}
 
-\item{ad_hoc_rescale}{Additional rescaling of observed counts when estimating true counts, default is 1.1. More spots must be assumed to be of each barcode than was counted, or else bit-flips will necessarily imply lower-than-observed counts. This argument and \code{initial_corr_scale} function to estimate how many more spots are needed of each barcode, over the observed number.}
-
-\item{n_forks}{Number of parallel forks to use for expected-count computation, default is 1. (Must be 1 on Windows.)}
-
-\item{max_flips}{When computing expected corrected counts per barcode, ignore misreads larger than this hamming distance, default is 0, which is interpreted as no limit. Using all misreads will likely be prohibitively slow; a value between six and ten is probably advisable.}
-
-\item{report_freq}{Divisor specifying report frequency during optimization; will print updates every report_freq accepted calls, default 1.}
-
-\item{maxeval}{Maximum number of objective function evaluations for L-BFGS, default 100}
-
-\item{ftol_rel}{Relative function value tolerance for L-BFGS convergence, default 1e-8.}
-
-\item{xtol_rel}{Relative parameter tolerance for L-BFGS convergence, default 1e-6.}
+\item{maxeval}{Maximum number of objective function evaluations for L-BFGS, default 500.}
 
 \item{max_correctable_Hamming_distance}{Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries.}
 }
 \value{
-List giving \code{STdata}, a dataframe giving the summary data from the ST run used in the simulation, \code{fliprates}, a matrix giving the estimated flip rates and bit-flip correlations from each iteration of the MCMCSA algorithm, \code{erc}, \code{ecc}, and \code{etc}, matrices giving the estimated expected read, error-corrected, and true (i.e., correctly corrected) counts for each barcode at each resample, \code{CR} and \code{PPV}, matrices giving estimated confidence ratio and positive predictive values for each resample, and \code{fliprates_summary} and \code{bc_summary}, which give summary statistics on the flip rates and error-corrected counts across all resamples.
+A list giving:\itemize{
+   \item \code{STdata}: a dataframe giving the summary data from the ST run used in the estimation.
+   \item \code{fliprates}: a labeled vector giving the estimated (i.e., best fit) flip rates and bit-flip correlations from the optimization. 
+   \item \code{erctc_plus}: a data frame giving, for each barcode, the read, corrected, and hit counts as well as \code{CR} and \code{PPV} values implied by the analytic conditional probability model, given the values in \code{fliprates}. Column names are: "erc", "ecc", "etc", "CR", and "PPV".
+   \item \code{msle}: A numeric value giving the minimal mean squared log error found by the L-BFGS optimization of the flip rates and bit-flip correlations.
+}
 }
 \description{
-This function takes summary statistics from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs L-BFGS (via nlopt) over gamma-convolved Poisson resamples to estimate the bit-flip rates and correlations, as well as the expected read, error-corrected, and true counts for each barcode. The aim is to compute both the "confidence ratio" (CR) and positive predictive value (PPV) for each barcode.
+This function takes summary statistics from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs L-BFGS (via nlopt) to make a best-fit estimate of the bit-flip rates and correlations. The estimation (i.e., L-BFGS optimization) uses an analytic conditional probability model to compute, for each barcode \emph{b}, values expected based on bit-flip rates and bit-flip correlations, for: \itemize{
+  \item \strong{Read Count}: The number of spots (the "count") labelled \emph{b} before error correction.
+  \item \strong{Corrected Count}: The number of spots (the "count") labelled \emph{b} after error correction.
+  \item \strong{Hit Count}: The number of spots (the "count") labelled \emph{b} after error correction which are in fact \emph{b}, i.e., the number of reads error-corrected to \emph{b} which are correct, aka a "hit". 
+}
+ The "best fit" is defined as least mean squared log error, mean squared log error being computed by comparing the analytically implied expected corrected counts to the observed corrected counts included in the summary statistics. Additionally, both the expected "confidence ratio" (CR) and expected positive predictive value (PPV) are computed, from these implied values, for each barcode. The CR is a quality control metric proposed by the original developers of MERFISH (e.g., see DOI 10.1016/bs.mie.2016.03.020) defined per barcode as the read count over the corrected count, while PPV is a oft-used metric defined as the hit count over the corrected count. That is, PPV tells us, for each barcode \emph{b}, the expected percentage of spots decoded as \emph{b} which are in fact \emph{b}.
 }
