@@ -1,5 +1,6 @@
 
 // Rcpp
+// [[Rcpp::depends(BH)]]
 // [[Rcpp::depends(RcppEigen)]]
 #include <Rcpp.h>
 #include <RcppEigen.h>
@@ -9,6 +10,7 @@
 #include <unistd.h>     // fork, pipe, read, write, close
 #include <sys/wait.h>   // waitpid
 #include <nlopt.hpp>    // L-BFGS and other gradient-based optimizers
+#include <boost/math/distributions/normal.hpp>
 using namespace Rcpp;
 using namespace Eigen;
 
@@ -1006,6 +1008,170 @@ List mQC(
       _["msle"]               = minf
     );
   }
+
+/*
+ * *********************************************************************************************************************
+ * Correlation matrix functions
+ */
+
+// Multivariate normal CDF, upper tail
+double mvnorm_cdf_uppertail(
+    const NumericVector& threshold, 
+    const NumericMatrix& sigma    // covariance matrix of dimension n less than 1000
+  ) {
+    
+    if (sigma.nrow() != sigma.ncol()) {Rcpp::stop("Covariance matrix must be square");}
+    if (sigma.nrow() >= 1000) {Rcpp::stop("Covariance matrix must be less than 1000x1000");}
+    if (sigma.nrow() != threshold.size()) {Rcpp::stop("Matrix diagonal and threshold vector must be same length");}
+    
+    Function pmvnorm("pmvnorm", Environment::namespace_env("mvtnorm"));
+    // ... uses Genz algorithm
+    
+    double prob = as<double>(
+      pmvnorm( // by default, lower = -Inf, upper = Inf, and mean = 0.
+        Named("lower") = threshold, 
+        Named("sigma") = sigma, 
+        Named("keepAttr") = false
+      )
+    );
+    
+    return prob;
+    
+  }
+
+// Normal CDF, with inverse
+double norm_cdf(
+    double x,
+    double mu,
+    double sd,
+    bool   inverse
+  ) {
+    double xc = x;
+    using boost::math::normal; 
+    normal standard_normal(mu, sd);
+    if (inverse) {
+      if (xc < 1e-10) {xc = 1e-10;}
+      if (xc > 1 - 1e-10) {xc = 1.0 - 1e-10;}
+      return boost::math::quantile(standard_normal, xc);
+    } else {
+      return boost::math::cdf(standard_normal, xc);
+    }
+  }
+
+// For estimating sigma for dichotomized Gaussian simulation
+NumericVector dg_sigma_formula(
+    double               threshold, // threshold for dichotomization
+    const NumericVector& cov,       // desired covarance after dichotomization
+    const NumericMatrix& sigma      // covariance matrix of multivariate Gaussian
+  ) {
+    // We know threshold and cov. By finding the sigma which sends this function 
+    //   to zero, we can find the covariance needed for dichotomized Gaussian simulation
+   
+    // Check dimension
+    int dim  = sigma.nrow();
+    if (dim != sigma.ncol()) {Rcpp::stop("Covariance matrix must be square");}
+    if (dim != cov.size())   {Rcpp::stop("Covariance vector must have the same length as sigma diagonal");}
+    
+    // Find probability of a point being above the threshold along all dimensions
+    double Phi2_upper = mvnorm_cdf_uppertail(
+      Rcpp::rep(threshold, dim), 
+      sigma
+    );
+   
+    // Find probability of a point being below the threshold along one dimension
+    double Phi = norm_cdf(
+      threshold, 
+      0.0,     // mean
+      1.0,     // sd
+      false    // return inverse? No, return cdf
+    );
+    
+    // Desired sigma will be the one which sends all elements to zero
+    //  Formula: cov = Phi2_upper - (1 - Phi) * (1 - Phi) is derived as follows: 
+    //   By definition of cov, cov = E[X1*X2] - E[X1]*E[X2].
+    //   In this case, E[X1] = E[X2] = P(X > threshold) = 1 - Phi.
+    //   X1*X2 != 0 only if both X1 and X2 > threshold, which occurs with probability Phi2_upper.
+    NumericVector residuals(dim);
+    for (int i = 0; i < dim; i++) {
+      residuals[i] = cov[i] - Phi2_upper + (1.0 - Phi) * (1.0 - Phi);
+    }
+    
+    return residuals;
+    
+  }
+
+// Wrapper for use with find-root-bisection algorithm 
+double dg_sigma_formula_scalar(
+    double threshold,               // threshold for dichotomization
+    double cov,                     // desired covarance after dichotomization
+    double sigma                    // Gaussian covariance
+  ) {
+    
+    // Construct covariance matrix sigma (2x2)
+    NumericMatrix sigmaMat(2, 2);
+    sigmaMat(_,0) = NumericVector::create(1.0, sigma);
+    sigmaMat(_,1) = NumericVector::create(sigma, 1.0);
+    
+    // Include self-covariance on front, which is the variance, sd^2
+    //   The Gaussian is normal, so mean is zero and sd is 1, so variance is 1
+    NumericVector cov1 = {1.0, cov};
+    
+    // Evaluate formula and return second value
+    NumericVector residual = dg_sigma_formula(threshold, cov1, sigmaMat);
+    // Return only the second element, corresponding to cov
+    return residual[1]; 
+    
+  }
+
+// Function to find sigma by root bisection 
+double dg_find_sigma_RootBisection(
+    double threshold,               // threshold for dichotomization
+    double cov                      // desired covarance after dichotomization
+  ) {
+    
+    // Set search parameters 
+    const int max_iter = 50; 
+    const double tol = 1e-4;
+    
+    // Initiate sigmas
+    double sigma_lower = -0.999;
+    double sigma_upper = 0.999;
+    
+    // Evaluate formula
+    double fx_lower = dg_sigma_formula_scalar(threshold, cov, sigma_lower);
+    double fx_upper = dg_sigma_formula_scalar(threshold, cov, sigma_upper);
+    
+    // Run checks 
+    if (abs(fx_lower) < tol) {return sigma_lower;}
+    else if (abs(fx_upper) < tol) {return sigma_upper;}
+    else if (fx_lower * fx_upper > tol) {return 0.0;} // Both initial covariance values lie on same side of zero crossing
+    
+    // Run bisection
+    double fx = std::numeric_limits<double>::infinity();
+    double sigma_mid;
+    int iter = 0;
+    while (abs(fx) > tol && iter < max_iter) {
+      
+      // Find midpoint
+      sigma_mid = (sigma_lower + sigma_upper)/2.0;
+      fx = dg_sigma_formula_scalar(threshold, cov, sigma_mid);
+      
+      // Update bounds
+      if (fx > 0.0) {
+        sigma_lower = sigma_mid;
+      } else {
+        sigma_upper = sigma_mid;
+      }
+      
+      // Update iteration
+      iter++;
+      
+    }
+    
+    return sigma_mid; 
+    
+  }
+
 
 /*
  * *********************************************************************************************************************
