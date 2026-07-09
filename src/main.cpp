@@ -30,9 +30,9 @@ struct Codebook {
 
 struct EvalResults {
   std::vector<double> msle_hist;
-  std::vector<double> etc;
-  std::vector<double> ecc; 
-  std::vector<double> erc;
+  std::vector<double> ehc;                 // expected hit count
+  std::vector<double> ecc;                 // expected corrected count
+  std::vector<double> erc;                 // expected read count
   std::vector<double> CR;
   std::vector<double> PPV;
   int                 n_evals = 0; 
@@ -79,7 +79,7 @@ struct SpotSim {
   // For each barcode, the total number of spots read as that barcode, corrected to that barcode, and correctly read as that barcode
   std::vector<int> read_counts;
   std::vector<int> corrected_counts;
-  std::vector<int> true_counts;
+  std::vector<int> hit_counts;
 };
 
 /*
@@ -489,15 +489,15 @@ double TR(
     std::vector<double>* grad             = nullptr,
     double               grad_scale       = 1.0
   ) {
-    int N_bits    = fr.rate10.size();
-    int corr_free = N_bits * (N_bits - 1) / 2;
-    double log_tr = 0.0;
+    int    N_bits    = fr.rate10.size();
+    int    corr_free = N_bits * (N_bits - 1) / 2;
+    double log_tr    = 0.0;
     
     // Per-bit quantities: compute log inverse correlation, stored for backward pass.
     std::vector<double> log_inv_corr(N_bits, 0.0);
-    std::vector<int>    bit_vec(N_bits), flip_vec(N_bits);
     std::vector<double> log_adj_flip_vec(N_bits);
     std::vector<bool>   clamped(N_bits, false);
+    std::vector<int>    bit_vec(N_bits), flip_vec(N_bits);
     
     // Forward pass
     for (int i = 0; i < N_bits; ++i) {
@@ -562,61 +562,61 @@ double TR(
 std::tuple<double, double, double> expected_bc_count(
     const uint64_t               BOI,                         // Barcode of interest (BOI) for which we want to compute expected count after correction
     const FlipRates&             fr,                          // FlipRates struct holding rate10, rate01, and corr
-    const std::vector<int>&      bc_counts_true,              // Vector of same length as true_barcodes, giving the ground-truth number of spots with each barcode
-    const std::vector<uint64_t>& true_barcodes,               // Vector giving all possible true spot barcodes
+    const std::vector<int>&      bc_counts,                   // Vector of same length as barcodes, giving the ground-truth number of spots with each barcode
+    const std::vector<uint64_t>& barcodes,                    // Vector giving all possible true spot barcodes (genes, not blanks)
     const std::vector<uint64_t>& corrected_to_BOI,            // Vector of barcodes that would be corrected to barcode of interest (BOI)
     int                          max_flips, 
     std::vector<double>*         grad_ecc_b        = nullptr
   ) {
     int    N_bits          = fr.rate10.size();
-    int    N_barcodes      = true_barcodes.size();
+    int    N_barcodes      = barcodes.size();
     int    N_correctable   = corrected_to_BOI.size();
     double count_corrected = 0.0;
     double count_read      = 0.0;
-    double count_true      = 0.0;
+    double count_hit       = 0.0;
     // Index i ranges over barcodes corrected to BOI, index j ranges over all codebook barcodes 
     for (int j = 0; j < N_barcodes; ++j) {
-      if (bc_counts_true[j] > 0) {
-        double scale = (double)bc_counts_true[j];
+      if (bc_counts[j] > 0) {
+        double scale = (double)bc_counts[j];
         double tr    = 0.0;
         for (int i = 0; i < N_correctable; ++i) {
           // Get bit-flips required to transform the true barcode into the misread barcode
-          uint64_t flips_to_BOI = (true_barcodes[j] ^ corrected_to_BOI[i]) & ((1ULL << N_bits) - 1);
+          uint64_t flips_to_BOI = (barcodes[j] ^ corrected_to_BOI[i]) & ((1ULL << N_bits) - 1);
           // Check hamming distance 
           if (__builtin_popcountll(flips_to_BOI) > max_flips) {continue;}
           // TR call: also accumulates scale * ∂TR/∂params into grad_ecc_b when non-null.
           // ... grad_ecc_b tracks ∂count_corrected/∂params because count_corrected = Σ_j Σ_i scale * TR.
-          double tr_ = TR(true_barcodes[j], flips_to_BOI, fr, grad_ecc_b, scale);
+          double tr_ = TR(barcodes[j], flips_to_BOI, fr, grad_ecc_b, scale);
           tr += tr_;
           if (corrected_to_BOI[i] == BOI) {count_read += tr_ * scale;}
         }
         count_corrected += tr * scale;
-        if (true_barcodes[j] == BOI) {count_true += tr * scale;}
+        if (barcodes[j] == BOI) {count_hit += tr * scale;}
       }
     }
-    return {count_read, count_corrected, count_true};
+    return {count_read, count_corrected, count_hit};
   }
 
 // Estimate expected barcode counts after correction, as a function of flip rates and true barcode counts, for all barcodes.
 // grad_ecc (optional): pre-zeroed flat matrix stored row-major, size N_barcodes * n_params.
 //   When grad_ecc is non-null, ∂ecc[b]/∂params is accumulated into the slice (*grad_ecc)[b*n_params .. (b+1)*n_params-1].
 std::tuple<std::vector<double>, std::vector<double>, std::vector<double>> expected_bc_counts(
-    const FlipRates&                                      fr,                                   // FlipRates struct holding rate10, rate01, and corr
-    const std::vector<int>&                               bc_counts_true,                       // Vector of same length as true_barcodes, giving the ground-truth number of spots with each barcode
-    const std::vector<uint64_t>&                          true_barcodes,                        // Vector giving all possible true spot barcodes
-    const std::unordered_map<int, std::vector<uint64_t>>& correction_table_inverted,            // Inverted correction table mapping each barcode index to vector of misread barcodes that would be corrected to it
+    const FlipRates&                                      fr,                         // FlipRates struct holding rate10, rate01, and corr
+    const std::vector<int>&                               bc_counts,                  // Vector of same length as barcodes, giving the ground-truth number of spots with each barcode
+    const std::vector<uint64_t>&                          barcodes,                   // Vector giving all possible true spot barcodes (genes, not blanks)
+    const std::unordered_map<int, std::vector<uint64_t>>& correction_table_inverted,  // Inverted correction table mapping each barcode index to vector of misread barcodes that would be corrected to it
     int                                                   n_forks,
     int                                                   max_flips,
-    std::vector<double>*                                  grad_ecc                   = nullptr  // if non-null: flat [N_barcodes × n_params], pre-zeroed
+    std::vector<double>*                                  grad_ecc = nullptr          // if non-null: flat [N_barcodes × n_params], pre-zeroed
   ) {
-    int N_barcodes = true_barcodes.size();
+    int N_barcodes = barcodes.size();
     int N_bits     = fr.rate10.size();
     int corr_free  = N_bits * (N_bits - 1) / 2;
     int n_params   = 2*N_bits + 2*corr_free;
     bool do_grad   = (grad_ecc != nullptr);
     std::vector<double> ecc(N_barcodes, 0.0); // expected corrected counts
     std::vector<double> erc(N_barcodes, 0.0); // expected read counts
-    std::vector<double> etc(N_barcodes, 0.0); // expected true (i.e., correctly read) counts
+    std::vector<double> ehc(N_barcodes, 0.0); // expected hit (i.e., correctly read) counts
     
     // Construct batches of barcodes to simulate in parallel
     std::vector<std::vector<int>> barcode_batches(n_forks);
@@ -632,7 +632,7 @@ std::tuple<std::vector<double>, std::vector<double>, std::vector<double>> expect
     if (n_forks > 1) {
       // Run in parallel with forking.
       // Child payload layout (per barcode in batch):
-      //   [erc_0..erc_{N-1} | ecc_0..ecc_{N-1} | etc_0..etc_{N-1} | grad_b0 .. grad_b{N-1}]
+      //   [erc_0..erc_{N-1} | ecc_0..ecc_{N-1} | ehc_0..ehc_{N-1} | grad_b0 .. grad_b{N-1}]
       // where each grad_b is n_params doubles. Gradient section present only when do_grad=true.
       
       // Pipes for inter-process communication
@@ -659,30 +659,30 @@ std::tuple<std::vector<double>, std::vector<double>, std::vector<double>> expect
             } 
           }
           int payload_size = (do_grad ? 3 + n_params : 3) * N_barcodes_batch;
-          std::vector<double> erctc_child(payload_size, 0.0);
+          std::vector<double> erchc_child(payload_size, 0.0);
           std::vector<double> grad_b(do_grad ? n_params : 0, 0.0); // per-barcode gradient buffer
           
           for (int b = 0; b < N_barcodes_batch; ++b) {
             if (do_grad) std::fill(grad_b.begin(), grad_b.end(), 0.0);
-            std::tuple<double, double, double> erctc = expected_bc_count(
-              true_barcodes[barcode_batches[i][b]],
-              fr, bc_counts_true, true_barcodes, 
+            std::tuple<double, double, double> erchc = expected_bc_count(
+              barcodes[barcode_batches[i][b]],
+              fr, bc_counts, barcodes, 
               correction_table_inverted.at(barcode_batches[i][b]),
               max_flips,
               do_grad ? &grad_b : nullptr
             );
-            erctc_child[b]                      = std::get<0>(erctc); // expected read count
-            erctc_child[b + N_barcodes_batch]   = std::get<1>(erctc); // expected corrected count
-            erctc_child[b + 2*N_barcodes_batch] = std::get<2>(erctc); // expected true count
+            erchc_child[b]                      = std::get<0>(erchc); // expected read count
+            erchc_child[b + N_barcodes_batch]   = std::get<1>(erchc); // expected corrected count
+            erchc_child[b + 2*N_barcodes_batch] = std::get<2>(erchc); // expected hit count
             if (do_grad) {
               std::copy(grad_b.begin(), grad_b.end(),
-                        erctc_child.begin() + 3*N_barcodes_batch + b*n_params);
+                        erchc_child.begin() + 3*N_barcodes_batch + b*n_params);
             }
           } 
           
           // Send result 
-          const char* buffer        = reinterpret_cast<const char*>(erctc_child.data());
-          size_t      nbytes        = sizeof(double) * erctc_child.size();
+          const char* buffer        = reinterpret_cast<const char*>(erchc_child.data());
+          size_t      nbytes        = sizeof(double) * erchc_child.size();
           size_t      total_written = 0;
           while (total_written < nbytes) {
             ssize_t n_written = write(
@@ -714,11 +714,11 @@ std::tuple<std::vector<double>, std::vector<double>, std::vector<double>> expect
       for (int i = 0; i < n_forks; i++) {
         int N_barcodes_batch = barcode_batches[i].size();
         int payload_size     = (do_grad ? 3 + n_params : 3) * N_barcodes_batch;
-        std::vector<double> erctc_child(payload_size, 0.0);
+        std::vector<double> erchc_child(payload_size, 0.0);
         
         // Read the row from the pipe into the buffer
-        char*  buffer     = reinterpret_cast<char*>(erctc_child.data());
-        size_t nbytes     = sizeof(double) * erctc_child.size();
+        char*  buffer     = reinterpret_cast<char*>(erchc_child.data());
+        size_t nbytes     = sizeof(double) * erchc_child.size();
         size_t total_read = 0;
         while (total_read < nbytes) {
           ssize_t n_read = read(
@@ -747,13 +747,13 @@ std::tuple<std::vector<double>, std::vector<double>, std::vector<double>> expect
         
         for (int b = 0; b < N_barcodes_batch; ++b) {
           int bc_idx = barcode_batches[i][b];
-          erc[bc_idx] += erctc_child[b];
-          ecc[bc_idx] += erctc_child[b + N_barcodes_batch];
-          etc[bc_idx] += erctc_child[b + 2*N_barcodes_batch];
+          erc[bc_idx] += erchc_child[b];
+          ecc[bc_idx] += erchc_child[b + N_barcodes_batch];
+          ehc[bc_idx] += erchc_child[b + 2*N_barcodes_batch];
           if (do_grad) {
             std::copy(
-              erctc_child.begin() + 3*N_barcodes_batch + b*n_params,
-              erctc_child.begin() + 3*N_barcodes_batch + (b+1)*n_params,
+              erchc_child.begin() + 3*N_barcodes_batch + b*n_params,
+              erchc_child.begin() + 3*N_barcodes_batch + (b+1)*n_params,
               (*grad_ecc).begin() + bc_idx * n_params
             );
           }
@@ -770,23 +770,23 @@ std::tuple<std::vector<double>, std::vector<double>, std::vector<double>> expect
       std::vector<double> grad_b(do_grad ? n_params : 0, 0.0); // reused per-barcode gradient buffer
       for (int b : barcode_batches[0]) {
         if (do_grad) std::fill(grad_b.begin(), grad_b.end(), 0.0);
-        std::tuple<double, double, double> erctc = expected_bc_count(
-          true_barcodes[b],
-          fr, bc_counts_true, true_barcodes, 
+        std::tuple<double, double, double> erchc = expected_bc_count(
+          barcodes[b],
+          fr, bc_counts, barcodes, 
           correction_table_inverted.at(b),
           max_flips,
           do_grad ? &grad_b : nullptr
         );
-        erc[b] = std::get<0>(erctc); // expected read count
-        ecc[b] = std::get<1>(erctc); // expected corrected count
-        etc[b] = std::get<2>(erctc); // expected true counts
+        erc[b] = std::get<0>(erchc); // expected read count
+        ecc[b] = std::get<1>(erchc); // expected corrected count
+        ehc[b] = std::get<2>(erchc); // expected hit counts
         if (do_grad) {
           std::copy(grad_b.begin(), grad_b.end(), (*grad_ecc).begin() + b * n_params);
         }
       }
     }
     
-    return {erc, ecc, etc};
+    return {erc, ecc, ehc};
   }
 
 // Estimate misread loss scalar 
@@ -844,7 +844,7 @@ static double mQC_msle(
     std::vector<double>  grad_ecc_flat;
     if (do_grad) grad_ecc_flat.assign(N_barcodes * n_params, 0.0);
     
-    auto erctc = expected_bc_counts(
+    auto erchc = expected_bc_counts(
       fr,
       d->bc_counts_true,
       d->cb.barcodes,
@@ -854,11 +854,11 @@ static double mQC_msle(
       do_grad ? &grad_ecc_flat : nullptr
     );
     
-    double msle = compute_msle(d->bc_counts, std::get<1>(erctc));
+    double msle = compute_msle(d->bc_counts, std::get<1>(erchc));
     
     if (do_grad) {
       std::fill(grad.begin(), grad.end(), 0.0);
-      const auto& ecc = std::get<1>(erctc);
+      const auto& ecc = std::get<1>(erchc);
       for (int b = 0; b < N_barcodes; ++b) {
         // Chain rule: ∂MSLE/∂θ_k = (1/N_B) * 2*(log(ecc_b+1)-log(obs_b+1))/(ecc_b+1) * ∂ecc_b/∂θ_k
         double coeff = 2.0 * (std::log(ecc[b] + 1.0) - std::log((double)d->bc_counts[b] + 1.0))
@@ -878,15 +878,15 @@ static double mQC_msle(
       }
       // Save eval history 
       d->eval_results.msle_hist.push_back(msle);
-      d->eval_results.etc = std::get<2>(erctc);
-      d->eval_results.ecc = std::get<1>(erctc);
-      d->eval_results.erc = std::get<0>(erctc);
+      d->eval_results.ehc = std::get<2>(erchc);
+      d->eval_results.ecc = std::get<1>(erchc);
+      d->eval_results.erc = std::get<0>(erchc);
       // Compute and save expected CR and PPV for each barcode
       d->eval_results.CR  = std::vector<double>(N_barcodes, 0.0);
       d->eval_results.PPV = std::vector<double>(N_barcodes, 0.0);
       for (int i = 0; i < N_barcodes; ++i) {
-        d->eval_results.CR[i]  = std::get<1>(erctc)[i] > 0.0 ? std::get<0>(erctc)[i] / std::get<1>(erctc)[i] : 0.0;
-        d->eval_results.PPV[i] = std::get<1>(erctc)[i] > 0.0 ? std::get<2>(erctc)[i] / std::get<1>(erctc)[i] : 0.0;
+        d->eval_results.CR[i]  = std::get<1>(erchc)[i] > 0.0 ? std::get<0>(erchc)[i] / std::get<1>(erchc)[i] : 0.0;
+        d->eval_results.PPV[i] = std::get<1>(erchc)[i] > 0.0 ? std::get<2>(erchc)[i] / std::get<1>(erchc)[i] : 0.0;
       }
       // Save best_msle
       d->best_msle = msle;
@@ -957,8 +957,8 @@ List mQC(
     }
     
     // Initialize matrices to hold results 
-    NumericMatrix erctc_plus(N_barcodes, 5);
-    colnames(erctc_plus) = CharacterVector({"erc", "ecc", "etc", "CR", "PPV"});
+    NumericMatrix erchc_plus(N_barcodes, 5);
+    colnames(erchc_plus) = CharacterVector({"erc", "ecc", "ehc", "CR", "PPV"});
     NumericVector fr(n);
     
     // Run L-BFGS via nlopt
@@ -986,11 +986,11 @@ List mQC(
     // Pack results
     for (int k = 0; k < (int)n; ++k) {fr(k)  = x0[k];}
     for (int i = 0; i < N_barcodes; ++i) {
-      erctc_plus(i, 0) = STdata.eval_results.erc[i];
-      erctc_plus(i, 1) = STdata.eval_results.ecc[i];
-      erctc_plus(i, 2) = STdata.eval_results.etc[i];
-      erctc_plus(i, 3) = STdata.eval_results.CR[i];
-      erctc_plus(i, 4) = STdata.eval_results.PPV[i];
+      erchc_plus(i, 0) = STdata.eval_results.erc[i];
+      erchc_plus(i, 1) = STdata.eval_results.ecc[i];
+      erchc_plus(i, 2) = STdata.eval_results.ehc[i];
+      erchc_plus(i, 3) = STdata.eval_results.CR[i];
+      erchc_plus(i, 4) = STdata.eval_results.PPV[i];
     }
     
     return List::create(
@@ -1002,7 +1002,7 @@ List mQC(
         _["count_observed"]   = STdata.bc_counts
       ),
       _["fliprates"]          = fr,
-      _["erctc_plus"]         = erctc_plus,
+      _["erchc_plus"]         = erchc_plus,
       _["msle"]               = minf
     );
   }
@@ -1024,27 +1024,32 @@ std::vector<int> simulate_spots_for_barcode_b(
     
     // Barcode info
     const int N_barcodes = barcodes.size();
-    const int N_bits = noised_corr1_Cholesky.cols();
+    const int N_bits     = noised_corr1_Cholesky.cols();
     
-    // Vector to hold read, corrected, and true counts for each barcode
-    std::vector<int> rct_counts(3 * N_barcodes, 0); 
-    const int read_offset = 0;
-    const int corrected_offset = N_barcodes;
-    const int true_offset = 2 * N_barcodes;
+    // Vector to hold read, corrected, and hit counts for each barcode
+    std::vector<int> rch_counts(3 * N_barcodes, 0); 
+    const int        read_offset      = 0;
+    const int        corrected_offset = N_barcodes;
+    const int        hit_offset       = 2 * N_barcodes;
     
     if (count >= 1) {
       
       // Sample luminance levels from multivariate normal 
       // ... take standard normal samples
-      int n = count;
       int d = N_bits;
-      std::vector<double> Z_flat(n*d);
+      std::vector<double> Z_flat(count*d);
       std::normal_distribution<double> norm(0.0, 1.0);
-      for (int i = 0; i < n*d; ++i) {Z_flat[i] = norm(rng);}
+      for (int i = 0; i < count*d; ++i) {Z_flat[i] = norm(rng);}
       // ... correlate + shift mean
       std::vector<std::vector<double>> lum(N_bits, std::vector<double>(count)); // outer vector (cols) as bits, index of inner (rows) as spots
       for (int j = 0; j < N_bits; ++j) {
+        // Extract bit j of barcode b
+        int bit = (barcodes[b] >> j) & 1ULL;
+        // ... for each spot i with true identity of barcode b ...
         for (int i = 0; i < count; ++i) {
+          // Set luminance of bit j for spot i according to expected bit value: 0 -> -1, 1 ->  1
+          lum[j][i] += (double)(bit * 2.0 - 1.0);
+          // Apply noise in accordance with the expected flip rate for bit j and bit-flip correlations
           for (int k = 0; k < N_bits; ++k) {
             int bit_k = (barcodes[b] >> k) & 1ULL;
             if (bit_k) {
@@ -1053,10 +1058,7 @@ std::vector<int> simulate_spots_for_barcode_b(
               lum[j][i] += Z_flat[i * N_bits + k] * noised_corr0_Cholesky(k, j);
             }
           }
-          // Extract bit 
-          int bit = (barcodes[b] >> j) & 1ULL;
-          // Convert into bit mean: 0 -> -1, 1 ->  1
-          lum[j][i] += (double)(bit * 2.0 - 1.0);
+          
         }
       }
       
@@ -1065,7 +1067,7 @@ std::vector<int> simulate_spots_for_barcode_b(
         
         // Decode luminance values and pack into barcode integer
         uint64_t spot_bc = 0;
-        for (int b = 0; b < N_bits; ++b) {spot_bc |= (uint64_t)(lum[b][k] > 0.0) << b;}
+        for (int j = 0; j < N_bits; ++j) {spot_bc |= (uint64_t)(lum[j][k] > 0.0) << j;}
         uint64_t spot_bc_corrected = spot_bc;
         int label_corrected;
         int label_read = -1;
@@ -1082,16 +1084,16 @@ std::vector<int> simulate_spots_for_barcode_b(
         }
         
         // Add (accumulate) labels
-        if (label_read >= 0) {++rct_counts[read_offset + label_read];}
+        if (label_read >= 0) {++rch_counts[read_offset + label_read];}
         if (label_corrected >= 0) {
-          ++rct_counts[corrected_offset + label_corrected];
-          if (label_corrected == b) {++rct_counts[true_offset + label_corrected];}
+          ++rch_counts[corrected_offset + label_corrected];
+          if (label_corrected == b) {++rch_counts[hit_offset + label_corrected];}
         }
         
       }
     }
     
-    return rct_counts;
+    return rch_counts;
   }
 
 SpotSim make_SpotSim(
@@ -1125,7 +1127,7 @@ SpotSim make_SpotSim(
     std::vector<std::vector<double>> bit_noise(N_barcodes, std::vector<double>(N_bits));
     for (int i = 0; i < N_barcodes; ++i) {
       for (int j = 0; j < N_bits; ++j) {
-        // Extract bit ... barcode i, bit b
+        // Extract bit ... barcode i, bit j
         int bit = (cb.barcodes[i] >> j) & 1ULL;
         // Convert: 0 -> -1, 1 ->  1
         double m = (double)bit * 2.0 - 1.0;
@@ -1145,6 +1147,7 @@ SpotSim make_SpotSim(
     }
     
     // Build noised covariance matrices and their Cholesky decompositions for each barcode
+    // STOPPED HERE! NOT CORRECT. Can't just plug fr.corr1 in. At least, must be explicit: the correlation between luminance noise is not the same as the correlation in bit-flips!! As written above, fr.corr1 and fr.corr0 are not luminance noise correlation (must correct that comment), they are bit-flip correlations. Must invert the relationship I proved earlier to get the continuous-valued luminance noise correlations which would produce the stipulated bit-flip correlations. 
     Rcpp::Rcout << "Building noised covariance matrices and their Cholesky decomposition for each barcode." << std::endl; 
     std::vector<MatrixXd> noised_corr1_Cholesky_per_barcode(N_barcodes);
     std::vector<MatrixXd> noised_corr0_Cholesky_per_barcode(N_barcodes);
@@ -1196,7 +1199,7 @@ SpotSim make_SpotSim(
     // For each barcode, simulate and decode spot counts
     Rcpp::Rcout << "Simulating and decoding spot counts for each barcode." << std::endl; 
     int cache_size = 3 * N_barcodes;
-    std::vector<int> rct_counts(cache_size, 0);
+    std::vector<int> rch_counts(cache_size, 0);
     if (n_forks > 1) {
       // Run in parallel with forking
       
@@ -1222,7 +1225,7 @@ SpotSim make_SpotSim(
               close(pipes[j][1]);
             }
           }
-          std::vector<int> rct_counts_child(cache_size, 0);
+          std::vector<int> rch_counts_child(cache_size, 0);
           
           for (int b : barcode_batches[i]) {
             std::mt19937 rng(ran_seed + i*n_forks + b);
@@ -1235,11 +1238,11 @@ SpotSim make_SpotSim(
               cb.barcodes, 
               rng
             ); 
-            for (int j = 0; j < cache_size; ++j) {rct_counts_child[j] += temp_vec[j];}
+            for (int j = 0; j < cache_size; ++j) {rch_counts_child[j] += temp_vec[j];}
           }
           
           // Send result 
-          const char* buffer = reinterpret_cast<const char*>(rct_counts_child.data());
+          const char* buffer = reinterpret_cast<const char*>(rch_counts_child.data());
           size_t nbytes = sizeof(int) * cache_size;
           size_t total_written = 0;
           while (total_written < nbytes) {
@@ -1297,7 +1300,7 @@ SpotSim make_SpotSim(
           total_read += static_cast<size_t>(n_read);
         }
         
-        for (int j = 0; j < cache_size; ++j) {rct_counts[j] += temp_vec[j];}
+        for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
         close(pipes[i][0]);           // Close read end
         int status;
         waitpid(pids[i], &status, 0);
@@ -1318,23 +1321,23 @@ SpotSim make_SpotSim(
           cb.barcodes, 
           rng
         ); 
-        for (int j = 0; j < cache_size; ++j) {rct_counts[j] += temp_vec[j];}
+        for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
       }
     }
     
     // Resize vectors to count spots per barcode
     sim.read_counts.resize(N_barcodes, 0);
     sim.corrected_counts.resize(N_barcodes, 0);
-    sim.true_counts.resize(N_barcodes, 0);
+    sim.hit_counts.resize(N_barcodes, 0);
     
     // Parse out accumulations to spot sim
     const int read_offset      = 0;
     const int corrected_offset = N_barcodes;
-    const int true_offset      = 2 * N_barcodes;
+    const int hit_offset      = 2 * N_barcodes;
     for (int b = 0; b < N_barcodes; b++) {
-      sim.read_counts[b]      = rct_counts[read_offset + b];
-      sim.corrected_counts[b] = rct_counts[corrected_offset + b];
-      sim.true_counts[b]      = rct_counts[true_offset + b];
+      sim.read_counts[b]      = rch_counts[read_offset + b];
+      sim.corrected_counts[b] = rch_counts[corrected_offset + b];
+      sim.hit_counts[b]       = rch_counts[hit_offset + b];
     }
     
     return sim;
@@ -1446,9 +1449,11 @@ List test_fr_recovery(
       // ... extract flip-rate vector (size n)
       fr_est(s,_)              = Rcpp::as<NumericVector>(res["fliprates"]);
       // ... and ecc and PPV vectors (size N_barcodes)
-      NumericMatrix erctc_plus = res["erctc_plus"];
-      ecc_est(s,_)             = NumericVector(erctc_plus(_, 1));
-      PPV_est(s,_)             = NumericVector(erctc_plus(_, 4));
+      NumericMatrix erchc_plus = res["erchc_plus"];
+      ecc_est(s,_)             = NumericVector(erchc_plus(_, 1));
+      PPV_est(s,_)             = NumericVector(erchc_plus(_, 4));
+      
+      // ecc_est, PPV_est, erchc_plus are computed analytically from flip rates and ground-truth counts
       
       // Test 1: ... Want colMeans(ecc_est) ... eh, no, colMeans(sim_cnt) ... to approach ecc_expected (and same with colMeans(PPV_est) and PPV_expected)
       //   sim_cnt depends only on the flip rates and the stochasticity of the simulation, while ecc_est also depends on the model fit of flip rates
