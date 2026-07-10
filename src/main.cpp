@@ -506,10 +506,9 @@ double TR(
       bit_vec[i]  = (bc              >> i) & 1ULL;
       flip_vec[i] = (transform_flips >> i) & 1ULL;
       for (int j = 0; j < i; ++j) {
-        if (bit_vec[i] & flip_vec[j]) {
-          log_inv_corr[i] += std::log(1.0 - fr.corr1[i * (i-1) / 2 + j]);
-        } else if (flip_vec[j]) {
-          log_inv_corr[i] += std::log(1.0 - fr.corr0[i * (i-1) / 2 + j]);
+        if (flip_vec[j]) {
+          int ij = i * (i-1) / 2 + j;
+          log_inv_corr[i] += bit_vec[i] ? std::log(1.0 - fr.corr1[ij]) : std::log(1.0 - fr.corr0[ij]);
         }
       }
       // Log of the correlation-adjusted flip rate for bit i:
@@ -518,7 +517,7 @@ double TR(
       // Guard: clamp adjusted flip probability to (0, 1) so both branches remain defined.
       //   If correlations push the adjusted rate above 1 the model is undefined; clamp to
       //   the largest representable value strictly below 1 so log1p(-p) stays finite.
-      clamped[i]         = (laf >= 0.0);
+      clamped[i]          = (laf >= 0.0);
       log_adj_flip_vec[i] = clamped[i] ? std::log(1.0 - std::numeric_limits<double>::epsilon()) : laf;
       if (flip_vec[i]) {
         log_tr += log_adj_flip_vec[i];
@@ -582,7 +581,7 @@ std::tuple<double, double, double> expected_bc_count(
         double scale = (double)bc_counts[j];
         double tr    = 0.0;
         for (int i = 0; i < N_correctable; ++i) {
-          // Get bit-flips required to transform the true barcode into the misread barcode
+          // Get bit-flips required to transform the true barcode into the (mis)read barcode
           uint64_t flips_to_BOI = (barcodes[j] ^ corrected_to_BOI[i]) & ((1ULL << N_bits) - 1);
           // Check hamming distance 
           if (__builtin_popcountll(flips_to_BOI) > max_flips) {continue;}
@@ -1011,178 +1010,13 @@ List mQC(
 
 /*
  * *********************************************************************************************************************
- * Correlation matrix functions
- */
-
-// Multivariate normal CDF, upper tail
-double mvnorm_cdf_uppertail(
-    const NumericVector& threshold, 
-    const NumericMatrix& sigma    // covariance matrix of dimension n less than 1000
-  ) {
-    
-    if (sigma.nrow() != sigma.ncol()) {Rcpp::stop("Covariance matrix must be square");}
-    if (sigma.nrow() >= 1000) {Rcpp::stop("Covariance matrix must be less than 1000x1000");}
-    if (sigma.nrow() != threshold.size()) {Rcpp::stop("Matrix diagonal and threshold vector must be same length");}
-    
-    Function pmvnorm("pmvnorm", Environment::namespace_env("mvtnorm"));
-    // ... uses Genz algorithm
-    
-    double prob = as<double>(
-      pmvnorm( // by default, lower = -Inf, upper = Inf, and mean = 0.
-        Named("lower") = threshold, 
-        Named("sigma") = sigma, 
-        Named("keepAttr") = false
-      )
-    );
-    
-    return prob;
-    
-  }
-
-// Normal CDF, with inverse
-double norm_cdf(
-    double x,
-    double mu,
-    double sd,
-    bool   inverse
-  ) {
-    double xc = x;
-    using boost::math::normal; 
-    normal standard_normal(mu, sd);
-    if (inverse) {
-      if (xc < 1e-10) {xc = 1e-10;}
-      if (xc > 1 - 1e-10) {xc = 1.0 - 1e-10;}
-      return boost::math::quantile(standard_normal, xc);
-    } else {
-      return boost::math::cdf(standard_normal, xc);
-    }
-  }
-
-// For estimating sigma for dichotomized Gaussian simulation
-NumericVector dg_sigma_formula(
-    double               threshold, // threshold for dichotomization
-    const NumericVector& cov,       // desired covarance after dichotomization
-    const NumericMatrix& sigma      // covariance matrix of multivariate Gaussian
-  ) {
-    // We know threshold and cov. By finding the sigma which sends this function 
-    //   to zero, we can find the covariance needed for dichotomized Gaussian simulation
-   
-    // Check dimension
-    int dim  = sigma.nrow();
-    if (dim != sigma.ncol()) {Rcpp::stop("Covariance matrix must be square");}
-    if (dim != cov.size())   {Rcpp::stop("Covariance vector must have the same length as sigma diagonal");}
-    
-    // Find probability of a point being above the threshold along all dimensions
-    double Phi2_upper = mvnorm_cdf_uppertail(
-      Rcpp::rep(threshold, dim), 
-      sigma
-    );
-   
-    // Find probability of a point being below the threshold along one dimension
-    double Phi = norm_cdf(
-      threshold, 
-      0.0,     // mean
-      1.0,     // sd
-      false    // return inverse? No, return cdf
-    );
-    
-    // Desired sigma will be the one which sends all elements to zero
-    //  Formula: cov = Phi2_upper - (1 - Phi) * (1 - Phi) is derived as follows: 
-    //   By definition of cov, cov = E[X1*X2] - E[X1]*E[X2].
-    //   In this case, E[X1] = E[X2] = P(X > threshold) = 1 - Phi.
-    //   X1*X2 != 0 only if both X1 and X2 > threshold, which occurs with probability Phi2_upper.
-    NumericVector residuals(dim);
-    for (int i = 0; i < dim; i++) {
-      residuals[i] = cov[i] - Phi2_upper + (1.0 - Phi) * (1.0 - Phi);
-    }
-    
-    return residuals;
-    
-  }
-
-// Wrapper for use with find-root-bisection algorithm 
-double dg_sigma_formula_scalar(
-    double threshold,               // threshold for dichotomization
-    double cov,                     // desired covarance after dichotomization
-    double sigma                    // Gaussian covariance
-  ) {
-    
-    // Construct covariance matrix sigma (2x2)
-    NumericMatrix sigmaMat(2, 2);
-    sigmaMat(_,0) = NumericVector::create(1.0, sigma);
-    sigmaMat(_,1) = NumericVector::create(sigma, 1.0);
-    
-    // Include self-covariance on front, which is the variance, sd^2
-    //   The Gaussian is normal, so mean is zero and sd is 1, so variance is 1
-    NumericVector cov1 = {1.0, cov};
-    
-    // Evaluate formula and return second value
-    NumericVector residual = dg_sigma_formula(threshold, cov1, sigmaMat);
-    // Return only the second element, corresponding to cov
-    return residual[1]; 
-    
-  }
-
-// Function to find sigma by root bisection 
-double dg_find_sigma_RootBisection(
-    double threshold,               // threshold for dichotomization
-    double cov                      // desired covarance after dichotomization
-  ) {
-    
-    // Set search parameters 
-    const int max_iter = 50; 
-    const double tol = 1e-4;
-    
-    // Initiate sigmas
-    double sigma_lower = -0.999;
-    double sigma_upper = 0.999;
-    
-    // Evaluate formula
-    double fx_lower = dg_sigma_formula_scalar(threshold, cov, sigma_lower);
-    double fx_upper = dg_sigma_formula_scalar(threshold, cov, sigma_upper);
-    
-    // Run checks 
-    if (abs(fx_lower) < tol) {return sigma_lower;}
-    else if (abs(fx_upper) < tol) {return sigma_upper;}
-    else if (fx_lower * fx_upper > tol) {return 0.0;} // Both initial covariance values lie on same side of zero crossing
-    
-    // Run bisection
-    double fx = std::numeric_limits<double>::infinity();
-    double sigma_mid;
-    int iter = 0;
-    while (abs(fx) > tol && iter < max_iter) {
-      
-      // Find midpoint
-      sigma_mid = (sigma_lower + sigma_upper)/2.0;
-      fx = dg_sigma_formula_scalar(threshold, cov, sigma_mid);
-      
-      // Update bounds
-      if (fx > 0.0) {
-        sigma_lower = sigma_mid;
-      } else {
-        sigma_upper = sigma_mid;
-      }
-      
-      // Update iteration
-      iter++;
-      
-    }
-    
-    return sigma_mid; 
-    
-  }
-
-
-/*
- * *********************************************************************************************************************
- * DG simulation functions and related stuff
+ * Simulation functions
  */
 
 std::vector<int> simulate_spots_for_barcode_b(
     int                                      b,                     // ID of barcode to simulate
     int                                      count,                 // Number of spots to simulate
-    const MatrixXd&                          noised_corr1_Cholesky,
-    const MatrixXd&                          noised_corr0_Cholesky,
+    const FlipRates&                         fr,
     const std::unordered_map<uint64_t, int>& correction_table, 
     const std::vector<uint64_t>&             barcodes, 
     std::mt19937&                            rng
@@ -1190,7 +1024,7 @@ std::vector<int> simulate_spots_for_barcode_b(
     
     // Barcode info
     const int N_barcodes = barcodes.size();
-    const int N_bits     = noised_corr1_Cholesky.cols();
+    const int N_bits     = fr.rate10.size(); 
     
     // Vector to hold read, corrected, and hit counts for each barcode
     std::vector<int> rch_counts(3 * N_barcodes, 0); 
@@ -1198,65 +1032,52 @@ std::vector<int> simulate_spots_for_barcode_b(
     const int        corrected_offset = N_barcodes;
     const int        hit_offset       = 2 * N_barcodes;
     
-    if (count >= 1) {
+    // Simulate the spots for this barcode
+    // ... based on TR function
+    for (int k = 0; k < count; ++k) {
       
-      // Sample luminance levels from multivariate normal 
-      // ... take standard normal samples
-      int d = N_bits;
-      std::vector<double> Z_flat(count*d);
-      std::normal_distribution<double> norm(0.0, 1.0);
-      for (int i = 0; i < count*d; ++i) {Z_flat[i] = norm(rng);}
-      // ... correlate + shift mean
-      std::vector<std::vector<double>> lum(N_bits, std::vector<double>(count)); // outer vector (cols) as bits, index of inner (rows) as spots
-      for (int j = 0; j < N_bits; ++j) {
-        // Extract bit j of barcode b
-        int bit = (barcodes[b] >> j) & 1ULL;
-        // ... for each spot i with true identity of barcode b ...
-        for (int i = 0; i < count; ++i) {
-          // Set luminance of bit j for spot i according to expected bit value: 0 -> -1, 1 ->  1
-          lum[j][i] += (double)(bit * 2.0 - 1.0);
-          // Apply noise in accordance with the expected flip rate for bit j and bit-flip correlations
-          for (int k = 0; k < N_bits; ++k) {
-            int bit_k = (barcodes[b] >> k) & 1ULL;
-            if (bit_k) {
-              lum[j][i] += Z_flat[i * N_bits + k] * noised_corr1_Cholesky(k, j);
-            } else {
-              lum[j][i] += Z_flat[i * N_bits + k] * noised_corr0_Cholesky(k, j);
-            }
+      // Initialize vector to track flips
+      std::vector<int> flips(N_bits, 0);
+      for (int i = 0; i < N_bits; ++i) {
+        // Extract bit i of barcode b
+        int bit = (barcodes[b] >> i) & 1ULL;
+        // Compute correlation adjustment based on previous flips
+        double log_inv_corr = 0.0; 
+        for (int j = 0; j < i; ++j) {
+          if (flips[j]) {
+            int ij = i * (i-1) / 2 + j;
+            log_inv_corr += bit ? std::log(1.0 - fr.corr1[ij]) : std::log(1.0 - fr.corr0[ij]);
           }
-          
         }
+        // Compute and clamp log of flip rate for this bit
+        double FR = (bit ? fr.log_rate10[i] : fr.log_rate01[i]) - log_inv_corr;
+        if (FR >= 0.0) {FR = std::log(1.0 - std::numeric_limits<double>::epsilon());}
+        // Randomly draw flip or no-flip based on this flip rate
+        std::bernoulli_distribution bern(std::exp(FR));
+        flips[i] = static_cast<int>(bern(rng));
+      }
+      // Flip drawn bits in the true barcode
+      uint64_t spot_bc_read = barcodes[b] ^ pack(flips);
+      
+      // Correct decoded label
+      auto it              = correction_table.find(spot_bc_read);
+      int  label_corrected = it == correction_table.end() ? -1 : it->second;
+      int  label_read      = -1;
+      
+      // ... and correct decoded barcode
+      uint64_t spot_bc_corrected = spot_bc_read;
+      if (label_corrected >= 0) {
+        spot_bc_corrected = barcodes[label_corrected];
+        if (spot_bc_corrected == spot_bc_read) {label_read = label_corrected;}
       }
       
-      // Simulate the spots for this barcode
-      for (int k = 0; k < count; ++k) {
-        
-        // Decode luminance values and pack into barcode integer
-        uint64_t spot_bc = 0;
-        for (int j = 0; j < N_bits; ++j) {spot_bc |= (uint64_t)(lum[j][k] > 0.0) << j;}
-        uint64_t spot_bc_corrected = spot_bc;
-        int label_corrected;
-        int label_read = -1;
-        
-        // Correct decoded label
-        auto it = correction_table.find(spot_bc);
-        if (it == correction_table.end()) {label_corrected = -1;} // uncorrectable
-        else {label_corrected = it->second;}
-        
-        // ... and correct decoded barcode
-        if (label_corrected >= 0) {
-          spot_bc_corrected = barcodes[label_corrected];
-          if (spot_bc_corrected == spot_bc) {label_read = label_corrected;}
-        }
-        
-        // Add (accumulate) labels
-        if (label_read >= 0) {++rch_counts[read_offset + label_read];}
-        if (label_corrected >= 0) {
-          ++rch_counts[corrected_offset + label_corrected];
-          if (label_corrected == b) {++rch_counts[hit_offset + label_corrected];}
-        }
-        
+      // Add (accumulate) labels
+      if (label_read >= 0) {++rch_counts[read_offset + label_read];}
+      if (label_corrected >= 0) {
+        ++rch_counts[corrected_offset + label_corrected];
+        if (label_corrected == b) {++rch_counts[hit_offset + label_corrected];}
       }
+      
     }
     
     return rch_counts;
@@ -1279,87 +1100,11 @@ SpotSim make_SpotSim(
     int N_barcodes  = cb.barcodes.size();
     int N_bits      = cb.N_bits;
     
-    // Make bit_noise matrix 
-    // ... compute inverse of target flip rates using normal-distribution quantiles (inverse CDF)
-    Rcpp::Rcout << "Computing inverse of target flip rates using normal-distribution quantiles (inverse CDF)." << std::endl;
-    std::vector<double> rate10_inv(N_bits);
-    std::vector<double> rate01_inv(N_bits);
-    for (int i = 0; i < N_bits; ++i) {
-      rate10_inv[i] = R::qnorm(fr.rate10[i], 0.0, 1.0, 1, 0); // qnorm(p, mean = 0, sd = 1, lower_tail = true, log_p = false)
-      rate01_inv[i] = R::qnorm(1 - fr.rate01[i], 0.0, 1.0, 1, 0); 
-    }
-    // ... set bit noise by barcode
-    Rcpp::Rcout << "Setting bit noise by barcode." << std::endl; 
-    std::vector<std::vector<double>> bit_noise(N_barcodes, std::vector<double>(N_bits));
-    for (int i = 0; i < N_barcodes; ++i) {
-      for (int j = 0; j < N_bits; ++j) {
-        // Extract bit ... barcode i, bit j
-        int bit = (cb.barcodes[i] >> j) & 1ULL;
-        // Convert: 0 -> -1, 1 ->  1
-        double m = (double)bit * 2.0 - 1.0;
-        if (bit == 1) {
-          bit_noise[i][j] = -m / rate10_inv[j];
-        } else {  
-          bit_noise[i][j] = -m / rate01_inv[j];
-        }
-      }
-    }
-    
     // Construct batches of barcodes to simulate in parallel
     std::vector<std::vector<int>> barcode_batches(n_forks);
     for (int i = 0; i < N_barcodes; ++i) {barcode_batches[i % n_forks].push_back(i);}
     if (n_forks == 1 && barcode_batches[0].size() != N_barcodes) {
       Rcpp::stop("Error in batching barcodes for simulation. Expected all barcodes to be in one batch when n_forks=1.");
-    }
-    
-    // Build noised covariance matrices and their Cholesky decompositions for each barcode
-    // STOPPED HERE! NOT CORRECT. Can't just plug fr.corr1 in. At least, must be explicit: the correlation between luminance noise is not the same as the correlation in bit-flips!! As written above, fr.corr1 and fr.corr0 are not luminance noise correlation (must correct that comment), they are bit-flip correlations. Must invert the relationship I proved earlier to get the continuous-valued luminance noise correlations which would produce the stipulated bit-flip correlations. 
-    Rcpp::Rcout << "Building noised covariance matrices and their Cholesky decomposition for each barcode." << std::endl; 
-    std::vector<MatrixXd> noised_corr1_Cholesky_per_barcode(N_barcodes);
-    std::vector<MatrixXd> noised_corr0_Cholesky_per_barcode(N_barcodes);
-    MatrixXd              noised_corr1(N_bits, N_bits);
-    MatrixXd              noised_corr0(N_bits, N_bits);
-    for (int b = 0; b < N_barcodes; ++b) {
-      for (int i = 0; i < N_bits; ++i) {
-        for (int j = 0; j <= i; ++j) {
-          if (i == j) {
-            noised_corr1(i, j) = bit_noise[b][i] * bit_noise[b][i];
-            noised_corr0(i, j) = bit_noise[b][i] * bit_noise[b][i];
-          } else {
-            int k = i * (i - 1) / 2 + j;
-            noised_corr1(i, j) = bit_noise[b][i] * fr.corr1[k] * bit_noise[b][j];
-            noised_corr1(j, i) = noised_corr1(i, j);
-            noised_corr0(i, j) = bit_noise[b][i] * fr.corr0[k] * bit_noise[b][j];
-            noised_corr0(j, i) = noised_corr0(i, j);
-          }
-        }
-      }
-      // Cholesky decomposition
-      Eigen::LLT<MatrixXd> llt1(noised_corr1);
-      Eigen::LLT<MatrixXd> llt0(noised_corr0);
-      // ... check positive-definiteness
-      if (llt1.info() != Eigen::Success) {
-        Eigen::SelfAdjointEigenSolver<MatrixXd> es(noised_corr1);
-        double min_eval = es.eigenvalues().minCoeff();
-        Rcpp::Rcout << "Cholesky failure\n";
-        Rcpp::Rcout << "barcode: " << b << "\n";
-        Rcpp::Rcout << "min eigenvalue: " << min_eval << "\n" << std::endl;
-        Rcpp::stop(
-          "Cholesky failed in mvn sampling."
-        );
-      }
-      if (llt0.info() != Eigen::Success) {
-        Eigen::SelfAdjointEigenSolver<MatrixXd> es(noised_corr0);
-        double min_eval = es.eigenvalues().minCoeff();
-        Rcpp::Rcout << "Cholesky failure\n";
-        Rcpp::Rcout << "barcode: " << b << "\n";
-        Rcpp::Rcout << "min eigenvalue: " << min_eval << "\n" << std::endl;
-        Rcpp::stop(
-          "Cholesky failed in mvn sampling."
-        );
-      }
-      noised_corr1_Cholesky_per_barcode[b] = llt1.matrixL();
-      noised_corr0_Cholesky_per_barcode[b] = llt0.matrixL();
     }
     
     // For each barcode, simulate and decode spot counts
@@ -1398,8 +1143,7 @@ SpotSim make_SpotSim(
             std::vector<int> temp_vec = simulate_spots_for_barcode_b(
               b, 
               bc_counts[b], 
-              noised_corr1_Cholesky_per_barcode[b],
-              noised_corr0_Cholesky_per_barcode[b],
+              fr,
               correction_table, 
               cb.barcodes, 
               rng
@@ -1481,8 +1225,7 @@ SpotSim make_SpotSim(
         std::vector<int> temp_vec = simulate_spots_for_barcode_b(
           b, 
           bc_counts[b], 
-          noised_corr1_Cholesky_per_barcode[b],
-          noised_corr0_Cholesky_per_barcode[b],
+          fr,
           correction_table, 
           cb.barcodes, 
           rng
@@ -1499,11 +1242,11 @@ SpotSim make_SpotSim(
     // Parse out accumulations to spot sim
     const int read_offset      = 0;
     const int corrected_offset = N_barcodes;
-    const int hit_offset      = 2 * N_barcodes;
+    const int hit_offset       = 2 * N_barcodes;
     for (int b = 0; b < N_barcodes; b++) {
-      sim.read_counts[b]      = rch_counts[read_offset + b];
-      sim.corrected_counts[b] = rch_counts[corrected_offset + b];
-      sim.hit_counts[b]       = rch_counts[hit_offset + b];
+      sim.read_counts[b]       = rch_counts[read_offset + b];
+      sim.corrected_counts[b]  = rch_counts[corrected_offset + b];
+      sim.hit_counts[b]        = rch_counts[hit_offset + b];
     }
     
     return sim;
