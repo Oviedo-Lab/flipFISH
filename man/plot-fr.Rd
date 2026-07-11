@@ -2,16 +2,16 @@
 % Please edit documentation in R/main.R
 \name{plot.fr}
 \alias{plot.fr}
-\title{Plot estimated flip rates from \code{misread.qc} results}
+\title{Plot estimated flip rates from \code{misread.qc} or \code{sim.benchmark} results}
 \usage{
 plot.fr(qc)
 }
 \arguments{
-\item{qc}{List, results from misread.qc function.}
+\item{qc}{List, results from either the \code{misread.qc} function or the \code{sim.benchmark} function.}
 }
 \value{
-ggplot object showing distributions of estimated flip rates for each bit and flip type.
+ggplot object showing estimated flip rates for each bit and flip type; a distribution (violin plots) when \code{qc} comes from \code{sim.benchmark}, or point estimates when \code{qc} comes from \code{misread.qc}.
 }
 \description{
-This function takes the results from the misread.qc function and makes a plot showing the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1).
+This function takes the results from either the \code{misread.qc} function (a single point estimate of the bit-flip rates) or the \code{sim.benchmark} function (bit-flip rates estimated across simulation replicates) and makes a plot showing the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1). When given \code{sim.benchmark} output, the plot shows the distribution (violin plots) of estimates across replicates; when given \code{misread.qc} output, it shows the single point estimate for each bit.
 }
