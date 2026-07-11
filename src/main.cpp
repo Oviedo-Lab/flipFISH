@@ -1,6 +1,5 @@
 
 // Rcpp
-// [[Rcpp::depends(BH)]]
 // [[Rcpp::depends(RcppEigen)]]
 #include <Rcpp.h>
 #include <RcppEigen.h>
@@ -10,7 +9,6 @@
 #include <unistd.h>     // fork, pipe, read, write, close
 #include <sys/wait.h>   // waitpid
 #include <nlopt.hpp>    // L-BFGS and other gradient-based optimizers
-#include <boost/math/distributions/normal.hpp>
 using namespace Rcpp;
 using namespace Eigen;
 
@@ -35,8 +33,6 @@ struct EvalResults {
   std::vector<double> ehc;                 // expected hit count
   std::vector<double> ecc;                 // expected corrected count
   std::vector<double> erc;                 // expected read count
-  std::vector<double> CR;
-  std::vector<double> PPV;
   int                 n_evals = 0; 
 };
 
@@ -567,7 +563,7 @@ std::tuple<double, double, double> expected_bc_count(
     const std::vector<uint64_t>& barcodes,                    // Vector giving all possible true spot barcodes (genes, not blanks)
     const std::vector<uint64_t>& corrected_to_BOI,            // Vector of barcodes that would be corrected to barcode of interest (BOI)
     int                          max_flips, 
-    std::vector<double>*         grad_ecc_b        = nullptr
+    std::vector<double>*         grad_ecc_b = nullptr
   ) {
     int    N_bits          = fr.rate10.size();
     int    N_barcodes      = barcodes.size();
@@ -598,7 +594,7 @@ std::tuple<double, double, double> expected_bc_count(
     return {count_read, count_corrected, count_hit};
   }
 
-// Estimate expected barcode counts after correction, as a function of flip rates and true barcode counts, for all barcodes.
+// Estimate expected barcode counts (read, expected, and hit), as a function of flip rates and true barcode counts, for all barcodes.
 // grad_ecc (optional): pre-zeroed flat matrix stored row-major, size N_barcodes * n_params.
 //   When grad_ecc is non-null, ∂ecc[b]/∂params is accumulated into the slice (*grad_ecc)[b*n_params .. (b+1)*n_params-1].
 std::tuple<std::vector<double>, std::vector<double>, std::vector<double>> expected_bc_counts(
@@ -862,8 +858,7 @@ static double mQC_msle(
       const auto& ecc = std::get<1>(erchc);
       for (int b = 0; b < N_barcodes; ++b) {
         // Chain rule: ∂MSLE/∂θ_k = (1/N_B) * 2*(log(ecc_b+1)-log(obs_b+1))/(ecc_b+1) * ∂ecc_b/∂θ_k
-        double coeff = 2.0 * (std::log(ecc[b] + 1.0) - std::log((double)d->bc_counts[b] + 1.0))
-                       / (ecc[b] + 1.0) / (double)N_barcodes;
+        double coeff = 2.0 * (std::log(ecc[b] + 1.0) - std::log((double)d->bc_counts[b] + 1.0)) / (ecc[b] + 1.0) / (double)N_barcodes;
         for (int k = 0; k < n_params; ++k) {
           grad[k] += coeff * grad_ecc_flat[b * n_params + k];
         }
@@ -877,18 +872,11 @@ static double mQC_msle(
       if (call_n == 1 || call_n % d->report_freq == 0) {
         Rcpp::Rcout << "  eval " << call_n << ", msle: " << msle << std::endl;
       }
-      // Save eval history 
+      // Save eval results 
       d->eval_results.msle_hist.push_back(msle);
       d->eval_results.ehc = std::get<2>(erchc);
       d->eval_results.ecc = std::get<1>(erchc);
       d->eval_results.erc = std::get<0>(erchc);
-      // Compute and save expected CR and PPV for each barcode
-      d->eval_results.CR  = std::vector<double>(N_barcodes, 0.0);
-      d->eval_results.PPV = std::vector<double>(N_barcodes, 0.0);
-      for (int i = 0; i < N_barcodes; ++i) {
-        d->eval_results.CR[i]  = std::get<1>(erchc)[i] > 0.0 ? std::get<0>(erchc)[i] / std::get<1>(erchc)[i] : 0.0;
-        d->eval_results.PPV[i] = std::get<1>(erchc)[i] > 0.0 ? std::get<2>(erchc)[i] / std::get<1>(erchc)[i] : 0.0;
-      }
       // Save best_msle
       d->best_msle = msle;
     }
@@ -965,8 +953,7 @@ List mQC(
     // Run L-BFGS via nlopt
     double ftol_rel = 1e-8;
     double xtol_rel = 1e-6;
-    Rcpp::Rcout << "\nRunning L-BFGS (nlopt::LD_LBFGS)" << ", maxeval=" << maxeval 
-                << ", ftol_rel=" << ftol_rel << ", xtol_rel=" << xtol_rel << std::endl;
+    Rcpp::Rcout << "\nRunning L-BFGS (nlopt::LD_LBFGS)" << ", maxeval=" << maxeval << ", ftol_rel=" << ftol_rel << ", xtol_rel=" << xtol_rel << std::endl;
     nlopt::opt opt(nlopt::LD_LBFGS, n);
     opt.set_lower_bounds(lb);
     opt.set_upper_bounds(ub);
@@ -980,8 +967,7 @@ List mQC(
       nlopt::result res = opt.optimize(x0, minf);
       Rcpp::Rcout << "\nL-BFGS finished (result code " << (int)res << "), final msle: " << minf << std::endl;
     } catch (const std::exception& e) {
-      Rcpp::Rcout << "\nL-BFGS warning: " << e.what()
-                  << "\nProceeding with best parameters found so far." << std::endl;
+      Rcpp::Rcout << "\nL-BFGS warning: " << e.what() << "\nProceeding with best parameters found so far." << std::endl;
     }
    
     // Pack results
@@ -990,8 +976,8 @@ List mQC(
       erchc_plus(i, 0) = STdata.eval_results.erc[i];
       erchc_plus(i, 1) = STdata.eval_results.ecc[i];
       erchc_plus(i, 2) = STdata.eval_results.ehc[i];
-      erchc_plus(i, 3) = STdata.eval_results.CR[i];
-      erchc_plus(i, 4) = STdata.eval_results.PPV[i];
+      erchc_plus(i, 3) = STdata.eval_results.ecc[i] > 0.0 ? STdata.eval_results.erc[i] / STdata.eval_results.ecc[i] : NA_REAL;
+      erchc_plus(i, 4) = STdata.eval_results.ecc[i] > 0.0 ? STdata.eval_results.ehc[i] / STdata.eval_results.ecc[i] : NA_REAL;
     }
     
     return List::create(
@@ -1003,7 +989,7 @@ List mQC(
         _["count_observed"]   = STdata.bc_counts
       ),
       _["fliprates"]          = fr,
-      _["erchc_plus"]         = erchc_plus,
+      _["erchc_plus"]         = erchc_plus, // Values for read count, corrected count, hit count, CR, and PPV analytically implied by fr
       _["msle"]               = minf
     );
   }
@@ -1289,8 +1275,9 @@ List test_fr_recovery(
     // ... save original count column 
     NumericVector bc_counts_original(bc_counts(_, count_col)); 
     
-    // Grab and set counts ... uses observed corrected counts as ground-truth counts
+    // Use observed corrected counts as ground-truth counts for simulation
     std::vector<int> BCcounts = STdata.bc_counts;
+    // ... with blanks set to zero. 
     for (int i : STdata.cb.blanks) {BCcounts[i] = 0;}
     
     // Draw and pack random flip rates 
@@ -1301,8 +1288,8 @@ List test_fr_recovery(
     auto      FR         = draw_random_fr(STdata, pack_fr_priors(fliprate_priors));
     FlipRates fr         = pack_fr(FR, N_bits);
     
-    // Compute ground truth 
-    auto ground_truth = expected_bc_counts(
+    // Compute expected counts (read, corrected, hit) from simulation ground-truth
+    auto expected_in_sim = expected_bc_counts(
       fr, 
       BCcounts, 
       STdata.cb.barcodes, 
@@ -1310,17 +1297,30 @@ List test_fr_recovery(
       n_forks, 
       max_flips
     );
-    std::vector<double> ecc_expected(N_barcodes, 0.0); 
-    std::vector<double> PPV_expected(N_barcodes, 0.0);
+    std::vector<double> erc_exp = std::get<0>(expected_in_sim);
+    std::vector<double> ecc_exp = std::get<1>(expected_in_sim);
+    std::vector<double> ehc_exp = std::get<2>(expected_in_sim);
+    std::vector<double> CR__exp(N_barcodes, 0.0);
+    std::vector<double> PPV_exp(N_barcodes, 0.0);
     for (int i = 0; i < N_barcodes; ++i) {
-      ecc_expected[i]  = std::get<1>(ground_truth)[i];
-      PPV_expected[i]  = std::get<1>(ground_truth)[i] > 0.0 ? std::get<2>(ground_truth)[i] / std::get<1>(ground_truth)[i] : 0.0;
+      CR__exp[i] = ecc_exp[i] > 0.0 ? erc_exp[i] / ecc_exp[i] : NA_REAL;
+      PPV_exp[i] = ecc_exp[i] > 0.0 ? ehc_exp[i] / ecc_exp[i] : NA_REAL;
     }
     
     // Initialize matrices to hold results 
-    NumericMatrix fr_est(n_sims, n);
-    NumericMatrix sim_cnt(n_sims, N_barcodes);
+    // ... flip-rate estimates
+    NumericMatrix fr__est(n_sims, n);
+    // ... simulated counts
+    IntegerMatrix orc_sim(n_sims, N_barcodes);
+    IntegerMatrix occ_sim(n_sims, N_barcodes);
+    IntegerMatrix ohc_sim(n_sims, N_barcodes);
+    NumericMatrix CR__sim(n_sims, N_barcodes); 
+    NumericMatrix PPV_sim(n_sims, N_barcodes); 
+    // ... analytic estimates based of fits of simulation data
+    NumericMatrix erc_est(n_sims, N_barcodes); 
     NumericMatrix ecc_est(n_sims, N_barcodes); 
+    NumericMatrix ehc_est(n_sims, N_barcodes); 
+    NumericMatrix CR__est(n_sims, N_barcodes); 
     NumericMatrix PPV_est(n_sims, N_barcodes); 
     
     for (int s = 0; s < n_sims; ++s) {
@@ -1328,7 +1328,7 @@ List test_fr_recovery(
       // Simulate corrected reads from this data and stipulated set of flip rates 
       int s_plus = s + 1; 
       Rcpp::Rcout << "\n------ Running Pass Number " << s_plus << "/" << n_sims << " ------" << std::endl;
-      Rcpp::Rcout << "\nMaking dichotomized-Gaussian simulation with given data ..." << std::endl; 
+      Rcpp::Rcout << "\nMaking Bernoulli simulation with given data ..." << std::endl; 
       int ran_seed = 123;
       SpotSim sim = make_SpotSim(
         BCcounts, 
@@ -1341,7 +1341,11 @@ List test_fr_recovery(
       
       // Use simulation results to rewrite bc_counts
       for (int i = 0; i < N_barcodes; ++i) {
-        sim_cnt(s, i) = sim.corrected_counts[i];
+        orc_sim(s, i)           = sim.read_counts[i];
+        occ_sim(s, i)           = sim.corrected_counts[i];
+        ohc_sim(s, i)           = sim.hit_counts[i];
+        CR__sim(s, i)           = static_cast<double>(sim.read_counts[i]) / static_cast<double>(sim.corrected_counts[i]);
+        PPV_sim(s, i)           = static_cast<double>(sim.hit_counts[i]) / static_cast<double>(sim.corrected_counts[i]);
         bc_counts(i, rate_col) /= bc_counts_original(i) / static_cast<double>(std::max(1, sim.corrected_counts[i]));
         bc_counts(i, count_col) = static_cast<double>(sim.corrected_counts[i]);
       }
@@ -1355,30 +1359,52 @@ List test_fr_recovery(
         report_freq, maxeval,
         fliprate_priors
       );
-      // ... extract flip-rate vector (size n)
-      fr_est(s,_)              = Rcpp::as<NumericVector>(res["fliprates"]);
-      // ... and ecc and PPV vectors (size N_barcodes)
       NumericMatrix erchc_plus = res["erchc_plus"];
-      ecc_est(s,_)             = NumericVector(erchc_plus(_, 1));
-      PPV_est(s,_)             = NumericVector(erchc_plus(_, 4));
-      
-      // ecc_est, PPV_est, erchc_plus are computed analytically from flip rates and ground-truth counts
-      
-      // Test 1: ... Want colMeans(ecc_est) ... eh, no, colMeans(sim_cnt) ... to approach ecc_expected (and same with colMeans(PPV_est) and PPV_expected)
-      //   sim_cnt depends only on the flip rates and the stochasticity of the simulation, while ecc_est also depends on the model fit of flip rates
-      // Test 2: ... Want colMeans(fr_est) to approach FR
+      // ... extract flip-rate vector (size n)
+      fr__est(s,_) = Rcpp::as<NumericVector>(res["fliprates"]);
+      // ... and count vectors (size N_barcodes)
+      erc_est(s,_) = NumericVector(erchc_plus(_, 0));
+      ecc_est(s,_) = NumericVector(erchc_plus(_, 1));
+      ehc_est(s,_) = NumericVector(erchc_plus(_, 2));
+      CR__est(s,_) = NumericVector(erchc_plus(_, 3));
+      PPV_est(s,_) = NumericVector(erchc_plus(_, 4));
       
     }
     
     return List::create(
-      _["fr_est"]            = fr_est,
-      _["fr_stipulated"]     = FR,
-      _["PPV_est"]           = PPV_est,
-      _["PPV_expected"]      = PPV_expected,  // "Expected", given the stipulated flip rates
-      _["ecc_est"]           = ecc_est,       // These are expected corrected counts based on the flip rates fit to sim_cnt
-      _["ecc_expected"]      = ecc_expected,  // "Expected", given the stipulated flip rates
-      _["sim_counts"]        = sim_cnt        // These are (corrected) counts simulated directly from stipulated flip rates
+      // stipulated flip rates and expected counts, given the stipulated flip rates
+      _["fr_stip"] = FR,
+      _["erc_exp"] = erc_exp,
+      _["ecc_exp"] = ecc_exp,
+      _["ehc_exp"] = ehc_exp, 
+      _["CR__exp"] = CR__exp,
+      _["PPV_exp"] = PPV_exp,
+      // simulated counts
+      _["orc_sim"] = orc_sim,
+      _["occ_sim"] = occ_sim, 
+      _["ohc_sim"] = ohc_sim, 
+      _["CR__sim"] = CR__sim,
+      _["PPV_sim"] = PPV_sim, 
+      // ... analytic estimates based of fits of simulation data
+      _["fr__est"] = fr__est,
+      _["erc_est"] = erc_est,
+      _["ecc_est"] = ecc_est,
+      _["ehc_est"] = ehc_est,
+      _["CR__est"] = CR__est,
+      _["PPV_est"] = PPV_est
     );
+    
+    /*
+     * Test 1: By comparing _sim to _exp, can estimate the variation in observations (_sim) and how those 
+     *  observations compare to the expected counts (_exp). Expect observed observations (_sim) to cluster 
+     *  around the expected value (_exp).
+     *  
+     * Test 2: By comparing _est to _exp, can estimate how well the analytic model recovers the "true" (expected)
+     *  values from (simulated) observations.
+     * 
+     * Test 3: By comparing _sim to _est, can estimate how much the analytic model deviates from a naive count
+     *  of observations.
+     */
     
   }
 
