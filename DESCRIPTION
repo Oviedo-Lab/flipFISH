@@ -13,4 +13,4 @@ Imports: Rcpp (>= 1.0.13), RcppEigen
 LinkingTo: Rcpp, RcppEigen
 Depends: ggplot2
 SystemRequirements: NLopt
-RoxygenNote: 7.3.3
+Config/roxygen2/version: 8.0.0

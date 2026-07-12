@@ -109,11 +109,11 @@ t <- Sys.time()
 bm <- sim.benchmark(
     m1_summary_stats,                        # Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
     codebook,                                # Codebook with row names as barcodes and columns as bits, must have barcode names as row names
-    n_sims                           = 10,   # 100
-    n_forks                          = 5,
-    max_flips                        = 3,    # Suggest min of 6, 7 or 8 better
-    report_freq                      = 1,
-    maxeval                          = 100,   # Suggest min of 100, 150 or 250 probably better
+    n_sims                           = 100,   # 100
+    n_forks                          = 50,
+    max_flips                        = 6,    # Suggest min of 6, 7 or 8 better
+    report_freq                      = 10,
+    maxeval                          = 200,   # Suggest min of 100, 150 or 250 probably better
     max_correctable_Hamming_distance = NULL
     )
 d <- Sys.time() - t
@@ -128,7 +128,7 @@ cat("\ntime:", d, "seconds\n")
 n_sims <- nrow(bm$ecc_est)
 
 # Compare stipulated vs recovered flip rates
-l <- length(bm$fr_stip)
+l  <- length(bm$fr_stip)
 l2 <- length(bm$ecc_exp)
 fr_stip  <- rep(bm$fr_stip[1:56], each = n_sims) # vec
 fr__est  <- c(bm$fr__est[,1:56]) # matrix
@@ -203,13 +203,16 @@ shuffled <- matrix(NA, ncol = 11, nrow = n)
 
 for (i in 1:n) {
   
-  shuff <- sample(1:56, 56 * n_sims, replace = TRUE)
-  shuffled[i, 1] <- cor(fr_stip[shuff], fr__est)
+  shuff <- sample(1:56, 56, replace = FALSE)
+  fr_stip  <- rep(bm$fr_stip[shuff], each = n_sims) 
+  shuffled[i, 1] <- cor(fr_stip, fr__est)
   
-  shuff <- sample(1:(l-56), (l-56) * n_sims, replace = TRUE)
-  shuffled[i, 2] <- cor(cor_stip[shuff], cor__est)
+  shuff <- sample(1:(l-56), (l-56), replace = FALSE)
+  cor_stip <- rep(bm$fr_stip[shuff], each = n_sims) 
+  shuffled[i, 2] <- cor(cor_stip, cor__est)
   
   shuff <- sample(1:l2, l2 * n_sims, replace = TRUE)
+  
   shuffled[i, 3] <- cor(ecc_exp[shuff], occ_sim)
   shuffled[i, 4] <- cor(ecc_exp[shuff], ecc_est)
   shuffled[i, 5] <- cor(occ_sim[shuff], ecc_est)
@@ -218,7 +221,7 @@ for (i in 1:n) {
   shuffled[i, 7] <- cor(CR__exp[shuff], CR__est)
   shuffled[i, 8] <- cor(CR__sim[shuff], CR__est)
   
-  shuffled[i, 9] <- cor(PPV_exp[shuff], PPV_sim)
+  shuffled[i, 9]  <- cor(PPV_exp[shuff], PPV_sim)
   shuffled[i, 10] <- cor(PPV_exp[shuff], PPV_est)
   shuffled[i, 11] <- cor(PPV_sim[shuff], PPV_est)
   
