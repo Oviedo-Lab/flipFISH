@@ -109,9 +109,9 @@ t <- Sys.time()
 bm <- sim.benchmark(
     m1_summary_stats,                        # Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
     codebook,                                # Codebook with row names as barcodes and columns as bits, must have barcode names as row names
-    n_sims                           = 100,   # 100
-    n_forks                          = 50,
-    max_flips                        = 6,    # Suggest min of 6, 7 or 8 better
+    n_sims                           = 10,   # 100
+    n_forks                          = 10,
+    max_flips                        = 3,    # Suggest min of 6, 7 or 8 better
     report_freq                      = 10,
     maxeval                          = 200,   # Suggest min of 100, 150 or 250 probably better
     max_correctable_Hamming_distance = NULL
@@ -207,7 +207,7 @@ for (i in 1:n) {
   fr_stip  <- rep(bm$fr_stip[shuff], each = n_sims) 
   shuffled[i, 1] <- cor(fr_stip, fr__est)
   
-  shuff <- sample(1:(l-56), (l-56), replace = FALSE)
+  shuff <- sample(57:l, (l-56), replace = FALSE)
   cor_stip <- rep(bm$fr_stip[shuff], each = n_sims) 
   shuffled[i, 2] <- cor(cor_stip, cor__est)
   
@@ -234,6 +234,15 @@ for (i in 1:11) {
   cat("\n  value:", cors[i])
   cat("\n  p: ", p_vals[i])
 }
+
+cat("\n\nMeans:")
+cor(bm$fr_stip[1:56], colMeans(bm$fr__est[,1:56]))
+plot(bm$fr_stip[1:56], colMeans(bm$fr__est[,1:56]))
+cor(bm$fr_stip[57:l], colMeans(bm$fr__est[,57:l]))
+plot(bm$fr_stip[57:l], colMeans(bm$fr__est[,57:l]))
+cor(bm$PPV_exp, colMeans(bm$PPV_est))
+plot(bm$PPV_exp, colMeans(bm$PPV_est))
+
 ```
 
 
@@ -249,7 +258,7 @@ qc <- misread.qc(
     n_forks                          = 20,
     max_flips                        = 6,    # Suggest min of 6, 7 or 8 better
     report_freq                      = 1,
-    maxeval                          = 250,   # Suggest min of 100, 150 or 250 probably better
+    maxeval                          = 10,   # Suggest min of 100, 150 or 250 probably better
     max_correctable_Hamming_distance = NULL
     )
 d <- Sys.time() - t

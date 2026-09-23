@@ -989,7 +989,7 @@ List mQC(
         _["count_observed"]   = STdata.bc_counts
       ),
       _["fliprates"]          = fr,
-      _["erchc_plus"]         = erchc_plus, // Values for read count, corrected count, hit count, CR, and PPV analytically implied by fr
+      _["erctc_plus"]         = erchc_plus, // Values for read count, corrected count, hit count, CR, and PPV analytically implied by fr
       _["msle"]               = minf
     );
   }
@@ -1359,7 +1359,7 @@ List test_fr_recovery(
         report_freq, maxeval,
         fliprate_priors
       );
-      NumericMatrix erchc_plus = res["erchc_plus"];
+      NumericMatrix erchc_plus = res["erctc_plus"];
       // ... extract flip-rate vector (size n)
       fr__est(s,_) = Rcpp::as<NumericVector>(res["fliprates"]);
       // ... and count vectors (size N_barcodes)
