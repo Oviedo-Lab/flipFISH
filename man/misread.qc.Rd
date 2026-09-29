@@ -11,7 +11,13 @@ misread.qc(
   max_flips = 0,
   report_freq = 10,
   maxeval = 500,
-  max_correctable_Hamming_distance = NULL
+  max_correctable_Hamming_distance = NULL,
+  fliprate_priors = list(),
+  blank_weight = 1,
+  prior_weight = 0,
+  obs_erc = numeric(0),
+  erc_weight = 0,
+  n_restarts = 1
 )
 }
 \arguments{

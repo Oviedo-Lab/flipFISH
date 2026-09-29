@@ -105,143 +105,161 @@ rownames(codebook) <- gsub("-", ".", rownames(codebook))
 Now try new function. 
 
 ```{r new_initial_estimate}
-t <- Sys.time()
-bm <- sim.benchmark(
-    m1_summary_stats,                        # Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
-    codebook,                                # Codebook with row names as barcodes and columns as bits, must have barcode names as row names
-    n_sims                           = 10,   # 100
-    n_forks                          = 10,
-    max_flips                        = 3,    # Suggest min of 6, 7 or 8 better
-    report_freq                      = 10,
-    maxeval                          = 200,   # Suggest min of 100, 150 or 250 probably better
-    max_correctable_Hamming_distance = NULL
-    )
-d <- Sys.time() - t
-units(d) <- "secs"
-cat("\ntime:", d, "seconds\n")
+
+bm_list <- list()
+weights <- c(0, 0.5, 1, 5, 10)
+length(bm_list) <- length(weights)
+for (i in seq_along(weights)) { 
+  t <- Sys.time()
+  bm_list[[i]] <- sim.benchmark(
+      m1_summary_stats,                        # Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
+      codebook,                                # Codebook with row names as barcodes and columns as bits, must have barcode names as row names
+      n_sims                           = 3,   # 100
+      n_forks                          = 20,
+      max_flips                        = 7,    # Suggest min of 6, 7 or 8 better
+      report_freq                      = 10,
+      maxeval                          = 200,   # Suggest min of 100, 150 or 250 probably better
+      max_correctable_Hamming_distance = NULL,
+      blank_weight                     = 10,
+      prior_weight                     = weights[i], # was 5
+      erc_weight                       = 1,    # or 3, per the "stronger emphasis" option
+      n_restarts                       = 1     # or 3, per the "stronger emphasis" option
+      )
+  d <- Sys.time() - t
+  units(d) <- "secs"
+  cat("\ntime:", d, "seconds\n")
+}
+
 
 
 ```
 
 
 ```{r} 
-n_sims <- nrow(bm$ecc_est)
 
-# Compare stipulated vs recovered flip rates
-l  <- length(bm$fr_stip)
-l2 <- length(bm$ecc_exp)
-fr_stip  <- rep(bm$fr_stip[1:56], each = n_sims) # vec
-fr__est  <- c(bm$fr__est[,1:56]) # matrix
-cor_stip <- rep(bm$fr_stip[57:l], each = n_sims) # vec
-cor__est <- c(bm$fr__est[,57:l]) # matrix
-
-# NA check
-fr_stip[is.na(fr_stip)] <- 0.0
-fr__est[is.na(fr__est)] <- 0.0
-cor_stip[is.na(cor_stip)] <- 0.0
-cor__est[is.na(cor__est)] <- 0.0
-
-# counts
-ecc_exp <- rep(bm$ecc_exp, each = n_sims) # vec    -- expected corrected counts, given stipulated flip rates
-occ_sim <- c(bm$occ_sim) # matrix                  -- actual observed corrected counts, on simulated instances
-ecc_est <- c(bm$ecc_est) # matrix                  -- estimated expected corrected counts, based on analytical model of observed instances
-
-ecc_exp[is.na(ecc_exp)] <- 0.0
-occ_sim[is.na(occ_sim)] <- 0.0
-ecc_est[is.na(ecc_est)] <- 0.0
-
-# CR
-CR__exp <- rep(bm$CR__exp, each = n_sims) # vec    -- expected CR, given stipulated flip rates
-CR__sim <- c(bm$CR__sim) # matrix                  -- actual observed CR, on simulated instances
-CR__est <- c(bm$CR__est) # matrix                  -- estimated expected CR, based on analytical model of observed instances
-
-CR__exp[is.na(CR__exp)] <- 0.0
-CR__sim[is.na(CR__sim)] <- 0.0
-CR__est[is.na(CR__est)] <- 0.0
-
-# PPV
-PPV_exp <- rep(bm$PPV_exp, each = n_sims) # vec    -- expected PPV, given stipulated flip rates
-PPV_sim <- c(bm$PPV_sim) # matrix                  -- actual observed PVV, on simulated instances
-PPV_est <- c(bm$PPV_est) # matrix                  -- estimated expected PVV, based on analytical model of observed instances
-
-PPV_exp[is.na(PPV_exp)] <- 0.0
-PPV_sim[is.na(PPV_sim)] <- 0.0
-PPV_est[is.na(PPV_est)] <- 0.0
-
-# Find correlation between stipulated and recovered (estimated) flip rates
-fr_recovery    <- cor(fr_stip, fr__est)
-cor_recovery   <- cor(cor_stip, cor__est)
-
-count_variance <- cor(ecc_exp, occ_sim)
-count_recovery <- cor(ecc_exp, ecc_est)
-count_naivety  <- cor(occ_sim, ecc_est)
-
-CR__variance   <- cor(CR__exp, CR__sim)
-CR__recovery   <- cor(CR__exp, CR__est)
-CR__naivety    <- cor(CR__sim, CR__est)
-
-PPV_variance   <- cor(PPV_exp, PPV_sim)
-PPV_recovery   <- cor(PPV_exp, PPV_est)
-PPV_naivety    <- cor(PPV_sim, PPV_est)
-
-cors <- c(
-  fr_recovery, cor_recovery,
-  count_variance, count_recovery, count_naivety,
-  CR__variance, CR__recovery, CR__naivety,
-  PPV_variance, PPV_recovery, PPV_naivety
-)
-
-metric_names <- c(
-  "fr_recovery", "cor_recovery",
-  "count_variance", "count_recovery", "count_naivety",
-  "CR__variance", "CR__recovery", "CR__naivety",
-  "PPV_variance", "PPV_recovery", "PPV_naivety"
-)
-
-n <- 1000
-shuffled <- matrix(NA, ncol = 11, nrow = n)
-
-for (i in 1:n) {
+analyze_bm <- function(bm) {
   
-  shuff <- sample(1:56, 56, replace = FALSE)
-  fr_stip  <- rep(bm$fr_stip[shuff], each = n_sims) 
-  shuffled[i, 1] <- cor(fr_stip, fr__est)
+  n_sims <- nrow(bm$ecc_est)
   
-  shuff <- sample(57:l, (l-56), replace = FALSE)
-  cor_stip <- rep(bm$fr_stip[shuff], each = n_sims) 
-  shuffled[i, 2] <- cor(cor_stip, cor__est)
+  # Compare stipulated vs recovered flip rates
+  l  <- length(bm$fr_stip)
+  l2 <- length(bm$ecc_exp)
+  fr_stip  <- rep(bm$fr_stip[1:56], each = n_sims) # vec
+  fr__est  <- c(bm$fr__est[,1:56]) # matrix
+  cor_stip <- rep(bm$fr_stip[57:l], each = n_sims) # vec
+  cor__est <- c(bm$fr__est[,57:l]) # matrix
   
-  shuff <- sample(1:l2, l2 * n_sims, replace = TRUE)
+  # NA check
+  fr_stip[is.na(fr_stip)] <- 0.0
+  fr__est[is.na(fr__est)] <- 0.0
+  cor_stip[is.na(cor_stip)] <- 0.0
+  cor__est[is.na(cor__est)] <- 0.0
   
-  shuffled[i, 3] <- cor(ecc_exp[shuff], occ_sim)
-  shuffled[i, 4] <- cor(ecc_exp[shuff], ecc_est)
-  shuffled[i, 5] <- cor(occ_sim[shuff], ecc_est)
+  # counts
+  ecc_exp <- rep(bm$ecc_exp, each = n_sims) # vec    -- expected corrected counts, given stipulated flip rates
+  occ_sim <- c(bm$occ_sim) # matrix                  -- actual observed corrected counts, on simulated instances
+  ecc_est <- c(bm$ecc_est) # matrix                  -- estimated expected corrected counts, based on analytical model of observed instances
   
-  shuffled[i, 6] <- cor(CR__exp[shuff], CR__sim)
-  shuffled[i, 7] <- cor(CR__exp[shuff], CR__est)
-  shuffled[i, 8] <- cor(CR__sim[shuff], CR__est)
+  ecc_exp[is.na(ecc_exp)] <- 0.0
+  occ_sim[is.na(occ_sim)] <- 0.0
+  ecc_est[is.na(ecc_est)] <- 0.0
   
-  shuffled[i, 9]  <- cor(PPV_exp[shuff], PPV_sim)
-  shuffled[i, 10] <- cor(PPV_exp[shuff], PPV_est)
-  shuffled[i, 11] <- cor(PPV_sim[shuff], PPV_est)
+  # CR
+  CR__exp <- rep(bm$CR__exp, each = n_sims) # vec    -- expected CR, given stipulated flip rates
+  CR__sim <- c(bm$CR__sim) # matrix                  -- actual observed CR, on simulated instances
+  CR__est <- c(bm$CR__est) # matrix                  -- estimated expected CR, based on analytical model of observed instances
+  
+  CR__exp[is.na(CR__exp)] <- 0.0
+  CR__sim[is.na(CR__sim)] <- 0.0
+  CR__est[is.na(CR__est)] <- 0.0
+  
+  # PPV
+  PPV_exp <- rep(bm$PPV_exp, each = n_sims) # vec    -- expected PPV, given stipulated flip rates
+  PPV_sim <- c(bm$PPV_sim) # matrix                  -- actual observed PVV, on simulated instances
+  PPV_est <- c(bm$PPV_est) # matrix                  -- estimated expected PVV, based on analytical model of observed instances
+  
+  PPV_exp[is.na(PPV_exp)] <- 0.0
+  PPV_sim[is.na(PPV_sim)] <- 0.0
+  PPV_est[is.na(PPV_est)] <- 0.0
+  
+  # Find correlation between stipulated and recovered (estimated) flip rates
+  fr_recovery    <- cor(fr_stip, fr__est)
+  cor_recovery   <- cor(cor_stip, cor__est)
+  
+  count_variance <- cor(ecc_exp, occ_sim)
+  count_recovery <- cor(ecc_exp, ecc_est)
+  count_naivety  <- cor(occ_sim, ecc_est)
+  
+  CR__variance   <- cor(CR__exp, CR__sim)
+  CR__recovery   <- cor(CR__exp, CR__est)
+  CR__naivety    <- cor(CR__sim, CR__est)
+  
+  PPV_variance   <- cor(PPV_exp, PPV_sim)
+  PPV_recovery   <- cor(PPV_exp, PPV_est)
+  PPV_naivety    <- cor(PPV_sim, PPV_est)
+  
+  cors <- c(
+    fr_recovery, cor_recovery,
+    count_variance, count_recovery, count_naivety,
+    CR__variance, CR__recovery, CR__naivety,
+    PPV_variance, PPV_recovery, PPV_naivety
+  )
+  
+  metric_names <- c(
+    "fr_recovery", "cor_recovery",
+    "count_variance", "count_recovery", "count_naivety",
+    "CR__variance", "CR__recovery", "CR__naivety",
+    "PPV_variance", "PPV_recovery", "PPV_naivety"
+  )
+  
+  n <- 1000
+  shuffled <- matrix(NA, ncol = 11, nrow = n)
+  
+  for (i in 1:n) {
+    
+    shuff <- sample(1:56, 56, replace = FALSE)
+    fr_stip  <- rep(bm$fr_stip[shuff], each = n_sims) 
+    shuffled[i, 1] <- cor(fr_stip, fr__est)
+    
+    shuff <- sample(57:l, (l-56), replace = FALSE)
+    cor_stip <- rep(bm$fr_stip[shuff], each = n_sims) 
+    shuffled[i, 2] <- cor(cor_stip, cor__est)
+    
+    shuff <- sample(1:l2, l2 * n_sims, replace = TRUE)
+    
+    shuffled[i, 3] <- cor(ecc_exp[shuff], occ_sim)
+    shuffled[i, 4] <- cor(ecc_exp[shuff], ecc_est)
+    shuffled[i, 5] <- cor(occ_sim[shuff], ecc_est)
+    
+    shuffled[i, 6] <- cor(CR__exp[shuff], CR__sim)
+    shuffled[i, 7] <- cor(CR__exp[shuff], CR__est)
+    shuffled[i, 8] <- cor(CR__sim[shuff], CR__est)
+    
+    shuffled[i, 9]  <- cor(PPV_exp[shuff], PPV_sim)
+    shuffled[i, 10] <- cor(PPV_exp[shuff], PPV_est)
+    shuffled[i, 11] <- cor(PPV_sim[shuff], PPV_est)
+    
+  }
+  
+  p_vals <- rep(NA, 11)
+  for (i in 1:11) {
+    p_vals[i] <- sum(abs(shuffled[,i]) >= abs(cors[i]))/n
+    cat("\n\nCorrelation metric:", metric_names[i])
+    cat("\n  value:", cors[i])
+    cat("\n  p: ", p_vals[i])
+  }
+  
+  cat("\n\nMeans:")
+  cat("\nFlip rate, stip vs est:", cor(bm$fr_stip[1:56], colMeans(bm$fr__est[,1:56]), use = "na.or.complete"))
+  plot(bm$fr_stip[1:56], colMeans(bm$fr__est[,1:56]))
+  cat("\ncor, stip vs est:", cor(bm$fr_stip[57:l], colMeans(bm$fr__est[,57:l]), use = "na.or.complete"))
+  plot(bm$fr_stip[57:l], colMeans(bm$fr__est[,57:l]))
+  cat("\nPPV, exp vs est:", cor(bm$PPV_exp, colMeans(bm$PPV_est), use = "na.or.complete"))
+  plot(bm$PPV_exp, colMeans(bm$PPV_est))
+  
   
 }
-
-p_vals <- rep(NA, 11)
-for (i in 1:11) {
-  p_vals[i] <- sum(abs(shuffled[,i]) >= abs(cors[i]))/n
-  cat("\n\nCorrelation metric:", metric_names[i])
-  cat("\n  value:", cors[i])
-  cat("\n  p: ", p_vals[i])
-}
-
-cat("\n\nMeans:")
-cor(bm$fr_stip[1:56], colMeans(bm$fr__est[,1:56]))
-plot(bm$fr_stip[1:56], colMeans(bm$fr__est[,1:56]))
-cor(bm$fr_stip[57:l], colMeans(bm$fr__est[,57:l]))
-plot(bm$fr_stip[57:l], colMeans(bm$fr__est[,57:l]))
-cor(bm$PPV_exp, colMeans(bm$PPV_est))
-plot(bm$PPV_exp, colMeans(bm$PPV_est))
+analyze_bm(bm4)
 
 ```
 

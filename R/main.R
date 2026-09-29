@@ -110,7 +110,13 @@ misread.qc <- function(
     max_flips                        = 0,
     report_freq                      = 10,
     maxeval                          = 500,
-    max_correctable_Hamming_distance = NULL
+    max_correctable_Hamming_distance = NULL,
+    fliprate_priors                  = list(),
+    blank_weight                     = 1.0,
+    prior_weight                     = 0.0,
+    obs_erc                          = numeric(0),
+    erc_weight                       = 0.0,
+    n_restarts                       = 1
   ) {
     cat("\nRunning misread QC with L-BFGS (nlopt)")
     cat("\nMax evaluations:", maxeval)
@@ -130,7 +136,12 @@ misread.qc <- function(
       as.integer(max_flips),
       as.integer(report_freq),
       as.integer(maxeval),
-      list()
+      fliprate_priors,
+      as.double(blank_weight),
+      as.double(prior_weight),
+      as.double(obs_erc),
+      as.double(erc_weight),
+      as.integer(n_restarts)
     )
     
     # Annotate result output
@@ -184,7 +195,12 @@ sim.benchmark <- function(
     max_flips                        = 0,
     report_freq                      = 10,
     maxeval                          = 500,
-    max_correctable_Hamming_distance = NULL
+    max_correctable_Hamming_distance = NULL,
+    fliprate_priors                  = list(),
+    blank_weight                     = 1.0,
+    prior_weight                     = 0.0,
+    erc_weight                       = 0.0,
+    n_restarts                       = 1
   ) {
     cat("\nBenchmarking misread QC with Bernoulli simulations")
     
@@ -204,7 +220,11 @@ sim.benchmark <- function(
       as.integer(max_flips),
       as.integer(report_freq),
       as.integer(maxeval),
-      list()
+      fliprate_priors,
+      as.double(blank_weight),
+      as.double(prior_weight),
+      as.double(erc_weight),
+      as.integer(n_restarts)
     )
     
     # Name flip-rate/correlation parameters (columns of fr__est, entries of fr_stip)
