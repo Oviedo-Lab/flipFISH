@@ -20,6 +20,8 @@ N_bits <- 28
 l      <- length(bm_erc$fr_stip)   # same length for bm_reg2
 
 build_metrics <- function(bm) {
+  N_bits <- 28
+  l      <- length(bm$fr_stip)
   n_sims <- nrow(bm$ecc_est)
   
   # Bit-flip correlation terms: stipulated vs. estimated (all sims, all barcode pairs)
