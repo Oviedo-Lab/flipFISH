@@ -114,6 +114,7 @@ misread.qc <- function(
     fliprate_priors                  = list(),
     blank_weight                     = 1.0,
     prior_weight                     = 0.0,
+    dispersion_weight                = 0.0,
     obs_erc                          = numeric(0),
     erc_weight                       = 0.0,
     n_restarts                       = 1
@@ -139,6 +140,7 @@ misread.qc <- function(
       fliprate_priors,
       as.double(blank_weight),
       as.double(prior_weight),
+      as.double(dispersion_weight),
       as.double(obs_erc),
       as.double(erc_weight),
       as.integer(n_restarts)
@@ -199,6 +201,7 @@ sim.benchmark <- function(
     fliprate_priors                  = list(),
     blank_weight                     = 1.0,
     prior_weight                     = 0.0,
+    dispersion_weight                = 0.0,
     erc_weight                       = 0.0,
     n_restarts                       = 1
   ) {
@@ -223,6 +226,7 @@ sim.benchmark <- function(
       fliprate_priors,
       as.double(blank_weight),
       as.double(prior_weight),
+      as.double(dispersion_weight),
       as.double(erc_weight),
       as.integer(n_restarts)
     )

@@ -105,31 +105,25 @@ rownames(codebook) <- gsub("-", ".", rownames(codebook))
 Now try new function. 
 
 ```{r new_initial_estimate}
-
-bm_list <- list()
-weights <- c(1, 10, 20)
-length(bm_list) <- length(weights)
-for (i in seq_along(weights)) { 
-  t <- Sys.time()
-  bm_list[[i]] <- sim.benchmark(
-      m1_summary_stats,                        # Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
-      codebook,                                # Codebook with row names as barcodes and columns as bits, must have barcode names as row names
-      n_sims                           = 3,   # 100
-      n_forks                          = 5,
-      max_flips                        = 6,    # Suggest min of 6, 7 or 8 better
-      report_freq                      = 10,
-      maxeval                          = 200,   # Suggest min of 100, 150 or 250 probably better
-      max_correctable_Hamming_distance = NULL,
-      blank_weight                     = weights[i],
-      prior_weight                     = 0.5, # was 5
-      erc_weight                       = 1,
-      n_restarts                       = 1
-      )
-  d <- Sys.time() - t
-  units(d) <- "secs"
-  cat("\ntime:", d, "seconds\n")
-}
-
+t <- Sys.time()
+bm <- sim.benchmark(
+    m1_summary_stats,                        # Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
+    codebook,                                # Codebook with row names as barcodes and columns as bits, must have barcode names as row names
+    n_sims                           = 2,   # 100
+    n_forks                          = 20,
+    max_flips                        = 6,    # Suggest min of 6, 7 or 8 better
+    report_freq                      = 10,
+    maxeval                          = 500,   # Suggest min of 100, 150 or 250 probably better
+    max_correctable_Hamming_distance = NULL,
+    blank_weight                     = 10,
+    prior_weight                     = 0.5, 
+    dispersion_weight                = 0.5,
+    erc_weight                       = 0,
+    n_restarts                       = 1
+    )
+d <- Sys.time() - t
+units(d) <- "secs"
+cat("\ntime:", d, "seconds\n")
 
 
 ```
@@ -249,12 +243,33 @@ analyze_bm <- function(bm) {
   }
   
   cat("\n\nMeans:")
+  
   cat("\nFlip rate, stip vs est:", cor(bm$fr_stip[1:56], colMeans(bm$fr__est[,1:56]), use = "na.or.complete"))
   plot(bm$fr_stip[1:56], colMeans(bm$fr__est[,1:56]))
+  plot(
+    rep(bm$fr_stip[1:56], each = nrow(bm$fr__est)),
+    as.vector(bm$fr__est[, 1:56])
+  )
+  
   cat("\ncor, stip vs est:", cor(bm$fr_stip[57:l], colMeans(bm$fr__est[,57:l]), use = "na.or.complete"))
   plot(bm$fr_stip[57:l], colMeans(bm$fr__est[,57:l]))
+  plot(
+    rep(bm$fr_stip[57:l], each = nrow(bm$fr__est)),
+    as.vector(bm$fr__est[, 57:l])
+  )
+  
+  hist(bm$fr_stip[57:l])
+  hist(colMeans(bm$fr__est[,57:l]))
+  
+  cat("\nsd of stip corrs:", sd(bm$fr_stip[57:l]))
+  cat("\nsd of est corrs:", sd(colMeans(bm$fr__est[,57:l])))
+  
   cat("\nPPV, exp vs est:", cor(bm$PPV_exp, colMeans(bm$PPV_est), use = "na.or.complete"))
   plot(bm$PPV_exp, colMeans(bm$PPV_est))
+  plot(
+    rep(bm$PPV_exp, each = nrow(bm$PPV_est)),
+    as.vector(bm$PPV_est)
+  )
   
   
 }
@@ -291,8 +306,8 @@ build_metrics <- function(bm) {
 ```
 
 ```{r} 
-analyze_bm(bm_list[[3]])
-build_metrics(bm_list[[3]])
+analyze_bm(bm)
+build_metrics(bm)
 ```
 
 

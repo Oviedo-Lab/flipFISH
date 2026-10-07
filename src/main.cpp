@@ -38,12 +38,12 @@ struct EvalResults {
 };
 
 struct FlipRatePriors {
-  double expected10 = 0.01;
-  double expected01 = 0.05;
-  double sd10 = 0.1;
-  double sd01 = 0.2;
+  double expected10   = 0.01;
+  double expected01   = 0.05;
+  double sd10         = 0.1;
+  double sd01         = 0.2;
   double expectedcorr = 0.0;
-  double sdcorr = 0.2;
+  double sdcorr       = 0.2;
 };
 
 struct ST_data {
@@ -72,6 +72,13 @@ struct ST_data {
   std::vector<double> msle_weights;
   FlipRatePriors      fr_priors;
   double              prior_weight = 0.0;
+  // Dispersion regularization: in addition to the pointwise Gaussian prior above (which
+  // only shrinks each corr1[i]/corr0[i] toward expectedcorr), this penalizes the empirical
+  // variance of corr1 (and, separately, corr0) across bit-pairs for deviating from sdcorr^2.
+  // Without this, a degenerate solution where all corr1[i] (or corr0[i]) collapse to the same
+  // value -- including all zero -- incurs no extra cost beyond the pointwise term, even though
+  // a nonzero sdcorr says we expect heterogeneity across bit-pairs.
+  double              dispersion_weight = 0.0;
   // Optional joint fit on exact-match (uncorrected) read counts, in addition to the corrected-count
   // fit. This gives the optimizer a second, independent observable that constrains how much of
   // each barcode's corrected count came from exact matches vs. correction, which is otherwise
@@ -377,10 +384,11 @@ std::unordered_map<uint64_t, int> build_correction_table(
 // Select random flip rates and bit-flip correlations 
 std::vector<double> draw_random_fr(
     const ST_data&        STdata,
-    const FlipRatePriors& fr_prior
+    const FlipRatePriors& fr_prior,
+    unsigned int          seed = 12345 // Fixed default preserves prior deterministic behavior at existing call sites
   ) {
     // Initialize normal distributions
-    std::mt19937                     rng(12345);
+    std::mt19937                     rng(seed);
     std::normal_distribution<double> norm10(std::sqrt(fr_prior.expected10), fr_prior.sd10);
     std::normal_distribution<double> norm01(std::sqrt(fr_prior.expected01), fr_prior.sd01);
     std::normal_distribution<double> normCorr(fr_prior.expectedcorr, fr_prior.sdcorr);
@@ -995,6 +1003,33 @@ static double mQC_msle(
       msle     += d->prior_weight * penalty;
     }
     
+    // Dispersion penalty: matches the empirical variance of corr1 (and, separately, corr0)
+    // across bit-pairs to sdcorr^2, guarding against degenerate "all equal" solutions
+    // (including all-zero) that the pointwise prior above does not penalize. Needs at
+    // least 2 free correlation parameters for "spread across bit-pairs" to be meaningful.
+    if (d->dispersion_weight > 0.0 && corr_free > 1) {
+      const auto& priors     = d->fr_priors;
+      double      target_var = priors.sdcorr * priors.sdcorr;
+      
+      auto dispersion_term = [&](const std::vector<double>& x, int grad_offset) {
+        double mean = std::accumulate(x.begin(), x.end(), 0.0) / (double)corr_free;
+        double var_emp = 0.0;
+        for (double xi : x) var_emp += (xi - mean) * (xi - mean);
+        var_emp /= (double)corr_free;
+        double diff = var_emp - target_var;
+        if (do_grad) {
+          for (int i = 0; i < corr_free; ++i) {
+            grad[grad_offset + i] += d->dispersion_weight * 4.0 * diff * (x[i] - mean) / (double)corr_free;
+          }
+        }
+        return diff * diff;
+      };
+      
+      double disp_penalty = dispersion_term(fr.corr1, 2*N_bits)
+                           + dispersion_term(fr.corr0, 2*N_bits + corr_free);
+      msle += d->dispersion_weight * disp_penalty;
+    }
+    
     // Advance eval counter
     d->eval_results.n_evals++; 
     if (msle < d->best_msle) {
@@ -1027,6 +1062,7 @@ List mQC(
     List          fliprate_priors = List(),
     double        blank_weight = 1.0,        // Up-weight blank barcodes in the corrected-count MSLE (their true hit count is known to be 0)
     double        prior_weight = 0.0,        // Strength of the Gaussian prior penalty on flip rates/correlations (0 disables it, matching prior behavior)
+    double        dispersion_weight = 0.0,   // Strength of the dispersion penalty matching empirical variance of corr1/corr0 to sdcorr^2 (0 disables it, matching prior behavior)
     NumericVector obs_erc      = NumericVector(), // Optional: observed exact-match (uncorrected) read counts per barcode, same row order as bc_counts. Empty (default) disables the erc loss term.
     double        erc_weight   = 0.0,        // Strength of the joint erc-fit loss term (0 disables it, matching prior behavior; ignored if obs_erc is empty)
     int           n_restarts   = 1           // Number of L-BFGS restarts; restart 0 uses the standard init, restarts > 0 randomize the correlation block (1 matches prior behavior)
@@ -1049,8 +1085,9 @@ List mQC(
     for (int idx : STdata.cb.blanks) {
       STdata.msle_weights[idx] = blank_weight;
     }
-    STdata.fr_priors    = pack_fr_priors(fliprate_priors);
-    STdata.prior_weight = prior_weight;
+    STdata.fr_priors         = pack_fr_priors(fliprate_priors);
+    STdata.prior_weight      = prior_weight;
+    STdata.dispersion_weight = dispersion_weight;
     
     // Set up the optional joint erc-fit term
     if (obs_erc.size() == (int)STdata.cb.barcodes.size() && erc_weight > 0.0) {
@@ -1068,16 +1105,19 @@ List mQC(
       }
     }
     
-    // Initialize parameters: rate10 = 0.01, rate01 = 0.05, corr = 0
+    // Initialize parameters stochastically from STdata.fr_priors, via draw_random_fr
+    // (marginal rate10/rate01 and bit-flip correlations corr1/corr0 all drawn from their priors).
+    // Uses an explicit seed distinct from draw_random_fr's default (12345): test_fr_recovery
+    // draws its ground-truth FR with the *default*-seeded call, and since it passes the same
+    // fliprate_priors through to mQC (so STdata.fr_priors matches), seeding this init draw with
+    // 12345 too would make restart 0 start exactly at the simulated truth -- silently trivializing
+    // the recovery test. Any fixed seed other than 12345 avoids that collision.
     int N_bits     = STdata.cb.N_bits;
     int N_barcodes = STdata.cb.barcodes.size(); 
     int corr_free  = N_bits * (N_bits - 1) / 2;
     size_t n       = 2*N_bits + 2*corr_free;
-    std::vector<double> x0(n, 0.0);
-    for (int i = 0; i < N_bits; ++i) {
-      x0[i]          = 0.01;
-      x0[N_bits + i] = 0.05;
-    }
+    unsigned int mQC_init_seed = 918273645u;
+    std::vector<double> x0 = draw_random_fr(STdata, STdata.fr_priors, mQC_init_seed);
     std::vector<double> x0_ = x0; 
     
     // Parameter bounds
@@ -1111,13 +1151,14 @@ List mQC(
     NumericVector fr(n);
     
     // Run L-BFGS via nlopt, with optional multi-start.
-    // Restart 0 always uses the standard initialization (marginal rates at their usual defaults,
-    // correlations at 0, matching prior single-start behavior). Restarts 1..n_restarts-1 keep the
-    // marginal-rate init fixed but randomize the correlation block around the (prior or default)
-    // correlation mean/sd, since that's the part of parameter space the corrected-count MSLE alone
-    // leaves nearly flat -- a single L-BFGS run from corr=0 has little incentive to move and can
-    // instead drift on numerical noise over many iterations (see cor_recovery diagnostic in
-    // sim.benchmark). Restarts are compared by final penalized objective value, and the best kept.
+    // Restart 0 always uses the stochastic draw from STdata.fr_priors computed above as x0
+    // (matching prior single-start behavior, since draw_random_fr's default seed is fixed).
+    // Restarts 1..n_restarts-1 redraw *all* parameters (marginal rates and correlations) from
+    // STdata.fr_priors with a fresh per-restart seed, since the corrected-count MSLE alone often
+    // leaves this parameter space nearly flat -- a single L-BFGS run has little incentive to move
+    // far from its start and can instead drift on numerical noise over many iterations (see
+    // cor_recovery diagnostic in sim.benchmark). Restarts are compared by final penalized
+    // objective value, and the best kept.
     double ftol_rel = 1e-8;
     double xtol_rel = 1e-6;
     if (n_restarts < 1) n_restarts = 1;
@@ -1125,8 +1166,6 @@ List mQC(
                 << ", xtol_rel=" << xtol_rel << ", n_restarts=" << n_restarts << std::endl;
     
     std::mt19937 restart_rng(4507919u + static_cast<unsigned int>(N_barcodes) + static_cast<unsigned int>(n));
-    double        restart_corr_sd = STdata.fr_priors.sdcorr > 0.0 ? STdata.fr_priors.sdcorr : 0.2;
-    std::normal_distribution<double> corr_draw(STdata.fr_priors.expectedcorr, restart_corr_sd);
     
     double        best_minf = std::numeric_limits<double>::infinity();
     std::vector<double> best_x;
@@ -1136,10 +1175,8 @@ List mQC(
     for (int r = 0; r < n_restarts; ++r) {
       std::vector<double> x0_r = x0;
       if (r > 0) {
-        for (size_t k = 2*N_bits; k < n; ++k) {
-          double draw = corr_draw(restart_rng);
-          x0_r[k]     = std::max(lb[k], std::min(ub[k], draw));
-        }
+        unsigned int seed_r = restart_rng();
+        x0_r = draw_random_fr(STdata, STdata.fr_priors, seed_r);
       }
       
       // Reset per-restart tracking so eval_results/best_msle reflect only this restart
@@ -1462,10 +1499,11 @@ List test_fr_recovery(
     int           report_freq,
     int           maxeval,
     List          fliprate_priors = List(),
-    double        blank_weight    = 1.0,
-    double        prior_weight    = 0.0,
-    double        erc_weight      = 0.0,
-    int           n_restarts      = 1
+    double        blank_weight      = 1.0,
+    double        prior_weight      = 0.0,
+    double        dispersion_weight = 0.0,
+    double        erc_weight        = 0.0,
+    int           n_restarts        = 1
   ) {
     
     // Load in data
@@ -1582,7 +1620,7 @@ List test_fr_recovery(
         n_forks, max_flips, 
         report_freq, maxeval,
         fliprate_priors,
-        blank_weight, prior_weight,
+        blank_weight, prior_weight, dispersion_weight,
         obs_erc_s, erc_weight,
         n_restarts
       );

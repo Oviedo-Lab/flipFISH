@@ -35,8 +35,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // mQC
-List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int max_correctable_Hamming_distance, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, double blank_weight, double prior_weight, NumericVector obs_erc, double erc_weight, int n_restarts);
-RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP blank_weightSEXP, SEXP prior_weightSEXP, SEXP obs_ercSEXP, SEXP erc_weightSEXP, SEXP n_restartsSEXP) {
+List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int max_correctable_Hamming_distance, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, double blank_weight, double prior_weight, double dispersion_weight, NumericVector obs_erc, double erc_weight, int n_restarts);
+RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP blank_weightSEXP, SEXP prior_weightSEXP, SEXP dispersion_weightSEXP, SEXP obs_ercSEXP, SEXP erc_weightSEXP, SEXP n_restartsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -50,16 +50,17 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< List >::type fliprate_priors(fliprate_priorsSEXP);
     Rcpp::traits::input_parameter< double >::type blank_weight(blank_weightSEXP);
     Rcpp::traits::input_parameter< double >::type prior_weight(prior_weightSEXP);
+    Rcpp::traits::input_parameter< double >::type dispersion_weight(dispersion_weightSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type obs_erc(obs_ercSEXP);
     Rcpp::traits::input_parameter< double >::type erc_weight(erc_weightSEXP);
     Rcpp::traits::input_parameter< int >::type n_restarts(n_restartsSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, max_correctable_Hamming_distance, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight, prior_weight, obs_erc, erc_weight, n_restarts));
+    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, max_correctable_Hamming_distance, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight, prior_weight, dispersion_weight, obs_erc, erc_weight, n_restarts));
     return rcpp_result_gen;
 END_RCPP
 }
 // test_fr_recovery
-List test_fr_recovery(NumericMatrix bc_counts, IntegerMatrix codebook, int n_sims, int max_correctable_Hamming_distance, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, double blank_weight, double prior_weight, double erc_weight, int n_restarts);
-RcppExport SEXP _flipFISH_test_fr_recovery(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP n_simsSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP blank_weightSEXP, SEXP prior_weightSEXP, SEXP erc_weightSEXP, SEXP n_restartsSEXP) {
+List test_fr_recovery(NumericMatrix bc_counts, IntegerMatrix codebook, int n_sims, int max_correctable_Hamming_distance, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, double blank_weight, double prior_weight, double dispersion_weight, double erc_weight, int n_restarts);
+RcppExport SEXP _flipFISH_test_fr_recovery(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP n_simsSEXP, SEXP max_correctable_Hamming_distanceSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP blank_weightSEXP, SEXP prior_weightSEXP, SEXP dispersion_weightSEXP, SEXP erc_weightSEXP, SEXP n_restartsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -74,9 +75,10 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< List >::type fliprate_priors(fliprate_priorsSEXP);
     Rcpp::traits::input_parameter< double >::type blank_weight(blank_weightSEXP);
     Rcpp::traits::input_parameter< double >::type prior_weight(prior_weightSEXP);
+    Rcpp::traits::input_parameter< double >::type dispersion_weight(dispersion_weightSEXP);
     Rcpp::traits::input_parameter< double >::type erc_weight(erc_weightSEXP);
     Rcpp::traits::input_parameter< int >::type n_restarts(n_restartsSEXP);
-    rcpp_result_gen = Rcpp::wrap(test_fr_recovery(bc_counts, codebook, n_sims, max_correctable_Hamming_distance, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight, prior_weight, erc_weight, n_restarts));
+    rcpp_result_gen = Rcpp::wrap(test_fr_recovery(bc_counts, codebook, n_sims, max_correctable_Hamming_distance, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight, prior_weight, dispersion_weight, erc_weight, n_restarts));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -99,8 +101,8 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_flipFISH_correlation_from_params", (DL_FUNC) &_flipFISH_correlation_from_params, 2},
     {"_flipFISH_unique_Hamming_cb", (DL_FUNC) &_flipFISH_unique_Hamming_cb, 1},
-    {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 13},
-    {"_flipFISH_test_fr_recovery", (DL_FUNC) &_flipFISH_test_fr_recovery, 13},
+    {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 14},
+    {"_flipFISH_test_fr_recovery", (DL_FUNC) &_flipFISH_test_fr_recovery, 14},
     {"_flipFISH_tr_sum_check", (DL_FUNC) &_flipFISH_tr_sum_check, 5},
     {NULL, NULL, 0}
 };

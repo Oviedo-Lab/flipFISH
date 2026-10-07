@@ -16,6 +16,7 @@ sim.benchmark(
   fliprate_priors = list(),
   blank_weight = 1,
   prior_weight = 0,
+  dispersion_weight = 0,
   erc_weight = 0,
   n_restarts = 1
 )
