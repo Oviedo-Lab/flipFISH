@@ -12,13 +12,19 @@ sim.benchmark(
   max_flips = 0,
   report_freq = 10,
   maxeval = 500,
-  max_correctable_Hamming_distance = NULL,
+  maxHam = NULL,
   fliprate_priors = list(),
   blank_weight = 1,
   prior_weight = 0,
   dispersion_weight = 0,
   erc_weight = 0,
-  n_restarts = 1
+  n_restarts = 1,
+  use_mcmcsa = FALSE,
+  mcmcsa_step_hi = 0.05,
+  mcmcsa_step_lo = 0.005,
+  mcmcsa_temp_hi = 0.1,
+  mcmcsa_temp_lo = 0.01,
+  mcmcsa_seed = 12345
 )
 }
 \arguments{
@@ -36,7 +42,19 @@ sim.benchmark(
 
 \item{maxeval}{Maximum number of objective function evaluations for L-BFGS, default 500.}
 
-\item{max_correctable_Hamming_distance}{Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries.}
+\item{maxHam}{Maximum Hamming distance for misreads to be corrected (max correctable Hamming distance), default NULL sets it to one less than the minimum Hamming distance between codebook entries.}
+
+\item{use_mcmcsa}{If TRUE, use the MCMCSA simulated-annealing optimizer instead of L-BFGS (nlopt), default FALSE.}
+
+\item{mcmcsa_step_hi}{MCMCSA only: starting (largest) per-step Gaussian proposal SD, linearly decayed to \code{mcmcsa_step_lo} over \code{maxeval} steps, default 0.05.}
+
+\item{mcmcsa_step_lo}{MCMCSA only: ending (smallest) per-step Gaussian proposal SD, default 0.005.}
+
+\item{mcmcsa_temp_hi}{MCMCSA only: starting (largest) annealing temperature, linearly decayed to \code{mcmcsa_temp_lo} over \code{maxeval} steps, default 0.1.}
+
+\item{mcmcsa_temp_lo}{MCMCSA only: ending (smallest) annealing temperature, default 0.01.}
+
+\item{mcmcsa_seed}{MCMCSA only: base RNG seed (offset by restart number), default 12345.}
 }
 \value{
 A list giving:\itemize{
