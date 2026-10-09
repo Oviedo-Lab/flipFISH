@@ -9,12 +9,12 @@ unique_Hamming_cb <- function(codebook) {
     .Call(`_flipFISH_unique_Hamming_cb`, codebook)
 }
 
-mQC <- function(bc_counts, codebook, max_correctable_Hamming_distance, n_forks, max_flips, report_freq = 1L, maxeval = 1000L, fliprate_priors, blank_weight = 1.0, prior_weight = 0.0, dispersion_weight = 0.0, obs_erc = numeric(), erc_weight = 0.0, n_restarts = 1L) {
-    .Call(`_flipFISH_mQC`, bc_counts, codebook, max_correctable_Hamming_distance, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight, prior_weight, dispersion_weight, obs_erc, erc_weight, n_restarts)
+mQC <- function(bc_counts, codebook, maxHam, n_forks, max_flips, report_freq = 1L, maxeval = 1000L, fliprate_priors, blank_weight = 1.0, prior_weight = 0.0, dispersion_weight = 0.0, obs_erc = numeric(), erc_weight = 0.0, n_restarts = 1L, use_mcmcsa = FALSE, mcmcsa_step_hi = 0.05, mcmcsa_step_lo = 0.005, mcmcsa_temp_hi = 0.1, mcmcsa_temp_lo = 0.01, mcmcsa_seed = 12345L) {
+    .Call(`_flipFISH_mQC`, bc_counts, codebook, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight, prior_weight, dispersion_weight, obs_erc, erc_weight, n_restarts, use_mcmcsa, mcmcsa_step_hi, mcmcsa_step_lo, mcmcsa_temp_hi, mcmcsa_temp_lo, mcmcsa_seed)
 }
 
-test_fr_recovery <- function(bc_counts, codebook, n_sims, max_correctable_Hamming_distance, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight = 1.0, prior_weight = 0.0, dispersion_weight = 0.0, erc_weight = 0.0, n_restarts = 1L) {
-    .Call(`_flipFISH_test_fr_recovery`, bc_counts, codebook, n_sims, max_correctable_Hamming_distance, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight, prior_weight, dispersion_weight, erc_weight, n_restarts)
+test_fr_recovery <- function(bc_counts, codebook, n_sims, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight = 1.0, prior_weight = 0.0, dispersion_weight = 0.0, erc_weight = 0.0, n_restarts = 1L, use_mcmcsa = FALSE, mcmcsa_step_hi = 0.05, mcmcsa_step_lo = 0.005, mcmcsa_temp_hi = 0.1, mcmcsa_temp_lo = 0.01, mcmcsa_seed = 12345L) {
+    .Call(`_flipFISH_test_fr_recovery`, bc_counts, codebook, n_sims, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight, prior_weight, dispersion_weight, erc_weight, n_restarts, use_mcmcsa, mcmcsa_step_hi, mcmcsa_step_lo, mcmcsa_temp_hi, mcmcsa_temp_lo, mcmcsa_seed)
 }
 
 tr_sum_check <- function(bc, rate10, rate01, corr1, corr0) {

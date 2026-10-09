@@ -296,9 +296,11 @@ V64 neighbors(
   }
 
 // Create valid correlation matrix from random parameter draw
+// Note: signature spelled out as std::vector<double> rather than the Vdbl typedef because
+// Rcpp attribute parsing can't resolve local typedefs from main.cpp.
 // [[Rcpp::export]]
 Eigen::MatrixXd correlation_from_params(
-    const Vdbl& theta,
+    const std::vector<double>& theta,
     int n
   ) {
     Eigen::MatrixXd L = Eigen::MatrixXd::Zero(n, n);
@@ -1094,6 +1096,144 @@ static double mQC_msle(
     return msle;
   }
 
+// Simulated-annealing optimizer (Markov Chain Monte Carlo with Simulated Annealing, MCMCSA), fitting
+// the same analytic MSLE objective as mQC_msle(). Alternative to nlopt::LD_LBFGS inside mQC(). Restored
+// from commit f1a1a6c (see historical note further down in this file) with two fixes: two missing
+// semicolons after mQC_msle() calls, and the return type changed from a packed FlipRates to the raw
+// parameter vector FR_best (Vdbl), since mQC()'s restart loop works with raw parameter vectors and
+// relies on mQC_msle()'s side effects on ST_data to track the best fit, not on a packed FlipRates.
+Vdbl MCMCSA(
+    const Vdbl& FR,
+    const Vdbl& ub,
+    const Vdbl& lb,
+    const Vdbl& step_size,
+    const Vdbl& temp, 
+    void*       data,
+    int         ran_seed
+  ) {
+    
+    // Set up steps
+    int step          = 0;
+    int calls         = 0; 
+    int last_reported = -1;
+    int n_steps       = step_size.size(); 
+    if ((int)temp.size() != n_steps) {
+      Rcpp::stop("step_size and temp vectors must be the same length");
+    }
+    
+    // Grab data and advance sim number
+    auto* d = static_cast<ST_data*>(data);
+    
+    // Initialize parameter vectors
+    Vdbl FR_current = FR;
+    Vdbl FR_next    = FR;
+    Vdbl FR_best    = FR;
+    int  n_FR       = FR.size();
+    
+    // Check that initial parameters are within bounds
+    for (int i = 0; i < n_FR; ++i) {
+      if (FR[i] < lb[i] || FR[i] > ub[i]) {
+        Rcpp::stop("Initial parameters must be within bounds");
+      }
+    }
+    
+    // Initialize gradient vector 
+    Vdbl grad(n_FR, 0.0);
+    
+    // Compute initial msle
+    double msle_current = mQC_msle(FR, grad, d);
+    double msle_next    = msle_current;
+    double msle_least   = msle_current;
+    Rcpp::Rcout << "\nResampling initial parameters with MCMCSA run:\nStep: 0, msle: " << msle_current << std::endl;
+    
+    // Start random-number generator and initialize a uniform distribution
+    std::mt19937 rng(ran_seed);
+    std::uniform_real_distribution<> unif(0.0, 1.0);
+    
+    // Safety cap: `step` only advances on accepted proposals, so a poorly matched step_size/temp
+    // schedule (relative to the scale of msle swings) can drive acceptance arbitrarily close to
+    // zero and spin here indefinitely. Cap total (accepted + rejected) evaluations and bail out
+    // with the best point found so far if the cap is hit.
+    int max_calls = 50 * n_steps;
+    
+    while (step < n_steps && calls < max_calls) {
+      
+      // Generate random step (... this is the Markov chain)
+      double sp = static_cast<double>(step) / static_cast<double>(n_steps);
+      std::normal_distribution<double> norm(0.0, step_size[step]);
+      FR_next = FR_current;
+      for (int i = 0; i < n_FR; ++i) {
+        double sz = norm(rng);
+        // Mixed with gradient *descent* direction: grad is d(msle)/d(param), so subtracting it
+        // moves toward lower msle (the restored historical code added it instead, i.e. gradient
+        // ascent, which actively pushed accepted steps toward higher msle as sp grew -- fixed here).
+        FR_next[i] += sz * (1 - sp) - grad[i] * (sp/2.0 + 0.5);
+        // Enforce bounds ... if out of bounds, reflect back into bounds
+        if (FR_next[i] < lb[i]) {
+          FR_next[i] = lb[i] + (lb[i] - FR_next[i]);
+          if (FR_next[i] > ub[i]) {FR_next[i] = lb[i];}
+        } else if (FR_next[i] > ub[i]) {
+          FR_next[i] = ub[i] - (FR_next[i] - ub[i]);
+          if (FR_next[i] < lb[i]) {FR_next[i] = ub[i];}
+        }
+      }
+      
+      // Compute expected corrected counts from these flip rates
+      msle_next = mQC_msle(FR_next, grad, d);
+      
+      // Calculate acceptance probability
+      // ... idea: When msle decreases, probability of acceptance is 1; this formula
+      //      controls how quickly the probability of acceptance decreases as the mse increases
+      double acceptance_prob = std::min(1.0, std::exp(-(msle_next - msle_current)/temp[step]));
+     
+      // Accept or reject the proposed step
+      if (unif(rng) < acceptance_prob) {
+        // Accept the new parameters ... this is updating for the Markov chain
+        FR_current = FR_next;
+        // Update msle
+        msle_current = msle_next;
+        if (msle_current < msle_least) {
+          msle_least = msle_current;
+          FR_best    = FR_current;
+        }
+        // Advance step 
+        step++;
+      } else {
+        // Clear the just-saved history 
+        // ... saving results is step 2 of the Monte Carlo method: aggregate results
+        d->eval_hist.msle.pop_back();
+        d->eval_hist.fr.pop_back();
+        d->eval_hist.ehc.pop_back();
+        d->eval_hist.ecc.pop_back();
+        d->eval_hist.erc.pop_back();
+        d->eval_hist.CR.pop_back();
+        d->eval_hist.PPV.pop_back();
+      }
+      if (last_reported < step && (step % d->report_freq == 0 || step == 10)) {
+        Rcpp::Rcout << "  Step: " << step << "/" << n_steps << ", msle: " << msle_current << std::endl;
+        last_reported = step;
+      }
+      calls++;
+      // Heartbeat so a low-acceptance run (many rejected calls between accepted steps) is still
+      // visible, rather than looking hung.
+      if (calls % 200 == 0) {
+        Rcpp::Rcout << "  ... " << calls << " calls so far (" << step << "/" << n_steps
+                    << " accepted, running acceptance rate " << (double)step / (double)calls << ")" << std::endl;
+      }
+      
+    }
+    if (calls >= max_calls) {
+      Rcpp::Rcout << "\nMCMCSA warning: hit the " << max_calls << "-call cap before completing "
+                  << n_steps << " accepted steps (" << step << " accepted); returning best point found so far."
+                  << std::endl;
+    }
+    Rcpp::Rcout << "\nAcceptance rate (aim for >0.2 and <0.3): " << (double)step / (double)calls << std::endl;
+    Rcpp::Rcout << "Best msle: " << msle_least << std::endl;
+    
+    return FR_best;
+    
+  }
+
 // Main misread quality control function
 // [[Rcpp::export]]
 List mQC( 
@@ -1110,7 +1250,13 @@ List mQC(
     double        dispersion_weight = 0.0,             // Strength of the dispersion penalty matching empirical variance of corr1/corr0 to sdcorr^2 (0 disables it, matching prior behavior)
     NumericVector obs_erc           = NumericVector(), // Optional: observed exact-match (uncorrected) read counts per barcode, same row order as bc_counts. Empty (default) disables the erc loss term.
     double        erc_weight        = 0.0,             // Strength of the joint erc-fit loss term (0 disables it, matching prior behavior; ignored if obs_erc is empty)
-    int           n_restarts        = 1                // Number of L-BFGS restarts; restart 0 uses the standard init, restarts > 0 randomize the correlation block (1 matches prior behavior)
+    int           n_restarts        = 1,                // Number of L-BFGS restarts; restart 0 uses the standard init, restarts > 0 randomize the correlation block (1 matches prior behavior)
+    bool          use_mcmcsa        = false,            // If TRUE, use the MCMCSA simulated-annealing optimizer (see MCMCSA()) instead of nlopt::LD_LBFGS
+    double        mcmcsa_step_hi    = 0.05,              // MCMCSA only: starting (largest) per-step Gaussian proposal SD, linearly decayed to mcmcsa_step_lo over maxeval steps
+    double        mcmcsa_step_lo    = 0.005,             // MCMCSA only: ending (smallest) per-step Gaussian proposal SD
+    double        mcmcsa_temp_hi    = 0.1,               // MCMCSA only: starting (largest) annealing temperature, linearly decayed to mcmcsa_temp_lo over maxeval steps
+    double        mcmcsa_temp_lo    = 0.01,              // MCMCSA only: ending (smallest) annealing temperature
+    int           mcmcsa_seed       = 12345              // MCMCSA only: base RNG seed (offset by restart number)
   ) {
     
     // Load in data
@@ -1160,8 +1306,8 @@ List mQC(
     
     // Set parameter bounds
     double near_one = 1.0 - std::numeric_limits<double>::epsilon(); 
-    Vdbl lb(n, 0.0);
-    Vdbl ub(n, 0.0); 
+    Vdbl lb(n, std::numeric_limits<double>::epsilon());
+    Vdbl ub(n, std::numeric_limits<double>::epsilon()); 
     for (int i = 0; i < N_bits; ++i) {
       ub[i]          =  near_one;
       ub[N_bits + i] =  near_one;
@@ -1188,12 +1334,18 @@ List mQC(
     colnames(erchc_plus) = CharacterVector({"erc", "ecc", "ehc", "CR", "PPV"});
     NumericVector fr(n);
     
-    // Run L-BFGS via nlopt, with optional multi-start
+    // Run L-BFGS via nlopt (or MCMCSA), with optional multi-start
     double ftol_rel = 1e-8;
     double xtol_rel = 1e-6;
     if (n_restarts < 1) n_restarts = 1;
-    Rcpp::Rcout << "\nRunning L-BFGS (nlopt::LD_LBFGS)" << ", maxeval=" << maxeval << ", ftol_rel=" << ftol_rel
-                << ", xtol_rel=" << xtol_rel << ", n_restarts=" << n_restarts << std::endl;
+    if (use_mcmcsa) {
+      Rcpp::Rcout << "\nRunning MCMCSA" << ", maxeval=" << maxeval << ", step_size=[" << mcmcsa_step_hi << ", "
+                  << mcmcsa_step_lo << "], temp=[" << mcmcsa_temp_hi << ", " << mcmcsa_temp_lo
+                  << "], n_restarts=" << n_restarts << std::endl;
+    } else {
+      Rcpp::Rcout << "\nRunning L-BFGS (nlopt::LD_LBFGS)" << ", maxeval=" << maxeval << ", ftol_rel=" << ftol_rel
+                  << ", xtol_rel=" << xtol_rel << ", n_restarts=" << n_restarts << std::endl;
+    }
     
     std::mt19937 restart_rng(4507919u + static_cast<unsigned int>(N_barcodes) + static_cast<unsigned int>(n));
     double       best_minf = std::numeric_limits<double>::infinity();
@@ -1215,21 +1367,39 @@ List mQC(
       STdata.eval_hist    = EvalHist();
       
       if (n_restarts > 1) Rcpp::Rcout << "\n-- Restart " << (r+1) << "/" << n_restarts << " --" << std::endl;
-      nlopt::opt opt_r(nlopt::LD_LBFGS, n);
-      opt_r.set_lower_bounds(lb);
-      opt_r.set_upper_bounds(ub);
-      opt_r.set_min_objective(mQC_msle, &STdata);
-      opt_r.set_ftol_rel(ftol_rel);
-      opt_r.set_xtol_rel(xtol_rel);
-      opt_r.set_maxeval(maxeval);
       
       double minf_r = std::numeric_limits<double>::quiet_NaN();
-      try {
-        nlopt::result res = opt_r.optimize(x0_r, minf_r);
-        Rcpp::Rcout << "  L-BFGS finished (result code " << (int)res << "), final msle: " << minf_r << std::endl;
-      } catch (const std::exception& e) {
-        Rcpp::Rcout << "  L-BFGS warning: " << e.what() << "\n  Using best value found so far this restart." << std::endl;
-        minf_r = STdata.best_msle;
+      if (use_mcmcsa) {
+        // Linearly decay step size and temperature from their "hi" to "lo" bounds over maxeval steps
+        Vdbl step_size(maxeval), temp(maxeval);
+        for (int s = 0; s < maxeval; ++s) {
+          double frac  = maxeval > 1 ? static_cast<double>(s) / static_cast<double>(maxeval - 1) : 0.0;
+          step_size[s] = mcmcsa_step_hi + frac * (mcmcsa_step_lo - mcmcsa_step_hi);
+          temp[s]      = mcmcsa_temp_hi + frac * (mcmcsa_temp_lo - mcmcsa_temp_hi);
+        }
+        try {
+          x0_r   = MCMCSA(x0_r, ub, lb, step_size, temp, &STdata, mcmcsa_seed + r);
+          minf_r = STdata.best_msle;
+          Rcpp::Rcout << "  MCMCSA finished, final msle: " << minf_r << std::endl;
+        } catch (const std::exception& e) {
+          Rcpp::Rcout << "  MCMCSA warning: " << e.what() << "\n  Using best value found so far this restart." << std::endl;
+          minf_r = STdata.best_msle;
+        }
+      } else {
+        nlopt::opt opt_r(nlopt::LD_LBFGS, n);
+        opt_r.set_lower_bounds(lb);
+        opt_r.set_upper_bounds(ub);
+        opt_r.set_min_objective(mQC_msle, &STdata);
+        opt_r.set_ftol_rel(ftol_rel);
+        opt_r.set_xtol_rel(xtol_rel);
+        opt_r.set_maxeval(maxeval);
+        try {
+          nlopt::result res = opt_r.optimize(x0_r, minf_r);
+          Rcpp::Rcout << "  L-BFGS finished (result code " << (int)res << "), final msle: " << minf_r << std::endl;
+        } catch (const std::exception& e) {
+          Rcpp::Rcout << "  L-BFGS warning: " << e.what() << "\n  Using best value found so far this restart." << std::endl;
+          minf_r = STdata.best_msle;
+        }
       }
       
       if (!std::isnan(minf_r) && minf_r < best_minf) {
@@ -1241,7 +1411,7 @@ List mQC(
     }
     
     if (!any_success) {
-      Rcpp::stop("All L-BFGS restarts failed to produce a finite objective value.");
+      Rcpp::stop("All restarts failed to produce a finite objective value.");
     }
     if (n_restarts > 1) {
       Rcpp::Rcout << "\nBest of " << n_restarts << " restarts: msle = " << best_minf << std::endl;
@@ -1533,7 +1703,13 @@ List test_fr_recovery(
     double        prior_weight      = 0.0,
     double        dispersion_weight = 0.0,
     double        erc_weight        = 0.0,
-    int           n_restarts        = 1
+    int           n_restarts        = 1,
+    bool          use_mcmcsa        = false,
+    double        mcmcsa_step_hi    = 0.05,
+    double        mcmcsa_step_lo    = 0.005,
+    double        mcmcsa_temp_hi    = 0.1,
+    double        mcmcsa_temp_lo    = 0.01,
+    int           mcmcsa_seed       = 12345
   ) {
     
     // Load in data
@@ -1648,7 +1824,8 @@ List test_fr_recovery(
         fliprate_priors,
         blank_weight, prior_weight, dispersion_weight,
         obs_erc_s, erc_weight,
-        n_restarts
+        n_restarts,
+        use_mcmcsa, mcmcsa_step_hi, mcmcsa_step_lo, mcmcsa_temp_hi, mcmcsa_temp_lo, mcmcsa_seed
       );
       NumericMatrix erchc_plus = res["erctc_plus"];
       // ... extract flip-rate vector (size n)
@@ -1709,13 +1886,15 @@ List test_fr_recovery(
 // Arguments mirror pack_fr: rate10 and rate01 are per-bit flip rates; corr1 and corr0 are the
 // strict lower-triangle correlation vectors (length N_bits*(N_bits-1)/2 each).
 // ... written by Claude Sonnet 4.6
+// Note: signature spelled out as std::vector<double> rather than the Vdbl typedef because
+// Rcpp::compileAttributes()/RcppExports.cpp can't resolve local typedefs from main.cpp.
 // [[Rcpp::export]]
 double tr_sum_check(
-    int         bc,
-    const Vdbl& rate10,
-    const Vdbl& rate01,
-    const Vdbl& corr1,
-    const Vdbl& corr0
+    int                         bc,
+    const std::vector<double>& rate10,
+    const std::vector<double>& rate01,
+    const std::vector<double>& corr1,
+    const std::vector<double>& corr0
   ) {
     int N_bits = rate10.size();
     Vdbl params;
@@ -1778,128 +1957,11 @@ double tr_sum_check(
  */
 #if 0
 
-/* ===== restored from commit f1a1a6c: MCMCSA optimizer (fits the analytic model) ===== */
-
-FlipRates MCMCSA(
-    const Vdbl& FR,
-    const Vdbl& ub,
-    const Vdbl& lb,
-    const Vdbl& step_size,
-    const Vdbl& temp, 
-    void*       data,
-    int         ran_seed
-  ) {
-    
-    // Set up steps
-    int step          = 0;
-    int calls         = 0; 
-    int last_reported = -1;
-    int n_steps       = step_size.size(); 
-    if (temp.size() != n_steps) {
-      Rcpp::stop("step_size and temp vectors must be the same length");
-    }
-    
-    // Grab data and advance sim number
-    auto* d = static_cast<ST_data*>(data);
-    
-    // Initialize parameter vectors
-    Vdbl FR_current = FR;
-    Vdbl FR_next    = FR;
-    Vdbl FR_best    = FR;
-    int  n_FR       = FR.size();
-    int  N_bits     = d->cb.N_bits;
-    
-    // Check that initial parameters are within bounds
-    for (int i = 0; i < n_FR; ++i) {
-      if (FR[i] < lb[i] || FR[i] > ub[i]) {
-        Rcpp::stop("Initial parameters must be within bounds");
-      }
-    }
-    
-    // Extract regularization terms 
-    //auto msle_weights      = d->msle_weights;
-    //auto fr_priors         = d->fr_priors;
-    //auto prior_weight      = d->prior_weight;
-    //auto dispersion_weight = d->dispersion_weight;
-    
-    // Initialize gradient vector 
-    Vdbl grad(n_FR, 0.0);
-    
-    // Compute initial msle
-    double msle_current = mQC_msle(FR, grad, d)
-    double msle_next    = msle_current;
-    double msle_least   = msle_current;
-    Rcpp::Rcout << "\nResampling initial parameters with MCMCSA run:\nStep: 0, msle: " << msle_current << std::endl;
-    
-    // Start random-number generator and initialize a uniform distribution
-    std::mt19937 rng(ran_seed);
-    std::uniform_real_distribution<> unif(0.0, 1.0);
-    
-    while (step < n_steps) {
-      
-      // Generate random step (... this is the Markov chain)
-      double sp = static_cast<double>(step) / static_cast<double>(n_steps);
-      std::normal_distribution<double> norm(0.0, step_size[step]);
-      FR_next = FR_current;
-      for (int i = 0; i < n_FR; ++i) {
-        double sz = norm(rng);
-        FR_next[i] += sz * (1 - sp) + grad[i] * sp; // mixed with gradient for direction
-        // Enforce bounds ... if out of bounds, reflect back into bounds
-        if (FR_next[i] < lb[i]) {
-          FR_next[i] = lb[i] + (lb[i] - FR_next[i]);
-          if (FR_next[i] > ub[i]) {FR_next[i] = lb[i];}
-        } else if (FR_next[i] > ub[i]) {
-          FR_next[i] = ub[i] - (FR_next[i] - ub[i]);
-          if (FR_next[i] < lb[i]) {FR_next[i] = ub[i];}
-        }
-      }
-      
-      // Compute expected corrected counts from these flip rates
-      msle_next = mQC_msle(FR_next, grad, d)
-      
-      // Calculate acceptance probability
-      // ... idea: When msle decreases, probability of acceptance is 1; this formula
-      //      controls how quickly the probability of acceptance decreases as the mse increases
-      double acceptance_prob = std::min(1.0, std::exp(-(msle_next - msle_current)/temp[step]));
-     
-      // Accept or reject the proposed step
-      if (unif(rng) < acceptance_prob) {
-        // Accept the new parameters ... this is updating for the Markov chain
-        FR_current = FR_next;
-        // Update msle
-        msle_current = msle_next;
-        if (msle_current < msle_least) {
-          msle_least = msle_current;
-          FR_best    = FR_current;
-        }
-        // Advance step 
-        step++;
-      } else {
-        // Clear the just-saved history 
-        // ... saving results is step 2 of the Monte Carlo method: aggregate results
-        d->eval_hist.msle.pop_back();
-        d->eval_hist.fr.pop_back();
-        d->eval_hist.ehc.pop_back();
-        d->eval_hist.ecc.pop_back();
-        d->eval_hist.erc.pop_back();
-        d->eval_hist.CR.pop_back();
-        d->eval_hist.PPV.pop_back();
-      }
-      if (last_reported < step && (step % d->report_freq == 0 || step == 10)) {
-        Rcpp::Rcout << "  Step: " << step << "/" << n_steps << ", msle: " << msle_current << std::endl;
-        last_reported = step;
-      }
-      calls++;
-      
-    }
-    Rcpp::Rcout << "\nAcceptance rate (aim for >0.2 and <0.3): " << (double)n_steps / (double)calls << std::endl;
-    Rcpp::Rcout << "Best msle: " << msle_least << std::endl;
-    
-    // Pack best flip-rates and return as FlipRates struct
-    FlipRates fr_best = pack_fr(FR_best, N_bits);
-    return fr_best;
-    
-  }
+/* ===== MCMCSA optimizer (restored from commit f1a1a6c) =====
+ * Live, fixed copy now lives above mQC_msle()/mQC(), where it is actually wired in (see the
+ * use_mcmcsa option on mQC()). Removed from here to avoid a duplicate-definition build error; the
+ * fixes applied there (vs. this historical version) were: two missing semicolons after mQC_msle()
+ * calls, and a return-type change from a packed FlipRates to the raw parameter vector Vdbl. */
 
 /* ===== restored from commit f4e303e: DG spot-simulator + correlation-matrix helpers =====
  * (includes dg_find_sigma_RootBisection() etc., added at f4e303e to fix the corr1/corr0
@@ -2407,9 +2469,11 @@ SpotSim make_SpotSim(
   }
 
 
-/* ===== restored from commit f4e303e: test_fr_recovery (benchmark export using make_SpotSim) ===== */
-
-// [[Rcpp::export]]
+/* ===== restored from commit f4e303e: test_fr_recovery (benchmark export using make_SpotSim) =====
+ * Rcpp::export tag intentionally omitted here (unlike the historical original): this whole block is
+ * inside #if 0, but Rcpp::compileAttributes() scans source text for "// [[Rcpp::export]]" regardless
+ * of preprocessor directives, so leaving the tag in place collided with the live test_fr_recovery()
+ * defined earlier in this file (duplicate symbol in RcppExports.cpp). */
 List test_fr_recovery(
     NumericMatrix bc_counts,
     IntegerMatrix codebook,
