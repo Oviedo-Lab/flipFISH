@@ -1445,6 +1445,146 @@ List mQC(
     );
   }
 
+// Evaluate the penalized MSLE objective used by mQC()/MCMCSA() at a single, caller-supplied
+// parameter vector, without running any optimizer. Mirrors mQC()'s STdata setup (msle_weights,
+// fr_priors, prior_weight, dispersion_weight, erc term, misread-loss rescaling of bc_counts_true)
+// exactly, so the returned value is directly comparable to the "msle" mQC() reports for a fitted
+// solution evaluated against the same bc_counts/codebook/weights. Added to let test_fr_recovery()
+// compare the fitted solution's msle against the msle of the true, simulation-stipulated flip
+// rates -- i.e. to tell apart "the optimizer failed to find a better point" from "the penalized
+// objective's optimum isn't at the truth" (see sim.benchmark()'s msle_est/msle_stip output).
+// [[Rcpp::export]]
+double mQC_msle_at(
+    const std::vector<double>& FR,
+    NumericMatrix               bc_counts,
+    IntegerMatrix               codebook,
+    int                         maxHam,
+    int                         n_forks,
+    int                         max_flips,
+    List                        fliprate_priors   = List(),
+    double                      blank_weight      = 1.0,
+    double                      prior_weight      = 0.0,
+    double                      dispersion_weight = 0.0,
+    NumericVector               obs_erc           = NumericVector(),
+    double                      erc_weight        = 0.0
+  ) {
+
+    // Load in data, mirroring mQC()'s setup exactly so the result is comparable to mQC()'s "msle"
+    auto STdata = load_STdata(
+      bc_counts,
+      codebook,
+      max_flips,
+      maxHam,
+      false // Suppress verbose printouts
+    );
+    STdata.n_forks     = n_forks;
+    STdata.report_freq = std::numeric_limits<int>::max();
+
+    // Set up MSLE weights and the flip-rate/correlation prior.
+    STdata.msle_weights.assign(STdata.cb.barcodes.size(), 1.0);
+    for (int idx : STdata.cb.blanks) {
+      STdata.msle_weights[idx] = blank_weight;
+    }
+    STdata.fr_priors         = pack_fr_priors(fliprate_priors);
+    STdata.prior_weight      = prior_weight;
+    STdata.dispersion_weight = dispersion_weight;
+
+    // Set up the optional joint erc-fit term
+    if (obs_erc.size() == (int)STdata.cb.barcodes.size() && erc_weight > 0.0) {
+      STdata.has_erc_obs = true;
+      STdata.erc_weight  = erc_weight;
+      STdata.bc_counts_erc_obs.assign(STdata.cb.barcodes.size(), 0);
+      for (int i = 0; i < obs_erc.size(); ++i) {
+        STdata.bc_counts_erc_obs[i] = static_cast<int>(std::round(obs_erc[i]));
+      }
+    } else {
+      STdata.has_erc_obs = false;
+      STdata.erc_weight  = 0.0;
+    }
+
+    // Estimate misread loss scaler and rescale observed counts, exactly as mQC() does
+    double misread_loss_scaler = estimate_misread_loss(STdata, STdata.max_flips, fliprate_priors);
+    int    N_barcodes          = STdata.cb.barcodes.size();
+    for (int i = 0; i < N_barcodes; ++i) {
+      STdata.bc_counts_true[i] = static_cast<int>(std::round(static_cast<double>(STdata.bc_counts[i]) * misread_loss_scaler));
+    }
+    for (int idx : STdata.cb.blanks) {
+      STdata.bc_counts_true[idx] = 0;
+    }
+
+    // Evaluate the penalized MSLE objective at FR (empty grad vector => mQC_msle() skips gradients)
+    Vdbl grad;
+    Vdbl FR_(FR.begin(), FR.end());
+    return mQC_msle(FR_, grad, &STdata);
+
+  }
+
+// Expose the analytic Jacobian d(ecc_b)/d(theta_k) -- the same gradient expected_bc_counts() already
+// computes internally for L-BFGS, here returned directly instead of being collapsed into a single
+// MSLE gradient. Rows are barcodes, columns are parameters in FR's order (rate10, rate01, corr1, corr0).
+// Added to let identifiability of the bit-flip correlation block be checked directly (SVD of the
+// correlation columns) rather than inferred indirectly from optimizer behavior -- see the cor_recovery
+// diagnostic from sim.benchmark()/analyze_bm(), which found the fitted correlations uncorrelated with
+// the true ones. Mirrors mQC()'s STdata/bc_counts_true setup (misread-loss rescaling) but skips the
+// msle_weights/fr_priors/prior_weight/dispersion_weight setup entirely, since expected_bc_counts() (and
+// hence this Jacobian) doesn't depend on those -- they only enter mQC_msle()'s penalty terms.
+// [[Rcpp::export]]
+NumericMatrix mQC_ecc_jacobian_at(
+    const std::vector<double>& FR,
+    NumericMatrix               bc_counts,
+    IntegerMatrix               codebook,
+    int                         maxHam,
+    int                         n_forks,
+    int                         max_flips
+  ) {
+    
+    auto STdata = load_STdata(
+      bc_counts,
+      codebook,
+      max_flips,
+      maxHam,
+      false // Suppress verbose printouts
+    );
+    STdata.n_forks = n_forks;
+    
+    // Estimate misread loss scaler and rescale observed counts, exactly as mQC() does
+    double misread_loss_scaler = estimate_misread_loss(STdata, STdata.max_flips, List());
+    int    N_barcodes          = STdata.cb.barcodes.size();
+    for (int i = 0; i < N_barcodes; ++i) {
+      STdata.bc_counts_true[i] = static_cast<int>(std::round(static_cast<double>(STdata.bc_counts[i]) * misread_loss_scaler));
+    }
+    for (int idx : STdata.cb.blanks) {
+      STdata.bc_counts_true[idx] = 0;
+    }
+    
+    // Pack FR and compute expected counts with the ecc gradient requested
+    int       N_bits   = STdata.cb.N_bits;
+    int       n_params = (int)FR.size();
+    FlipRates fr        = pack_fr(Vdbl(FR.begin(), FR.end()), N_bits);
+    Vdbl      grad_ecc_flat(N_barcodes * n_params, 0.0);
+    
+    expected_bc_counts(
+      fr,
+      STdata.bc_counts_true,
+      STdata.cb.barcodes,
+      STdata.correction_table_inverted,
+      STdata.n_forks,
+      max_flips,
+      &grad_ecc_flat,
+      nullptr
+    );
+    
+    // Unpack the flat row-major (barcode, param) gradient into an N_barcodes x n_params matrix
+    NumericMatrix J(N_barcodes, n_params);
+    for (int b = 0; b < N_barcodes; ++b) {
+      for (int k = 0; k < n_params; ++k) {
+        J(b, k) = grad_ecc_flat[b * n_params + k];
+      }
+    }
+    return J;
+    
+  }
+
 /*
  * *********************************************************************************************************************
  * Simulation functions
@@ -1781,9 +1921,15 @@ List test_fr_recovery(
     NumericMatrix erc_est(n_sims, N_barcodes); 
     NumericMatrix ecc_est(n_sims, N_barcodes); 
     NumericMatrix ehc_est(n_sims, N_barcodes); 
-    NumericMatrix CR__est(n_sims, N_barcodes); 
-    NumericMatrix PPV_est(n_sims, N_barcodes); 
-    
+    NumericMatrix CR__est(n_sims, N_barcodes);
+    NumericMatrix PPV_est(n_sims, N_barcodes);
+    // ... penalized-MSLE diagnostic: fitted solution's msle vs. the true/stipulated FR's msle,
+    //     both evaluated on the same simulated bc_counts under the same weights/priors, to tell
+    //     apart an optimizer failure (msle_stip < msle_est) from a biased objective optimum
+    //     (msle_stip >= msle_est)
+    NumericVector msle_est(n_sims);
+    NumericVector msle_stip(n_sims);
+
     for (int s = 0; s < n_sims; ++s) {
       
       // Simulate corrected reads from this data and stipulated set of flip rates 
@@ -1836,7 +1982,18 @@ List test_fr_recovery(
       ehc_est(s,_) = NumericVector(erchc_plus(_, 2));
       CR__est(s,_) = NumericVector(erchc_plus(_, 3));
       PPV_est(s,_) = NumericVector(erchc_plus(_, 4));
-      
+      msle_est[s]  = Rcpp::as<double>(res["msle"]);
+
+      // Evaluate the same penalized objective at the true/stipulated FR, against this replicate's
+      // own simulated bc_counts (the exact matrix just handed to mQC() above)
+      msle_stip[s] = mQC_msle_at(
+        FR, bc_counts, codebook,
+        maxHam, n_forks, max_flips,
+        fliprate_priors,
+        blank_weight, prior_weight, dispersion_weight,
+        obs_erc_s, erc_weight
+      );
+
     }
     
     return List::create(
@@ -1859,7 +2016,10 @@ List test_fr_recovery(
       _["ecc_est"] = ecc_est,
       _["ehc_est"] = ehc_est,
       _["CR__est"] = CR__est,
-      _["PPV_est"] = PPV_est
+      _["PPV_est"] = PPV_est,
+      // penalized-objective diagnostic (see msle_est/msle_stip declaration above)
+      _["msle_est"]  = msle_est,
+      _["msle_stip"] = msle_stip
     );
     
     /*

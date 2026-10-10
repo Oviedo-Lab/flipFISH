@@ -110,10 +110,10 @@ bm <- sim.benchmark(
     m1_summary_stats,                        # Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
     codebook,                                # Codebook with row names as barcodes and columns as bits, must have barcode names as row names
     n_sims                           = 2,   # 100
-    n_forks                          = 20,
+    n_forks                          = 5,
     max_flips                        = 4,    # Suggest min of 6, 7 or 8 better
     report_freq                      = 10,
-    maxeval                          = 500,   # Suggest min of 100, 150 or 250 probably better
+    maxeval                          = 100,   # Suggest min of 100, 150 or 250 probably better
     maxHam = NULL,
     blank_weight                     = 10,
     prior_weight                     = 0.5, 
@@ -123,8 +123,8 @@ bm <- sim.benchmark(
     use_mcmcsa = TRUE,
     mcmcsa_step_hi    = 0.01,             # MCMCSA only: starting (largest) per-step Gaussian proposal SD, linearly decayed to mcmcsa_step_lo over maxeval steps
     mcmcsa_step_lo    = 0.005,            # MCMCSA only: ending (smallest) per-step Gaussian proposal SD
-    mcmcsa_temp_hi    = 0.75,              # MCMCSA only: starting (largest) annealing temperature, linearly decayed to mcmcsa_temp_lo over maxeval steps
-    mcmcsa_temp_lo    = 0.5,             # MCMCSA only: ending (smallest) annealing temperature
+    mcmcsa_temp_hi    = 0.1,              # MCMCSA only: starting (largest) annealing temperature, linearly decayed to mcmcsa_temp_lo over maxeval steps
+    mcmcsa_temp_lo    = 0.05,             # MCMCSA only: ending (smallest) annealing temperature
     )
 d <- Sys.time() - t
 units(d) <- "secs"
