@@ -13,6 +13,14 @@ mQC <- function(bc_counts, codebook, maxHam, n_forks, max_flips, report_freq = 1
     .Call(`_flipFISH_mQC`, bc_counts, codebook, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight, prior_weight, dispersion_weight, obs_erc, erc_weight, n_restarts, use_mcmcsa, mcmcsa_step_hi, mcmcsa_step_lo, mcmcsa_temp_hi, mcmcsa_temp_lo, mcmcsa_seed)
 }
 
+mQC_msle_at <- function(FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, blank_weight = 1.0, prior_weight = 0.0, dispersion_weight = 0.0, obs_erc = numeric(), erc_weight = 0.0) {
+    .Call(`_flipFISH_mQC_msle_at`, FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, blank_weight, prior_weight, dispersion_weight, obs_erc, erc_weight)
+}
+
+mQC_ecc_jacobian_at <- function(FR, bc_counts, codebook, maxHam, n_forks, max_flips) {
+    .Call(`_flipFISH_mQC_ecc_jacobian_at`, FR, bc_counts, codebook, maxHam, n_forks, max_flips)
+}
+
 test_fr_recovery <- function(bc_counts, codebook, n_sims, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight = 1.0, prior_weight = 0.0, dispersion_weight = 0.0, erc_weight = 0.0, n_restarts = 1L, use_mcmcsa = FALSE, mcmcsa_step_hi = 0.05, mcmcsa_step_lo = 0.005, mcmcsa_temp_hi = 0.1, mcmcsa_temp_lo = 0.01, mcmcsa_seed = 12345L) {
     .Call(`_flipFISH_test_fr_recovery`, bc_counts, codebook, n_sims, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight, prior_weight, dispersion_weight, erc_weight, n_restarts, use_mcmcsa, mcmcsa_step_hi, mcmcsa_step_lo, mcmcsa_temp_hi, mcmcsa_temp_lo, mcmcsa_seed)
 }
