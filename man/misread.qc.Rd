@@ -58,7 +58,7 @@ misread.qc(
 A list giving:\itemize{
    \item \code{STdata}: a dataframe giving the summary data from the ST run used in the estimation.
    \item \code{fliprates}: a labeled vector giving the estimated (i.e., best fit) flip rates and bit-flip correlations from the optimization. 
-   \item \code{erctc_plus}: a data frame giving, for each barcode, the read, corrected, and hit counts as well as \code{CR} and \code{PPV} values implied by the analytic conditional probability model, given the values in \code{fliprates}. Column names are: "erc", "ecc", "etc", "CR", and "PPV".
+   \item \code{erctc_plus}: a data frame giving, for each barcode, the read, corrected, and hit counts as well as \code{CR} and \code{PPV} values implied by the analytic conditional probability model, given the values in \code{fliprates}, plus a 95\% confidence interval on \code{PPV} (\code{PPV_lower}/\code{PPV_upper}) from a delta-method (Laplace) approximation -- this propagates uncertainty in the fitted flip-rate/correlation parameters through to PPV, via a Gauss-Newton information matrix truncated to its well-conditioned directions, rather than treating PPV as a simple binomial proportion (a naive Wald interval on PPV alone understates its true uncertainty by roughly an order of magnitude, since it ignores parameter uncertainty entirely -- see \code{old_vs_new_ppv_comparison/} at the package root). Column names are: "erc", "ecc", "ehc", "CR", "PPV", "PPV_lower", "PPV_upper".
    \item \code{msle}: A numeric value giving the minimal mean squared log error found by the L-BFGS optimization of the flip rates and bit-flip correlations.
 }
 }

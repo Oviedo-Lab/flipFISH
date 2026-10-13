@@ -15,12 +15,22 @@ NULL
 check_data <- function(
     STdata, 
     codebook,
+    bit_org,
     maxHam
   ) {
     # Check bit size 
-    if (ncol(codebook) > 64)                         stop("Codebook has more than the max-allowed 64 bits.")
+    if (is.null(dim(codebook)))                      stop("codebook must be a matrix or data frame.")
+    N_bits <- ncol(codebook)
+    if (N_bits > 64)                                 stop("Codebook has more than the max-allowed 64 bits.")
+    if (!is.null(bit_org)) {
+      if (is.null(dim(bit_org)))                     stop("bit_org must be a matrix or data frame.")
+      if (nrow(bit_org) != N_bits)                   stop("Bit organization provided, but does not match the number of bits in the codebook.")
+    } else {
+      bit_org <- 0
+    }
    
     # Prep codebook and STdata
+    if (is.null(dim(STdata)))                        stop("STdata must be a matrix or data frame.") 
     # ... get species names
     species_names <- rownames(STdata)
     if (is.null(species_names))                      stop("STdata must have row names as barcode species names")
@@ -45,19 +55,32 @@ check_data <- function(
       codebook[ blank_mask,][blank_rate_order,]
     )
     
-    # Check and set maxHam
+    # Split STdata
+    obs_erc <- numeric(0)
+    if (is.null(colnames(STdata)))                   stop("STdata must have named columns.") 
+    if ("counts_uncorrected" %in% colnames(STdata)) {
+      obs_erc <- STdata[,"counts_uncorrected"]
+      STdata  <- STdata[,"counts_uncorrected" != colnames(STdata)]
+    }
+    
+    # Check and set maxHam (max correctable Hamming distance)
+    if (!is.numeric(maxHam))
     codebook_distances <- unique_Hamming_cb(as.matrix(codebook))
     if (is.null(maxHam)) {
       maxHam <- min(codebook_distances) - 1
+    } else if (!is.numeric(maxHam) || length(maxHam) != 1) {
+      stop("maxHam must be a numeric of length 1.")
     } else if (maxHam >= min(codebook_distances)) {
       stop(paste0("maxHam must be less than the minimum Hamming distance between codebook entries (", min(codebook_distances), ")"))
     }
     
     return(
       list(
-        STdata                           = STdata,
-        codebook                         = codebook,
-        maxHam = maxHam
+        STdata   = STdata,
+        codebook = codebook,
+        bit_org  = bit_org,
+        obs_erc  = obs_erc,
+        maxHam   = maxHam
       )
     )
   }
@@ -80,6 +103,153 @@ check_forks <- function(
     return(n_forks)
   }
 
+#' Build a tiered Gaussian prior on bit-flip correlations from imaging-round/channel structure
+#'
+#' \code{misread.qc}/\code{sim.benchmark} regularize the (otherwise weakly identified -- see the
+#' package's benchmarking notes) pairwise bit-flip correlation parameters with a single Gaussian
+#' prior shared by all bit pairs (\code{fliprate_priors$expectedcorr}/\code{sdcorr}). This function
+#' instead builds a \emph{tiered} version of that same prior: bit pairs that share an imaging round
+#' get one (wider, i.e. more permissive) prior sd, pairs that only share a color channel get a
+#' second (narrower) sd, and all remaining pairs get a third, tight, near-zero sd. The rationale is
+#' that correlated misreads in a MERFISH/MERSCOPE-style experiment most plausibly arise from
+#' per-round effects (shared hybridization/imaging cycle) or, secondarily, per-channel effects
+#' (shared optical path across rounds); pairs sharing neither have no obvious mechanism to be
+#' correlated and the data cannot usefully constrain them anyway, so they are pulled tightly to
+#' \code{expectedcorr} instead of being estimated as if they were as free as the rest.
+#'
+#' The returned list is a complete, ready-to-use \code{fliprate_priors} argument for
+#' \code{misread.qc}/\code{sim.benchmark} (it includes the usual \code{expected10}/\code{expected01}/
+#' \code{sd10}/\code{sd01}/\code{expectedcorr}/\code{sdcorr} fields alongside the new
+#' \code{sdcorr_pairs} vector, so nothing else needs to be merged in).
+#'
+#' @param N_bits Integer, number of bits in the codebook.
+#' @param bit_round Vector of length \code{N_bits} giving each bit's imaging-round label (any type that supports \code{==}, e.g. the \code{imagingRound} column of a MERSCOPE \code{codebook_organization.csv}, in bit order 1..N_bits).
+#' @param bit_channel Vector of length \code{N_bits} giving each bit's color-channel label (e.g. the \code{color} column of the same file), in bit order 1..N_bits.
+#' @param sd_round Prior sd for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).
+#' @param sd_channel Prior sd for bit pairs sharing a color channel but not a round (tier 2), default 0.1.
+#' @param sd_other Prior sd for all remaining bit pairs (tier 3, pinned near \code{expectedcorr}), default 0.01.
+#' @param expectedcorr Prior mean for all tiers, default 0.0.
+#' @param sdcorr Fallback scalar sd, carried through unchanged for use anywhere \code{sdcorr_pairs} isn't consulted (e.g. \code{draw_random_fr}'s initial sampling); does not affect the tiered penalty itself. Default 0.2.
+#' @param expected10 Passed straight through to the returned list, default 0.01 (package default).
+#' @param expected01 Passed straight through to the returned list, default 0.05 (package default).
+#' @param sd10 Passed straight through to the returned list, default 0.1 (package default).
+#' @param sd01 Passed straight through to the returned list, default 0.2 (package default).
+#' @return A named list suitable as \code{misread.qc}/\code{sim.benchmark}'s \code{fliprate_priors} argument, with \code{sdcorr_pairs} added (length \code{N_bits*(N_bits-1)/2}, in the same bit-pair order as \code{fr_stip}/\code{fr__est}'s correlation columns).
+#' @export
+build_corr_priors <- function(
+    N_bits,
+    bit_round,
+    bit_channel,
+    sd_round     = 0.2,
+    sd_channel   = 0.1,
+    sd_other     = 0.01,
+    expectedcorr = 0.0,
+    sdcorr       = 0.2,
+    expected10   = 0.01,
+    expected01   = 0.05,
+    sd10         = 0.1,
+    sd01         = 0.2
+  ) {
+    if (length(bit_round)   != N_bits) stop("bit_round must have length N_bits")
+    if (length(bit_channel) != N_bits) stop("bit_channel must have length N_bits")
+   
+    corr_free    <- N_bits * (N_bits - 1) / 2
+    sdcorr_pairs <- numeric(corr_free)
+   
+    # Fill in the same order as main.cpp's strict lower triangle (pair (i0, j0), 0-based, j0 < i0,
+    # at linear index i0*(i0-1)/2 + j0): looping i0 = 1..N_bits-1, j0 = 0..i0-1 visits that index in
+    # increasing order, so a plain running counter k matches it without computing the formula.
+    k <- 0
+    for (i0 in 1:(N_bits - 1)) {
+      for (j0 in 0:(i0 - 1)) {
+        k <- k + 1
+        i <- i0 + 1 # 1-based R index into bit_round/bit_channel
+        j <- j0 + 1
+        if (bit_round[i] == bit_round[j]) {
+          sdcorr_pairs[k] <- sd_round
+        } else if (bit_channel[i] == bit_channel[j]) {
+          sdcorr_pairs[k] <- sd_channel
+        } else {
+          sdcorr_pairs[k] <- sd_other
+        }
+      }
+    }
+   
+    list(
+      expected10   = expected10,
+      expected01   = expected01,
+      sd10         = sd10,
+      sd01         = sd01,
+      expectedcorr = expectedcorr,
+      sdcorr       = sdcorr,
+      sdcorr_pairs = sdcorr_pairs
+    )
+  }
+
+#' Build a structured ground-truth prior for simulating organized bit-flip correlations
+#'
+#' \code{build_corr_priors} builds a tiered \emph{fitting} prior; this function builds a matching
+#' \emph{generative} prior, for use as \code{sim.benchmark}'s \code{stip_fliprate_priors} argument,
+#' so the simulated "true" correlations actually have the organized structure a tiered fitting
+#' prior assumes, instead of being drawn i.i.d. across all bit pairs (see the package's
+#' benchmarking notes on why that distinction matters for an honest test).
+#'
+#' Unlike \code{build_corr_priors}'s \code{sdcorr_pairs} (which can be handed to \code{sim.benchmark}'s
+#' \code{stip_fliprate_priors} too, but goes through the same global Cholesky-based construction
+#' \code{draw_random_fr} always used, and so leaks some of the round/channel tiers' magnitude into
+#' the pairs meant to be near zero), this function instead has \code{draw_random_fr} use a
+#' two-level latent-factor construction with no such leakage: pairs sharing an imaging round get a
+#' flexible (positive or negative, heterogeneous per pair) correlation local to that round only;
+#' pairs sharing a color channel (and not a round) get one shared, homogeneous value for that whole
+#' channel; everything else is exactly zero. This is a provably valid correlation structure (the
+#' covariance of three independent, unit-variance pieces -- a round-local term, a channel-shared
+#' term, and idiosyncratic noise), not something checked or repaired after the fact.
+#'
+#' @param N_bits Integer, number of bits in the codebook.
+#' @param bit_round Vector of length \code{N_bits} giving each bit's imaging-round label (any type that supports \code{==}; need not be integer, it is converted internally), in bit order 1..N_bits.
+#' @param bit_channel Vector of length \code{N_bits} giving each bit's color-channel label, in bit order 1..N_bits.
+#' @param round_corr_sd Sd fed into each round's own local correlation draw (before \code{w_round} scaling); controls how strong/variable round-tier correlations are, default 0.2.
+#' @param channel_rho The single, homogeneous (pre-\code{w_channel}-scaling) correlation value shared by every pair within a channel, default 0.5. Must satisfy the standard equicorrelation bound \code{channel_rho >= -1/(m-1)} for the smallest channel group of size \code{m}; the default (and any non-negative value) always satisfies this.
+#' @param w_round Fraction of each bit's variance attributed to round membership; the final round-tier correlation for a pair is (roughly) \code{w_round} times a value on the scale of \code{round_corr_sd}. Default 0.7.
+#' @param w_channel Fraction of each bit's variance attributed to channel membership; the final, homogeneous channel-tier correlation is exactly \code{w_channel * channel_rho}. Default 0.1. \code{w_round + w_channel} must be \code{<= 1} (the remainder is idiosyncratic, bit-specific noise).
+#' @param expected10 Passed straight through to the returned list, default 0.01 (package default).
+#' @param expected01 Passed straight through to the returned list, default 0.05 (package default).
+#' @param sd10 Passed straight through to the returned list, default 0.1 (package default).
+#' @param sd01 Passed straight through to the returned list, default 0.2 (package default).
+#' @return A named list suitable as \code{sim.benchmark}'s \code{stip_fliprate_priors} argument.
+#' @export
+build_structured_truth_priors <- function(
+    N_bits,
+    bit_round,
+    bit_channel,
+    round_corr_sd = 0.2,
+    channel_rho   = 0.5,
+    w_round       = 0.7,
+    w_channel     = 0.1,
+    expected10    = 0.01,
+    expected01    = 0.05,
+    sd10          = 0.1,
+    sd01          = 0.2
+  ) {
+    if (length(bit_round)   != N_bits) stop("bit_round must have length N_bits")
+    if (length(bit_channel) != N_bits) stop("bit_channel must have length N_bits")
+    if (w_round + w_channel > 1)       stop("w_round + w_channel must be <= 1")
+   
+    list(
+      expected10          = expected10,
+      expected01          = expected01,
+      sd10                = sd10,
+      sd01                = sd01,
+      # Integer-coded (via factor()) so arbitrary label types (character, numeric, ...) work
+      latent_bit_round    = as.integer(factor(bit_round)),
+      latent_bit_channel  = as.integer(factor(bit_channel)),
+      round_corr_sd       = round_corr_sd,
+      channel_rho         = channel_rho,
+      w_round             = w_round,
+      w_channel           = w_channel
+    )
+  }
+
 #' Run misread QC analysis on summary stats data from spatial transcriptomics experiment
 #'
 #' This function takes summary statistics from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs L-BFGS (via nlopt) to make a best-fit estimate of the bit-flip rates and correlations. The estimation (i.e., L-BFGS optimization) uses an analytic conditional probability model to compute, for each barcode \emph{b}, values expected based on bit-flip rates and bit-flip correlations, for: \itemize{
@@ -89,56 +259,59 @@ check_forks <- function(
 #' }
 #'  The "best fit" is defined as least mean squared log error, mean squared log error being computed by comparing the analytically implied expected corrected counts to the observed corrected counts included in the summary statistics. Additionally, both the expected "confidence ratio" (CR) and expected positive predictive value (PPV) are computed, from these implied values, for each barcode. The CR is a quality control metric proposed by the original developers of MERFISH (e.g., see DOI 10.1016/bs.mie.2016.03.020) defined per barcode as the read count over the corrected count, while PPV is a oft-used metric defined as the hit count over the corrected count. That is, PPV tells us, for each barcode \emph{b}, the expected percentage of spots decoded as \emph{b} which are in fact \emph{b}. 
 #'
-#' @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts". Must have barcode names (e.g., gene or protein species) as row names.
+#' @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", "counts_uncorrected". Must have barcode names (e.g., gene or protein species) as row names.
 #' @param codebook Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0, depending on whether an mRNA molecule of the species represented by the row is expected to luminescence in the bit represented by the column. All row names from \code{STdata} must be included in the row names for \code{codebook}. 
 #' @param n_forks Number of process forks to use for expected-count computation (i.e., parallel computation), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.
 #' @param max_flips When analytically computing expected corrected counts per barcode, the function will ignore misreads larger than this Hamming distance. The default is 0, which is interpreted as no limit. Using all misreads will likely be prohibitively slow; a value between six and ten is probably advisable. Values of 3 or 4 work well for initial trouble shooting and testing. 
 #' @param report_freq Divisor specifying report frequency during optimization; will print updates every \code{report_freq} accepted calls, default 10.
 #' @param maxeval Maximum number of objective function evaluations for L-BFGS, default 500.
 #' @param maxHam Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries.
-#' @param use_mcmcsa If TRUE, use the MCMCSA simulated-annealing optimizer instead of L-BFGS (nlopt), default FALSE.
-#' @param mcmcsa_step_hi MCMCSA only: starting (largest) per-step Gaussian proposal SD, linearly decayed to \code{mcmcsa_step_lo} over \code{maxeval} steps, default 0.05.
-#' @param mcmcsa_step_lo MCMCSA only: ending (smallest) per-step Gaussian proposal SD, default 0.005.
-#' @param mcmcsa_temp_hi MCMCSA only: starting (largest) annealing temperature, linearly decayed to \code{mcmcsa_temp_lo} over \code{maxeval} steps, default 0.1.
-#' @param mcmcsa_temp_lo MCMCSA only: ending (smallest) annealing temperature, default 0.01.
-#' @param mcmcsa_seed MCMCSA only: base RNG seed (offset by restart number), default 12345.
 #' @return A list giving:\itemize{
 #'    \item \code{STdata}: a dataframe giving the summary data from the ST run used in the estimation.
 #'    \item \code{fliprates}: a labeled vector giving the estimated (i.e., best fit) flip rates and bit-flip correlations from the optimization. 
-#'    \item \code{erctc_plus}: a data frame giving, for each barcode, the read, corrected, and hit counts as well as \code{CR} and \code{PPV} values implied by the analytic conditional probability model, given the values in \code{fliprates}. Column names are: "erc", "ecc", "etc", "CR", and "PPV".
+#'    \item \code{erctc_plus}: a data frame giving, for each barcode, the read, corrected, and hit counts as well as \code{CR} and \code{PPV} values implied by the analytic conditional probability model, given the values in \code{fliprates}, plus a 95\% confidence interval on \code{PPV} (\code{PPV_lower}/\code{PPV_upper}) from a delta-method (Laplace) approximation -- this propagates uncertainty in the fitted flip-rate/correlation parameters through to PPV, via a Gauss-Newton information matrix truncated to its well-conditioned directions, rather than treating PPV as a simple binomial proportion (a naive Wald interval on PPV alone understates its true uncertainty by roughly an order of magnitude, since it ignores parameter uncertainty entirely -- see \code{old_vs_new_ppv_comparison/} at the package root). Column names are: "erc", "ecc", "ehc", "CR", "PPV", "PPV_lower", "PPV_upper".
 #'    \item \code{msle}: A numeric value giving the minimal mean squared log error found by the L-BFGS optimization of the flip rates and bit-flip correlations.
-#' } 
+#' }
 #' @export
 misread.qc <- function(
     STdata,
     codebook,
+    bit_org           = NULL, 
     n_forks           = 1,
     max_flips         = 0,
     report_freq       = 10,
-    maxeval           = 500,
-    maxHam = NULL,
-    fliprate_priors   = list(),
-    blank_weight      = 1.0,
-    prior_weight      = 0.0,
-    dispersion_weight = 0.0,
-    obs_erc           = numeric(0),
-    erc_weight        = 0.0,
+    maxeval           = 500, 
     n_restarts        = 1,
-    use_mcmcsa        = FALSE,            # If TRUE, use the MCMCSA simulated-annealing optimizer instead of L-BFGS (nlopt)
-    mcmcsa_step_hi    = 0.05,             # MCMCSA only: starting (largest) per-step Gaussian proposal SD, linearly decayed to mcmcsa_step_lo over maxeval steps
-    mcmcsa_step_lo    = 0.005,            # MCMCSA only: ending (smallest) per-step Gaussian proposal SD
-    mcmcsa_temp_hi    = 0.1,              # MCMCSA only: starting (largest) annealing temperature, linearly decayed to mcmcsa_temp_lo over maxeval steps
-    mcmcsa_temp_lo    = 0.01,             # MCMCSA only: ending (smallest) annealing temperature
-    mcmcsa_seed       = 12345             # MCMCSA only: base RNG seed (offset by restart number)
+    maxHam            = NULL,
+    fliprate_priors   = list(),
+    weights           = list(
+      blank      = 1.0, 
+      prior      = 0.0, 
+      dispersion = 0.0, 
+      erc        = 0.0
+    )
   ) {
-    cat("\nRunning misread QC with", if (use_mcmcsa) "MCMCSA" else "L-BFGS (nlopt)")
+    cat("\nRunning misread QC with L-BFGS (nlopt)")
     cat("\nMax evaluations:", maxeval)
     
     # Confirm forking is possible and check number of cores
     n_forks    <- check_forks(n_forks)
     
     # Check bit size, prep codebook and STdata, and set maxHam
-    data_check <- check_data(STdata, codebook, maxHam)
+    data_check <- check_data(STdata, codebook, bit_org, maxHam)
+    
+    # Build flip rate priors from bit_org
+    N_bits <- ncol(codebook)
+    if (!is.null(dim(data_check$bit_org))) {
+      fliprate_priors_bo <- build_corr_priors(
+        N_bits      = N_bits, 
+        bit_round   = data_check$bit_org$imagingRound, 
+        bit_channel = data_check$bit_org$color
+      )
+      # Merge with user-specified flip rates
+      fliprate_priors_bo[names(fliprate_priors)] <- fliprate_priors
+      fliprate_priors <- fliprate_priors_bo
+    }
     
     # Run misread QC algorithm with L-BFGS (or MCMCSA)
     qc <- mQC(
@@ -149,26 +322,19 @@ misread.qc <- function(
       as.integer(max_flips),
       as.integer(report_freq),
       as.integer(maxeval),
-      fliprate_priors,
-      as.double(blank_weight),
-      as.double(prior_weight),
-      as.double(dispersion_weight),
-      as.double(obs_erc),
-      as.double(erc_weight),
-      as.integer(n_restarts),
-      as.logical(use_mcmcsa),
-      as.double(mcmcsa_step_hi),
-      as.double(mcmcsa_step_lo),
-      as.double(mcmcsa_temp_hi),
-      as.double(mcmcsa_temp_lo),
-      as.integer(mcmcsa_seed)
+      as.list(fliprate_priors),
+      as.double(weights$blank),
+      as.double(weights$prior),
+      as.double(weights$dispersion),
+      as.double(data_check$obs_erc),
+      as.double(weights$erc),
+      as.integer(n_restarts)
     )
     
     # Annotate result output
     cat("\nBuilding summary tables")
     qc$erctc_plus            <- as.data.frame(qc$erctc_plus)
     row.names(qc$erctc_plus) <- qc$STdata$species
-    N_bits                   <- ncol(codebook)
     names(qc$fliprates)      <- c(
       paste0("rate10_bit", seq_len(N_bits)),
       paste0("rate01_bit", seq_len(N_bits)),
@@ -198,12 +364,7 @@ misread.qc <- function(
 #' @param report_freq Divisor specifying report frequency during optimization; will print updates every \code{report_freq} accepted calls, default 10.
 #' @param maxeval Maximum number of objective function evaluations for L-BFGS, default 500.
 #' @param maxHam Maximum Hamming distance for misreads to be corrected (max correctable Hamming distance), default NULL sets it to one less than the minimum Hamming distance between codebook entries.
-#' @param use_mcmcsa If TRUE, use the MCMCSA simulated-annealing optimizer instead of L-BFGS (nlopt), default FALSE.
-#' @param mcmcsa_step_hi MCMCSA only: starting (largest) per-step Gaussian proposal SD, linearly decayed to \code{mcmcsa_step_lo} over \code{maxeval} steps, default 0.05.
-#' @param mcmcsa_step_lo MCMCSA only: ending (smallest) per-step Gaussian proposal SD, default 0.005.
-#' @param mcmcsa_temp_hi MCMCSA only: starting (largest) annealing temperature, linearly decayed to \code{mcmcsa_temp_lo} over \code{maxeval} steps, default 0.1.
-#' @param mcmcsa_temp_lo MCMCSA only: ending (smallest) annealing temperature, default 0.01.
-#' @param mcmcsa_seed MCMCSA only: base RNG seed (offset by restart number), default 12345.
+#' @param stip_fliprate_priors Priors used ONLY for drawing the simulated "true" flip rates/correlations (the \code{fr_stip} returned value), as opposed to \code{fliprate_priors}, which is used for fitting as usual. Default \code{list()} falls back to \code{fliprate_priors} itself, i.e. truth and fit share one prior (prior package behavior). Pass a different list here -- e.g. from \code{build_corr_priors()} with a near-zero \code{sd_other}, to simulate a correlation structure (such as bit pairs sharing an imaging round/channel) -- while fitting with a different prior (e.g. an unstructured one, or one with different tier weights) via \code{fliprate_priors}. This is what lets \code{sim.benchmark} test whether a structured fitting prior actually helps when the simulated truth really has that structure, as opposed to when it doesn't.
 #' @return A list giving:\itemize{
 #'    \item \code{fr__est}: A matrix giving the flip rates and bit-flip correlations estimated by \code{misread.qc} (columns, named "rate10_bit*", "rate01_bit*", and "corr_*"), for each set of observed counts generated by Bernoulli simulation (rows).
 #'    \item \code{fr_stip}: A vector giving the stipulated flip rates and bit-flip correlations used to generate the Bernoulli simulations. All simulations use the same stipulated values.
@@ -216,32 +377,43 @@ misread.qc <- function(
 sim.benchmark <- function(
     STdata,
     codebook,
-    n_sims            = 100,
-    n_forks           = 1,
-    max_flips         = 0,
-    report_freq       = 10,
-    maxeval           = 500,
-    maxHam = NULL,
-    fliprate_priors   = list(),
-    blank_weight      = 1.0,
-    prior_weight      = 0.0,
-    dispersion_weight = 0.0,
-    erc_weight        = 0.0,
-    n_restarts        = 1,
-    use_mcmcsa        = FALSE,            # If TRUE, use the MCMCSA simulated-annealing optimizer instead of L-BFGS (nlopt)
-    mcmcsa_step_hi    = 0.05,             # MCMCSA only: starting (largest) per-step Gaussian proposal SD, linearly decayed to mcmcsa_step_lo over maxeval steps
-    mcmcsa_step_lo    = 0.005,            # MCMCSA only: ending (smallest) per-step Gaussian proposal SD
-    mcmcsa_temp_hi    = 0.1,              # MCMCSA only: starting (largest) annealing temperature, linearly decayed to mcmcsa_temp_lo over maxeval steps
-    mcmcsa_temp_lo    = 0.01,             # MCMCSA only: ending (smallest) annealing temperature
-    mcmcsa_seed       = 12345             # MCMCSA only: base RNG seed (offset by restart number)
+    bit_org              = NULL,
+    n_sims               = 5,
+    n_forks              = 1,
+    max_flips            = 0,
+    report_freq          = 10,
+    maxeval              = 500,
+    n_restarts           = 1,
+    maxHam               = NULL,
+    fliprate_priors      = list(),
+    stip_fliprate_priors = list(), 
+    weights              = list(
+      blank      = 1.0, 
+      prior      = 0.0, 
+      dispersion = 0.0, 
+      erc        = 0.0
+    )
   ) {
-    cat("\nBenchmarking misread QC with Bernoulli simulations, using", if (use_mcmcsa) "MCMCSA" else "L-BFGS (nlopt)")
+    cat("\nBenchmarking misread QC with Bernoulli simulations, using L-BFGS (nlopt)")
     
     # Confirm forking is possible and check number of cores
     n_forks    <- check_forks(n_forks)
     
     # Check bit size, prep codebook and STdata, and set maxHam
-    data_check <- check_data(STdata, codebook, maxHam)
+    data_check <- check_data(STdata, codebook, bit_org, maxHam)
+    
+    # Build flip rate priors from bit_org
+    N_bits <- ncol(codebook)
+    if (!is.null(dim(data_check$bit_org))) {
+      fliprate_priors_bo <- build_corr_priors(
+        N_bits      = N_bits, 
+        bit_round   = data_check$bit_org$imagingRound, 
+        bit_channel = data_check$bit_org$color
+      )
+      # Merge with user-specified flip rates
+      fliprate_priors_bo[names(fliprate_priors)] <- fliprate_priors
+      fliprate_priors <- fliprate_priors_bo
+    }
     
     # Run misread QC algorithm with L-BFGS (or MCMCSA)
     resids <- test_fr_recovery(
@@ -253,29 +425,23 @@ sim.benchmark <- function(
       as.integer(max_flips),
       as.integer(report_freq),
       as.integer(maxeval),
-      fliprate_priors,
-      as.double(blank_weight),
-      as.double(prior_weight),
-      as.double(dispersion_weight),
-      as.double(erc_weight),
-      as.integer(n_restarts),
-      as.logical(use_mcmcsa),
-      as.double(mcmcsa_step_hi),
-      as.double(mcmcsa_step_lo),
-      as.double(mcmcsa_temp_hi),
-      as.double(mcmcsa_temp_lo),
-      as.integer(mcmcsa_seed)
+      as.list(fliprate_priors),
+      as.list(stip_fliprate_priors),
+      as.double(weights$blank),
+      as.double(weights$prior),
+      as.double(weights$dispersion),
+      as.double(weights$erc),
+      as.integer(n_restarts)
     )
-    
+   
     # Name flip-rate/correlation parameters (columns of fr__est, entries of fr_stip)
-    N_bits                       <- ncol(codebook)
-    fr_param_names                <- c(
+    fr_param_names           <- c(
       paste0("rate10_bit", seq_len(N_bits)),
       paste0("rate01_bit", seq_len(N_bits)),
       paste0("corr_",      seq_len(ncol(resids$fr__est) - 2*N_bits))
     )
-    colnames(resids$fr__est)     <- fr_param_names
-    names(resids$fr_stip)        <- fr_param_names
+    colnames(resids$fr__est) <- fr_param_names
+    names(resids$fr_stip)    <- fr_param_names
     
     return(resids)
     
@@ -483,248 +649,3 @@ plot.fr <- function(
       facet_grid(type ~ .)
     return(plt)
   }
-
-# #########################################################################################################
-# #########################################################################################################
-# HISTORICAL CODE, RESTORED VERBATIM FOR REFERENCE -- NOT WIRED UP, NOT ACTIVE.
-#
-# Everything between here and the matching closing brace below is a literal copy-paste of the R-level
-# wrappers for the DG-model and MCMCSA-optimizer code that existed in this package's git history before
-# being removed, restored on request so it doesn't have to be dug back out of `git log`/`git show`. It is
-# wrapped in `if (FALSE) { ... }` so the package keeps working as-is; none of it is currently active, and
-# roxygen '#'' doc markers below have been flattened to plain '#' comments so `devtools::document()`
-# doesn't try to export/document these (their C++ counterparts are themselves disabled -- see src/main.cpp).
-#
-# Important: these two blocks were NEVER in the repo at the same time as each other, and NEVER wired
-# together -- see the longer note in src/main.cpp for the full history. In short: misreadQC() (below) is
-# the last-intact R wrapper (commit f1a1a6c) for MCMCSA as an alternative *optimizer* fitting the
-# *analytic* model (calls the old mQC() C++ export, itself calling MCMCSA() internally) -- no DG
-# simulation involved. dichot.guass.benchmark() (below) is the last-intact R wrapper (commit f4e303e) for
-# the DG spot-simulator, used only as a benchmarking tool (via test_fr_recovery()) to check how well
-# L-BFGS recovers stipulated parameters from DG-simulated data -- MCMCSA was long gone by that point.
-#
-# Both call C++ exports (mQC(), test_fr_recovery()) by their old signatures, which do not match the
-# current exports of the same/similar names in src/main.cpp -- expect to reconcile this by hand.
-# #########################################################################################################
-# #########################################################################################################
-if (FALSE) {
-
-# ===== restored from commit f1a1a6c: misreadQC() (R wrapper for the MCMCSA optimizer) =====
-
-# This function takes summary statistics from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs a Markov Chain Monte Carlo with Coupled Simulated Annealing (MCMCSA) algorithm to estimate the bit-flip rates and correlations, as well as the expected read, error-corrected, and true counts for each barcode. The function returns a list of these estimates across all iterations of the MCMCSA walk, as well as summary statistics on the flip rates and error-corrected counts. The aim is to compute both the "confidence ratio" (CR) and positive predictive value (PPV) for each barcode. 
-#
-# @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", must have barcode names as row names
-# @param codebook Codebook with row names as barcodes and columns as bits, must have barcode names as row names
-# @param max_fr Maximum flip rate to consider in the MCMCSA algorithm, default 0.1
-# @param max_corr Bit-flip correlations have lower and upper bounds of -max_corr and max_corr, default is 0.2
-# @param rate10_scale Assume that 1>0 flips occur in this proportion to 0>1 flips, default is 0.2
-# @param initial_corr Initial max absolute value for bit-flip correlation in the MCMCSA algorithm, default is 0.01
-# @param n_steps Number of steps to run the MCMCSA algorithm, default is 1000
-# @param n_forks Number of parallel forks to use for MCMCSA, default is 1 (must be 1 for Windows, can be >1 for Linux/Mac)
-# @param step_size_range Numeric vector of length 2, giving the max and min step size for the MCMCSA algorithm, which will be decayed linearly over n_steps, defaults to c(0.05, 0.005)
-# @param temp_range Numeric vector of length 2, giving the max and min temperature for the MCMCSA algorithm, which will be decayed linearly over n_steps, defaults to c(0.1, 0.01)
-# @param corr_step_scale Numeric, giving the scale of the step size for bit-flip correlations in the MCMCSA algorithm relative to the step size for flip rates, default is 0.1
-# @param maxHam Maximum Hamming distance for misreads to be corrected, default is NULL which will set it to one less than the minimum Hamming distance between codebook entries
-# @param ran_seed Random seed for MCMCSA algorithm, default is 12345
-# @return List giving \code{STdata}, a dataframe giving the summary data from the ST run used in the simulation, \code{fliprates}, a matrix giving the estimated flip rates and bit-flip correlations from each iteration of the MCMCSA algorithm, \code{erc}, \code{ecc}, and \code{etc}, matrices giving the estimated expected read, error-corrected, and true (i.e., correctly corrected) counts for each barcode at each iteration of the MCMCSA walk, \code{CR} and \code{PPV}, matrices giving estimated confidence ratio and positive predictive values for each iteration of the MCMCSA walk, and \code{fliprates_summary} and \code{bc_summary}, which give summary statistics on the flip rates and error-corrected counts across all iterations of the MCMCSA algorithm. 
-# @export
-misreadQC <- function(
-    STdata, 
-    codebook, 
-    max_fr = 0.1,
-    max_corr = 0.2,
-    rate10_scale = 0.2,
-    initial_corr = 0.01,
-    n_steps = 1000,
-    n_forks = 1,
-    step_size_range = c(0.05, 0.005), 
-    temp_range = c(0.1, 0.01), 
-    corr_step_scale = 0.1,
-    maxHam = NULL,
-    ran_seed = 12345
-  ) {
-    cat("\nRunning misread QC with MCMCSA")
-    cat("\nMax flip rate:", max_fr)
-    cat("\nNumber of steps:", n_steps)
-    
-    # Confirm forking is possible and check number of cores
-    if (!(Sys.info()["sysname"] == "Darwin" || Sys.info()["sysname"] == "Linux")) {
-      if (n_forks > 1) {
-        cat("\nForking not available on Windows, setting n_forks to 1")
-        n_forks <- 1
-      }
-    } else if (n_forks > parallel::detectCores()) {
-      cat("\nn_forks exceeds available cores, setting n_forks to", parallel::detectCores())
-      n_forks <- parallel::detectCores()
-    } else {
-      cat("\nNumber of forks to use:", n_forks)
-    }
-    
-    # Prep codebook and STdata
-    # ... get species names
-    species_names <- rownames(STdata)
-    if (is.null(species_names)) stop("STdata must have row names as species names")
-    # ... align rows of codebook to STdata
-    if (is.null(rownames(codebook))) stop("codebook must have row names as species names")
-    if (!all(species_names %in% rownames(codebook))) stop("All species in STdata must be present in codebook")
-    codebook <- codebook[species_names,]
-    # ... make blank mask
-    blank_mask <- grepl("Blank", species_names, ignore.case = FALSE)
-    if (sum(blank_mask) == 0) stop("No blanks found in STdata row names, make sure blank species have 'Blank' in their names")
-    if (sum(blank_mask) == length(species_names)) stop("All species are blanks. Make sure non-blank species do not have 'Blank' in their names")
-    # ... sort species by decreasing rates, with genes first and blanks second 
-    gene_rate_order <- order(STdata$rates[!blank_mask], decreasing = TRUE)
-    blank_rate_order <- order(STdata$rates[blank_mask], decreasing = TRUE)
-    # ... remake STdata and codebook with this order
-    STdata <- rbind(
-      STdata[!blank_mask,][gene_rate_order,],
-      STdata[blank_mask,][blank_rate_order,]
-    )
-    codebook <- rbind(
-      codebook[!blank_mask,][gene_rate_order,],
-      codebook[blank_mask,][blank_rate_order,]
-    )
-    
-    # Check bit size 
-    if (ncol(codebook) > 64) stop("Codebook has more than the max-allowed 64 bits.")
-    
-    # Check and set maxHam
-    codebook_distances <- unique_Hamming_cb(as.matrix(codebook))
-    if (is.null(maxHam)) {
-      maxHam <- min(codebook_distances) - 1
-    } else if (maxHam >= min(codebook_distances)) {
-      stop(paste0("maxHam must be less than the minimum Hamming distance between codebook entries (", min(codebook_distances), ")"))
-    }
-    
-    # Run misread QC algorithm with MCMCSA
-    qc <- mQC(
-      as.matrix(STdata), 
-      as.matrix(codebook), 
-      maxHam,
-      c(max(step_size_range), -(max(step_size_range) - min(step_size_range))/n_steps, min(step_size_range)), # step size, initial, slope, min
-      c(max(temp_range), -(max(temp_range) - min(temp_range))/n_steps, min(temp_range)), # temp, initial, slope, min
-      max_fr,
-      max_corr,
-      initial_corr,
-      corr_step_scale,
-      rate10_scale,
-      n_steps,
-      n_forks,
-      ran_seed
-    )
-    
-    # Make summary stats from qc results
-    cat("\nRunning summary stats on QC results")
-    sum_names <- c("mean", "lower", "upper")
-    qc_names <- names(qc)
-    bc_names <- qc_names[qc_names != "STdata" & qc_names != "fliprates"]
-    bc_sum_names <- c()
-    for (n in bc_names) {bc_sum_names <- c(bc_sum_names, paste0(n, "_", sum_names))}
-    fr <- matrix(NA, nrow = ncol(qc$fliprates), ncol = length(sum_names))
-    bc <- matrix(NA, nrow = ncol(qc$ecc), ncol = length(sum_names) * length(bc_names))
-    colnames(fr) <- sum_names 
-    colnames(bc) <- bc_sum_names
-    rownames(bc) <- qc$STdata$species
-    N_bits <- ncol(codebook)
-    fr_names <- paste0("rate10_bit", seq_len(N_bits))
-    fr_names <- c(fr_names, paste0("rate01_bit", seq_len(N_bits)))
-    fr_names <- c(fr_names, paste0("corr_", seq_len(ncol(qc$fliprates) - 2*N_bits)))
-    rownames(fr) <- fr_names
-    step_range <- c(round(n_steps/2):n_steps) # take second half of MCMCSA walk to compute means and CIs
-    for (p in qc_names) {
-      if (p == "STdata" || p == "msle") next
-      if (n_steps == 1) {
-        p_means <- qc[[p]]
-        ci <- rbind(p_means, p_means)
-      } else {
-        p_means <- colMeans(qc[[p]][step_range,])
-        ci <- apply(qc[[p]][step_range,], 2, quantile, probs = c(0.025, 0.975))
-      }
-      if (p == "fliprates") {
-        fr[,"mean"] <- p_means
-        fr[,"lower"] <- ci[1,]
-        fr[,"upper"] <- ci[2,]
-      } else {
-        bc[,paste0(p, "_mean")] <- p_means
-        bc[,paste0(p, "_lower")] <- ci[1,]
-        bc[,paste0(p, "_upper")] <- ci[2,]
-      }
-    } 
-    qc[["fliprates_summary"]] <- fr
-    qc[["bc_summary"]] <- bc
-    
-    rate10_mean <- mean(fr[grepl("rate10", rownames(fr)), "mean"])
-    rate01_mean <- mean(fr[grepl("rate01", rownames(fr)), "mean"])
-    rate10_lower <- mean(fr[grepl("rate10", rownames(fr)), "lower"])
-    rate10_upper <- mean(fr[grepl("rate10", rownames(fr)), "upper"])
-    rate01_lower <- mean(fr[grepl("rate01", rownames(fr)), "lower"])
-    rate01_upper <- mean(fr[grepl("rate01", rownames(fr)), "upper"])
-    cat("\nEstimated flip rates (mean, 95% CI):")
-    cat("\n1>0: ", round(rate10_mean, 4), " (", round(rate10_lower, 4), "-", round(rate10_upper, 4), ")", sep = "")
-    cat("\n0>1: ", round(rate01_mean, 4), " (", round(rate01_lower, 4), "-", round(rate01_upper, 4), ")\n", sep = "")
-    
-    return(qc)
-    
-  }
-
-# ===== restored from commit f4e303e: dichot.guass.benchmark() (R wrapper for the DG spot-simulator) =====
-
-
-# Benchmark \code{misread.qc} function with dichotomized-Gaussian simulations
-# 
-# This function takes the same summary statistics (\code{STdata}) and barcode codebook (\code{codebook}) as \code{misread.qc} and runs dichotomized-Gaussian simulations with stipulated bit-flip rates and bit-flip correlations in order to estimate how well the L-BFGS algorithm recovers the bit-flip rates and bit-flip correlations for the given data set and codebook. 
-# 
-# @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts". Must have barcode names (e.g., gene or protein species) as row names.
-# @param codebook Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0, depending on whether an mRNA molecule of the species represented by the row is expected to luminescence in the bit represented by the column. All row names from \code{STdata} must be included in the row names for \code{codebook}. 
-# @param n_sims Number of dichotomized-Gaussian simulations to run. The default is 100. 
-# @param n_forks Number of process forks to use for expected-count computation (i.e., parallel computation), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.
-# @param max_flips When analytically computing expected corrected counts per barcode, the function will ignore misreads larger than this Hamming distance. The default is 0, which is interpreted as no limit. Using all misreads will likely be prohibitively slow; a value between six and ten is probably advisable. Values of 3 or 4 work well for initial trouble shooting and testing. 
-# @param report_freq Divisor specifying report frequency during optimization; will print updates every \code{report_freq} accepted calls, default 10.
-# @param maxeval Maximum number of objective function evaluations for L-BFGS, default 500.
-# @param maxHam Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries.
-# @return A list giving:\itemize{
-#    \item \code{fr_est}: A matrix giving the flip rates and bit-flip correlations estimated by \code{misread.qc} (columns), for each set of observed counts generated by dichotomized-Gaussian simulation (rows).
-#    \item \code{fr_stipulated}: A vector giving the stipulated flip rates and bit-flip correlations used to generate the dichotomized-Gaussian simulations. All simulations use the same stipulated values.
-#    \item \code{PPV_est}: A matrix giving positive predictive value (PPV) expected based on analytical computation, using the values in \code{fr_est}, per barcode (columns), for each simulation run (rows). 
-#    \item \code{PPV_expected}: A vector giving the PPV values expected based on analytical computation for each barcode, given the stipulated flip rates and stipulated bit-flip correlations in \code{fr_stipulated}. 
-#    \item \code{ecc_est}: A matrix giving the corrected count expected based on analytical computation, using the values in \code{fr_est}, per barcode (columns), for each simulation run (rows).  
-#    \item \code{ecc_expected}: A vector giving the corrected count expected based on analytical computation for each barcode, given the stipulated flip rates and stipulated bit-flip correlations in \code{fr_stipulated}. 
-#    \item \code{sim_counts}: A matrix giving the actual simulated count per barcode (columns) for each simulation (rows). 
-#    }
-dichot.guass.benchmark <- function(
-    STdata,
-    codebook,
-    n_sims      = 100,
-    n_forks     = 1,
-    max_flips   = 0,
-    report_freq = 10,
-    maxeval     = 500,
-    maxHam      = NULL
-  ) {
-    cat("\nBenchmarking misread QC with dichotomized-Gaussian simulation")
-    
-    # Confirm forking is possible and check number of cores
-    n_forks    <- check_forks(n_forks)
-    
-    # Check bit size, prep codebook and STdata, and set maxHam
-    data_check <- check_data(STdata, codebook, maxHam)
-    
-    # Run misread QC algorithm with L-BFGS
-    resids <- test_fr_recovery(
-      as.matrix(data_check$STdata),
-      as.matrix(data_check$codebook),
-      as.integer(n_sims), 
-      as.integer(data_check$maxHam),
-      as.integer(n_forks),
-      as.integer(max_flips),
-      as.integer(report_freq),
-      as.integer(maxeval),
-      list()
-    )
-    
-    return(resids)
-    
-  }
-
-
-} # end restored historical DG/MCMCSA code

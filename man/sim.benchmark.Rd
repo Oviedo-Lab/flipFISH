@@ -14,6 +14,7 @@ sim.benchmark(
   maxeval = 500,
   maxHam = NULL,
   fliprate_priors = list(),
+  stip_fliprate_priors = list(),
   blank_weight = 1,
   prior_weight = 0,
   dispersion_weight = 0,
@@ -43,6 +44,8 @@ sim.benchmark(
 \item{maxeval}{Maximum number of objective function evaluations for L-BFGS, default 500.}
 
 \item{maxHam}{Maximum Hamming distance for misreads to be corrected (max correctable Hamming distance), default NULL sets it to one less than the minimum Hamming distance between codebook entries.}
+
+\item{stip_fliprate_priors}{Priors used ONLY for drawing the simulated "true" flip rates/correlations (the \code{fr_stip} returned value), as opposed to \code{fliprate_priors}, which is used for fitting as usual. Default \code{list()} falls back to \code{fliprate_priors} itself, i.e. truth and fit share one prior (prior package behavior). Pass a different list here -- e.g. from \code{build_corr_priors()} with a near-zero \code{sd_other}, to simulate a correlation structure (such as bit pairs sharing an imaging round/channel) -- while fitting with a different prior (e.g. an unstructured one, or one with different tier weights) via \code{fliprate_priors}. This is what lets \code{sim.benchmark} test whether a structured fitting prior actually helps when the simulated truth really has that structure, as opposed to when it doesn't.}
 
 \item{use_mcmcsa}{If TRUE, use the MCMCSA simulated-annealing optimizer instead of L-BFGS (nlopt), default FALSE.}
 
