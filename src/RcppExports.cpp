@@ -102,9 +102,41 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// mQC_counts_at
+NumericMatrix mQC_counts_at(const std::vector<double>& FR, NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips);
+RcppExport SEXP _flipFISH_mQC_counts_at(SEXP FRSEXP, SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const std::vector<double>& >::type FR(FRSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type bc_counts(bc_countsSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type codebook(codebookSEXP);
+    Rcpp::traits::input_parameter< int >::type maxHam(maxHamSEXP);
+    Rcpp::traits::input_parameter< int >::type n_forks(n_forksSEXP);
+    Rcpp::traits::input_parameter< int >::type max_flips(max_flipsSEXP);
+    rcpp_result_gen = Rcpp::wrap(mQC_counts_at(FR, bc_counts, codebook, maxHam, n_forks, max_flips));
+    return rcpp_result_gen;
+END_RCPP
+}
+// mQC_ehc_jacobian_at
+NumericMatrix mQC_ehc_jacobian_at(const std::vector<double>& FR, NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips);
+RcppExport SEXP _flipFISH_mQC_ehc_jacobian_at(SEXP FRSEXP, SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const std::vector<double>& >::type FR(FRSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type bc_counts(bc_countsSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type codebook(codebookSEXP);
+    Rcpp::traits::input_parameter< int >::type maxHam(maxHamSEXP);
+    Rcpp::traits::input_parameter< int >::type n_forks(n_forksSEXP);
+    Rcpp::traits::input_parameter< int >::type max_flips(max_flipsSEXP);
+    rcpp_result_gen = Rcpp::wrap(mQC_ehc_jacobian_at(FR, bc_counts, codebook, maxHam, n_forks, max_flips));
+    return rcpp_result_gen;
+END_RCPP
+}
 // test_fr_recovery
-List test_fr_recovery(NumericMatrix bc_counts, IntegerMatrix codebook, int n_sims, int maxHam, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, double blank_weight, double prior_weight, double dispersion_weight, double erc_weight, int n_restarts, bool use_mcmcsa, double mcmcsa_step_hi, double mcmcsa_step_lo, double mcmcsa_temp_hi, double mcmcsa_temp_lo, int mcmcsa_seed);
-RcppExport SEXP _flipFISH_test_fr_recovery(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP n_simsSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP blank_weightSEXP, SEXP prior_weightSEXP, SEXP dispersion_weightSEXP, SEXP erc_weightSEXP, SEXP n_restartsSEXP, SEXP use_mcmcsaSEXP, SEXP mcmcsa_step_hiSEXP, SEXP mcmcsa_step_loSEXP, SEXP mcmcsa_temp_hiSEXP, SEXP mcmcsa_temp_loSEXP, SEXP mcmcsa_seedSEXP) {
+List test_fr_recovery(NumericMatrix bc_counts, IntegerMatrix codebook, int n_sims, int maxHam, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, List stip_fliprate_priors, double blank_weight, double prior_weight, double dispersion_weight, double erc_weight, int n_restarts, bool use_mcmcsa, double mcmcsa_step_hi, double mcmcsa_step_lo, double mcmcsa_temp_hi, double mcmcsa_temp_lo, int mcmcsa_seed);
+RcppExport SEXP _flipFISH_test_fr_recovery(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP n_simsSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP stip_fliprate_priorsSEXP, SEXP blank_weightSEXP, SEXP prior_weightSEXP, SEXP dispersion_weightSEXP, SEXP erc_weightSEXP, SEXP n_restartsSEXP, SEXP use_mcmcsaSEXP, SEXP mcmcsa_step_hiSEXP, SEXP mcmcsa_step_loSEXP, SEXP mcmcsa_temp_hiSEXP, SEXP mcmcsa_temp_loSEXP, SEXP mcmcsa_seedSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -117,6 +149,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type report_freq(report_freqSEXP);
     Rcpp::traits::input_parameter< int >::type maxeval(maxevalSEXP);
     Rcpp::traits::input_parameter< List >::type fliprate_priors(fliprate_priorsSEXP);
+    Rcpp::traits::input_parameter< List >::type stip_fliprate_priors(stip_fliprate_priorsSEXP);
     Rcpp::traits::input_parameter< double >::type blank_weight(blank_weightSEXP);
     Rcpp::traits::input_parameter< double >::type prior_weight(prior_weightSEXP);
     Rcpp::traits::input_parameter< double >::type dispersion_weight(dispersion_weightSEXP);
@@ -128,7 +161,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type mcmcsa_temp_hi(mcmcsa_temp_hiSEXP);
     Rcpp::traits::input_parameter< double >::type mcmcsa_temp_lo(mcmcsa_temp_loSEXP);
     Rcpp::traits::input_parameter< int >::type mcmcsa_seed(mcmcsa_seedSEXP);
-    rcpp_result_gen = Rcpp::wrap(test_fr_recovery(bc_counts, codebook, n_sims, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight, prior_weight, dispersion_weight, erc_weight, n_restarts, use_mcmcsa, mcmcsa_step_hi, mcmcsa_step_lo, mcmcsa_temp_hi, mcmcsa_temp_lo, mcmcsa_seed));
+    rcpp_result_gen = Rcpp::wrap(test_fr_recovery(bc_counts, codebook, n_sims, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, stip_fliprate_priors, blank_weight, prior_weight, dispersion_weight, erc_weight, n_restarts, use_mcmcsa, mcmcsa_step_hi, mcmcsa_step_lo, mcmcsa_temp_hi, mcmcsa_temp_lo, mcmcsa_seed));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -154,7 +187,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 20},
     {"_flipFISH_mQC_msle_at", (DL_FUNC) &_flipFISH_mQC_msle_at, 12},
     {"_flipFISH_mQC_ecc_jacobian_at", (DL_FUNC) &_flipFISH_mQC_ecc_jacobian_at, 6},
-    {"_flipFISH_test_fr_recovery", (DL_FUNC) &_flipFISH_test_fr_recovery, 20},
+    {"_flipFISH_mQC_counts_at", (DL_FUNC) &_flipFISH_mQC_counts_at, 6},
+    {"_flipFISH_mQC_ehc_jacobian_at", (DL_FUNC) &_flipFISH_mQC_ehc_jacobian_at, 6},
+    {"_flipFISH_test_fr_recovery", (DL_FUNC) &_flipFISH_test_fr_recovery, 21},
     {"_flipFISH_tr_sum_check", (DL_FUNC) &_flipFISH_tr_sum_check, 5},
     {NULL, NULL, 0}
 };
