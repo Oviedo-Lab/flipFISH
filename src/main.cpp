@@ -1142,6 +1142,116 @@ double estimate_misread_loss(
     return static_cast<double>(total_spots_gt) / static_cast<double>(total_spots_ecc);
   }
 
+// Shared setup for the single-point diagnostic exports
+static std::pair<ST_data, FlipRates> prepare_STdata_at(
+    const std::vector<double>& FR,
+    NumericMatrix               bc_counts,
+    IntegerMatrix               codebook,
+    int                         maxHam,
+    int                         n_forks,
+    int                         max_flips
+  ) {
+    
+    auto STdata = load_STdata(bc_counts, codebook, max_flips, maxHam, false);
+    STdata.n_forks = n_forks;
+   
+    double misread_loss_scaler = estimate_misread_loss(STdata, STdata.max_flips, List());
+    int    N_barcodes          = STdata.cb.barcodes.size();
+    for (int i = 0; i < N_barcodes; ++i) {
+      STdata.bc_counts_true[i] = static_cast<int>(std::round(static_cast<double>(STdata.bc_counts[i]) * misread_loss_scaler));
+    }
+    for (int idx : STdata.cb.blanks) {
+      STdata.bc_counts_true[idx] = 0;
+    }
+   
+    FlipRates fr = pack_fr(Vdbl(FR.begin(), FR.end()), STdata.cb.N_bits);
+    return {STdata, fr};
+   
+    /*
+     * Function description:
+     *
+     * Shared setup for the single-point diagnostic exports (mQC_ecc_jacobian_at, mQC_ehc_jacobian_at,
+     * mQC_counts_at): load ST_data, estimate and apply the misread-loss rescaling of bc_counts_true exactly
+     * as mQC() does (zeroing blanks), then pack FR into a FlipRates struct. These diagnostics skip
+     * mQC()'s msle_weights/fr_priors/prior_weight/dispersion_weight/erc setup entirely, since
+     * expected_bc_counts() (and hence their gradients/counts) doesn't depend on those -- only
+     * mQC_msle()'s penalty terms do.
+     * 
+     * Initial draft of this function written by Claude Sonnet 5.
+     */
+  }
+
+// Shared setup for mQC() and mQC_msle_at()
+static ST_data prepare_STdata_for_mQC(
+    NumericMatrix bc_counts,
+    IntegerMatrix codebook,
+    int           maxHam,
+    int           n_forks,
+    int           max_flips,
+    bool          verbose,
+    const List&   fliprate_priors,
+    double        blank_weight,
+    double        prior_weight,
+    double        dispersion_weight,
+    NumericVector obs_erc,
+    double        erc_weight,
+    bool          warn_on_erc_mismatch
+  ) {
+   
+    auto STdata = load_STdata(bc_counts, codebook, max_flips, maxHam, verbose);
+    STdata.n_forks = n_forks;
+   
+    // Set up MSLE weights and the flip-rate/correlation prior.
+    STdata.msle_weights.assign(STdata.cb.barcodes.size(), 1.0);
+    for (int idx : STdata.cb.blanks) {
+      STdata.msle_weights[idx] = blank_weight;
+    }
+    STdata.fr_priors         = pack_fr_priors(fliprate_priors);
+    STdata.prior_weight      = prior_weight;
+    STdata.dispersion_weight = dispersion_weight;
+   
+    // Set up the optional joint erc-fit term
+    if (obs_erc.size() == (int)STdata.cb.barcodes.size() && erc_weight > 0.0) {
+      STdata.has_erc_obs = true;
+      STdata.erc_weight  = erc_weight;
+      STdata.bc_counts_erc_obs.assign(STdata.cb.barcodes.size(), 0);
+      for (int i = 0; i < obs_erc.size(); ++i) {
+        STdata.bc_counts_erc_obs[i] = static_cast<int>(std::round(obs_erc[i]));
+      }
+    } else {
+      STdata.has_erc_obs = false;
+      STdata.erc_weight  = 0.0;
+      if (warn_on_erc_mismatch && obs_erc.size() > 0 && obs_erc.size() != (int)STdata.cb.barcodes.size()) {
+        Rcpp::warning("obs_erc length does not match number of barcodes; ignoring erc loss term.");
+      }
+    }
+   
+    // Estimate misread loss scaler and rescale observed counts
+    double misread_loss_scaler = estimate_misread_loss(STdata, STdata.max_flips, fliprate_priors);
+    int    N_barcodes          = STdata.cb.barcodes.size();
+    for (int i = 0; i < N_barcodes; ++i) {
+      STdata.bc_counts_true[i] = static_cast<int>(std::round(static_cast<double>(STdata.bc_counts[i]) * misread_loss_scaler));
+    }
+    for (int idx : STdata.cb.blanks) {
+      STdata.bc_counts_true[idx] = 0;
+    }
+   
+    return STdata;
+   
+    /*
+     * Function description:
+     *
+     * Shared setup for mQC() and mQC_msle_at(): load ST_data and configure everything the penalized MSLE
+     * objective (mQC_msle(), via its ST_data* argument) depends on -- msle_weights/fr_priors/prior_weight/
+     * dispersion_weight, the optional joint erc-fit term, and the misread-loss rescaling of bc_counts_true.
+     * Callers set n_forks/report_freq themselves (report_freq isn't shared, and n_forks must be set before
+     * this runs since estimate_misread_loss() uses it). warn_on_erc_mismatch mirrors mQC()'s own warning
+     * for a mismatched obs_erc length; mQC_msle_at() passes false to preserve its prior (silent) behavior.
+     * 
+     * Initial draft of this function written by Claude Sonnet 5.
+     */
+  }
+
 /*
  * *********************************************************************************************************************
  * Functions to estimate flip rates, PPV, and CR
@@ -1328,42 +1438,16 @@ List mQC(
     int           n_restarts        = 1                // Number of L-BFGS restarts; restart 0 uses the standard init, restarts > 0 randomize the correlation block (1 matches prior behavior)
   ) {
     
-    // Load in data
-    auto STdata = load_STdata(
-      bc_counts, 
-      codebook, 
-      max_flips,
-      maxHam,
-      true // Make verbose printouts
-      );
-    STdata.n_forks     = n_forks;
+    // Load in data and set up the msle objective (weights, priors, erc term, misread-loss rescaling)
+    auto STdata = prepare_STdata_for_mQC(
+      bc_counts, codebook, maxHam, n_forks, max_flips,
+      true, // Make verbose printouts
+      fliprate_priors, blank_weight, prior_weight, dispersion_weight,
+      obs_erc, erc_weight,
+      true // warn on mismatched obs_erc length
+    );
     STdata.report_freq = report_freq;
-    
-    // Set up MSLE weights and the flip-rate/correlation prior.
-    STdata.msle_weights.assign(STdata.cb.barcodes.size(), 1.0);
-    for (int idx : STdata.cb.blanks) {
-      STdata.msle_weights[idx] = blank_weight;
-    }
-    STdata.fr_priors         = pack_fr_priors(fliprate_priors);
-    STdata.prior_weight      = prior_weight;
-    STdata.dispersion_weight = dispersion_weight;
-    
-    // Set up the optional joint erc-fit term
-    if (obs_erc.size() == (int)STdata.cb.barcodes.size() && erc_weight > 0.0) {
-      STdata.has_erc_obs = true;
-      STdata.erc_weight  = erc_weight;
-      STdata.bc_counts_erc_obs.assign(STdata.cb.barcodes.size(), 0);
-      for (int i = 0; i < obs_erc.size(); ++i) {
-        STdata.bc_counts_erc_obs[i] = static_cast<int>(std::round(obs_erc[i]));
-      }
-    } else {
-      STdata.has_erc_obs = false;
-      STdata.erc_weight  = 0.0;
-      if (obs_erc.size() > 0 && obs_erc.size() != (int)STdata.cb.barcodes.size()) {
-        Rcpp::warning("obs_erc length does not match number of barcodes; ignoring erc loss term.");
-      }
-    }
-    
+   
     // Initialize parameters stochastically from STdata.fr_priors
     int          N_bits        = STdata.cb.N_bits;
     int          N_barcodes    = STdata.cb.barcodes.size(); 
@@ -1385,20 +1469,8 @@ List mQC(
       lb[i]          = -near_one;
       ub[i]          =  near_one;
     }
-    
-    // Estimate misread loss scaler 
-    double misread_loss_scaler = estimate_misread_loss(STdata, STdata.max_flips, fliprate_priors);
-    
-    // Rescale observed counts by flip rates to compensate for misread loss
-    for (int i = 0; i < N_barcodes; ++i) {
-      STdata.bc_counts_true[i] = static_cast<int>(std::round(static_cast<double>(STdata.bc_counts[i]) * misread_loss_scaler));
-    }
-    // ... set blanks to zero
-    for (int idx : STdata.cb.blanks) {
-      STdata.bc_counts_true[idx] = 0;
-    }
-    
-    // Initialize matrices to hold results 
+   
+    // Initialize matrices to hold results
     NumericMatrix erchc_plus(N_barcodes, 7);
     colnames(erchc_plus) = CharacterVector({"erc", "ecc", "ehc", "CR", "PPV", "PPV_lower", "PPV_upper"});
     NumericVector fr(n);
@@ -1581,49 +1653,17 @@ double mQC_msle_at(
     double                      erc_weight        = 0.0
   ) {
    
-    // Load in data, mirroring mQC()'s setup exactly so the result is comparable to mQC()'s "msle"
-    auto STdata = load_STdata(
-      bc_counts,
-      codebook,
-      max_flips,
-      maxHam,
-      false // Suppress verbose printouts
+    // Load in data and set up the msle objective, mirroring mQC()'s setup exactly so the result
+    // is comparable to mQC()'s "msle"
+    auto STdata = prepare_STdata_for_mQC(
+      bc_counts, codebook, maxHam, n_forks, max_flips,
+      false, // Suppress verbose printouts
+      fliprate_priors, blank_weight, prior_weight, dispersion_weight,
+      obs_erc, erc_weight,
+      false // mirror mQC()'s prior (silent) behavior here -- no mismatch warning
     );
-    STdata.n_forks     = n_forks;
     STdata.report_freq = std::numeric_limits<int>::max();
-   
-    // Set up MSLE weights and the flip-rate/correlation prior.
-    STdata.msle_weights.assign(STdata.cb.barcodes.size(), 1.0);
-    for (int idx : STdata.cb.blanks) {
-      STdata.msle_weights[idx] = blank_weight;
-    }
-    STdata.fr_priors         = pack_fr_priors(fliprate_priors);
-    STdata.prior_weight      = prior_weight;
-    STdata.dispersion_weight = dispersion_weight;
-   
-    // Set up the optional joint erc-fit term
-    if (obs_erc.size() == (int)STdata.cb.barcodes.size() && erc_weight > 0.0) {
-      STdata.has_erc_obs = true;
-      STdata.erc_weight  = erc_weight;
-      STdata.bc_counts_erc_obs.assign(STdata.cb.barcodes.size(), 0);
-      for (int i = 0; i < obs_erc.size(); ++i) {
-        STdata.bc_counts_erc_obs[i] = static_cast<int>(std::round(obs_erc[i]));
-      }
-    } else {
-      STdata.has_erc_obs = false;
-      STdata.erc_weight  = 0.0;
-    }
-   
-    // Estimate misread loss scaler and rescale observed counts, exactly as mQC() does
-    double misread_loss_scaler = estimate_misread_loss(STdata, STdata.max_flips, fliprate_priors);
-    int    N_barcodes          = STdata.cb.barcodes.size();
-    for (int i = 0; i < N_barcodes; ++i) {
-      STdata.bc_counts_true[i] = static_cast<int>(std::round(static_cast<double>(STdata.bc_counts[i]) * misread_loss_scaler));
-    }
-    for (int idx : STdata.cb.blanks) {
-      STdata.bc_counts_true[idx] = 0;
-    }
-   
+
     // Evaluate the penalized MSLE objective at FR (empty grad vector => mQC_msle() skips gradients)
     Vdbl grad;
     Vdbl FR_(FR.begin(), FR.end());
@@ -1656,30 +1696,14 @@ NumericMatrix mQC_ecc_jacobian_at(
     int                         max_flips
   ) {
     
-    auto STdata = load_STdata(
-      bc_counts,
-      codebook,
-      max_flips,
-      maxHam,
-      false // Suppress verbose printouts
-    );
-    STdata.n_forks = n_forks;
-    
-    // Estimate misread loss scaler and rescale observed counts, exactly as mQC() does
-    double misread_loss_scaler = estimate_misread_loss(STdata, STdata.max_flips, List());
-    int    N_barcodes          = STdata.cb.barcodes.size();
-    for (int i = 0; i < N_barcodes; ++i) {
-      STdata.bc_counts_true[i] = static_cast<int>(std::round(static_cast<double>(STdata.bc_counts[i]) * misread_loss_scaler));
-    }
-    for (int idx : STdata.cb.blanks) {
-      STdata.bc_counts_true[idx] = 0;
-    }
-    
-    // Pack FR and compute expected counts with the ecc gradient requested
-    int       N_bits   = STdata.cb.N_bits;
-    int       n_params = (int)FR.size();
-    FlipRates fr        = pack_fr(Vdbl(FR.begin(), FR.end()), N_bits);
-    Vdbl      grad_ecc_flat(N_barcodes * n_params, 0.0);
+    auto       prepped = prepare_STdata_at(FR, bc_counts, codebook, maxHam, n_forks, max_flips);
+    ST_data&   STdata  = prepped.first;
+    FlipRates& fr      = prepped.second;
+
+    // Compute expected counts with the ecc gradient requested
+    int  N_barcodes = STdata.cb.barcodes.size();
+    int  n_params   = (int)FR.size();
+    Vdbl grad_ecc_flat(N_barcodes * n_params, 0.0);
     
     expected_bc_counts(
       fr,
@@ -1728,21 +1752,11 @@ NumericMatrix mQC_counts_at(
     int                        max_flips
   ) {
    
-    auto STdata = load_STdata(bc_counts, codebook, max_flips, maxHam, false);
-    STdata.n_forks = n_forks;
-   
-    double misread_loss_scaler = estimate_misread_loss(STdata, STdata.max_flips, List());
-    int    N_barcodes          = STdata.cb.barcodes.size();
-    for (int i = 0; i < N_barcodes; ++i) {
-      STdata.bc_counts_true[i] = static_cast<int>(std::round(static_cast<double>(STdata.bc_counts[i]) * misread_loss_scaler));
-    }
-    for (int idx : STdata.cb.blanks) {
-      STdata.bc_counts_true[idx] = 0;
-    }
-   
-    int       N_bits = STdata.cb.N_bits;
-    FlipRates fr      = pack_fr(Vdbl(FR.begin(), FR.end()), N_bits);
-   
+    auto       prepped = prepare_STdata_at(FR, bc_counts, codebook, maxHam, n_forks, max_flips);
+    ST_data&   STdata  = prepped.first;
+    FlipRates& fr      = prepped.second;
+    int  N_barcodes    = STdata.cb.barcodes.size();
+
     auto erchc = expected_bc_counts(
       fr, STdata.bc_counts_true, STdata.cb.barcodes, STdata.correction_table_inverted,
       STdata.n_forks, max_flips
@@ -1779,29 +1793,13 @@ NumericMatrix mQC_ehc_jacobian_at(
     int                        max_flips
   ) {
    
-    auto STdata = load_STdata(
-      bc_counts,
-      codebook,
-      max_flips,
-      maxHam,
-      false // Suppress verbose printouts
-    );
-    STdata.n_forks = n_forks;
-   
-    double misread_loss_scaler = estimate_misread_loss(STdata, STdata.max_flips, List());
-    int    N_barcodes          = STdata.cb.barcodes.size();
-    for (int i = 0; i < N_barcodes; ++i) {
-      STdata.bc_counts_true[i] = static_cast<int>(std::round(static_cast<double>(STdata.bc_counts[i]) * misread_loss_scaler));
-    }
-    for (int idx : STdata.cb.blanks) {
-      STdata.bc_counts_true[idx] = 0;
-    }
-   
-    int       N_bits   = STdata.cb.N_bits;
-    int       n_params = (int)FR.size();
-    FlipRates fr        = pack_fr(Vdbl(FR.begin(), FR.end()), N_bits);
-    Vdbl      grad_ecc_flat(N_barcodes * n_params, 0.0); // required alongside grad_ehc (do_grad gates do_grad_ehc)
-    Vdbl      grad_ehc_flat(N_barcodes * n_params, 0.0);
+    auto       prepped = prepare_STdata_at(FR, bc_counts, codebook, maxHam, n_forks, max_flips);
+    ST_data&   STdata  = prepped.first;
+    FlipRates& fr      = prepped.second;
+    int  N_barcodes    = STdata.cb.barcodes.size();
+    int  n_params      = (int)FR.size();
+    Vdbl grad_ecc_flat(N_barcodes * n_params, 0.0); // required alongside grad_ehc (do_grad gates do_grad_ehc)
+    Vdbl grad_ehc_flat(N_barcodes * n_params, 0.0);
    
     expected_bc_counts(
       fr,
