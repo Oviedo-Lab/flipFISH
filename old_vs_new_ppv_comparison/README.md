@@ -196,6 +196,31 @@ number depends only on the point estimate, not which CI method is being compared
 
 Full data: `delta_vs_mcmcsa.csv`.
 
+## Sanity check: any "Good" genes below the blank noise floor?
+
+A basic QC sanity check: blanks are barcodes with no real transcript, so their observed counts
+are a noise floor -- a "Good" gene with *fewer* counts than the most prevalent blank in that
+same mouse is a red flag. Checked across all 5 mice (`good_genes_below_max_blank.csv`,
+`good_genes_below_max_blank_summary.csv`):
+
+| mouse | max blank count | n good (old or new) | n below blank floor |
+|---|---|---|---|
+| 1 | 2783 | 305 | 29 |
+| 2 | 2909 | 307 | 45 |
+| 3 | 3457 | 367 | 70 |
+| 4 | 1739 | 286 | 71 |
+| 5 | 2770 | 318 | 72 |
+| **total** | - | - | **287** |
+
+**287 gene-mouse pairs, in every mouse.** Of those, 285 are called good by the new method and
+only 10 by the old method (8 by both) -- almost entirely a new-method-point-estimate problem,
+not an old-method one. Checking against the new method's own delta-method CI resolves this
+cleanly: **requiring `delta_lower >= 0.8` instead of the raw point estimate clears every single
+one of the 287** -- none of them have a CI lower bound reaching 0.8. This is a concrete,
+independent validation that the delta-method CI (section above) is doing real, useful work:
+it correctly flags exactly these below-noise-floor calls as unreliable, even where the point
+estimate alone does not.
+
 ## Files in this folder
 
 - `old_vs_new_ppv_scatter.png` -- scatter of new (L-BFGS point estimate) vs. old (MCMCSA
@@ -209,6 +234,8 @@ Full data: `delta_vs_mcmcsa.csv`.
   `qc_outputs/*.rds` files predate the delta-method CI columns (computed before that change);
   this comparison recomputes the CI from the same fitted parameters via `mQC_ecc_jacobian_at()`/
   `mQC_ehc_jacobian_at()`, not by refitting.
+- `good_genes_below_max_blank.csv` / `good_genes_below_max_blank_summary.csv` -- the
+  below-blank-noise-floor sanity check (see section above).
 - `summary_by_mouse.csv` -- the table above, machine-readable.
 - `gene_level_comparison.csv` -- full per-gene, per-mouse comparison (3605 rows): gene, mouse,
   new PPV, old median/lower/upper, and both methods' good/bad calls.
