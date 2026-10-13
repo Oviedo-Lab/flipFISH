@@ -11,6 +11,74 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// find_HD_by_row
+NumericVector find_HD_by_row(const NumericMatrix& codebook, const NumericVector& spot);
+RcppExport SEXP _flipFISH_find_HD_by_row(SEXP codebookSEXP, SEXP spotSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type codebook(codebookSEXP);
+    Rcpp::traits::input_parameter< const NumericVector& >::type spot(spotSEXP);
+    rcpp_result_gen = Rcpp::wrap(find_HD_by_row(codebook, spot));
+    return rcpp_result_gen;
+END_RCPP
+}
+// find_spot_labels_fast
+List find_spot_labels_fast(const IntegerMatrix& codebook, const IntegerMatrix& spots, const int& max_correctable_Hamming_distance);
+RcppExport SEXP _flipFISH_find_spot_labels_fast(SEXP codebookSEXP, SEXP spotsSEXP, SEXP max_correctable_Hamming_distanceSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const IntegerMatrix& >::type codebook(codebookSEXP);
+    Rcpp::traits::input_parameter< const IntegerMatrix& >::type spots(spotsSEXP);
+    Rcpp::traits::input_parameter< const int& >::type max_correctable_Hamming_distance(max_correctable_Hamming_distanceSEXP);
+    rcpp_result_gen = Rcpp::wrap(find_spot_labels_fast(codebook, spots, max_correctable_Hamming_distance));
+    return rcpp_result_gen;
+END_RCPP
+}
+// generate_spots_ci
+NumericMatrix generate_spots_ci(IntegerMatrix bc_counts, NumericMatrix codebook_gen_mat, NumericMatrix noise, NumericMatrix corr_mat, int ci, double threshold, bool decode_and_label);
+RcppExport SEXP _flipFISH_generate_spots_ci(SEXP bc_countsSEXP, SEXP codebook_gen_matSEXP, SEXP noiseSEXP, SEXP corr_matSEXP, SEXP ciSEXP, SEXP thresholdSEXP, SEXP decode_and_labelSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerMatrix >::type bc_counts(bc_countsSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type codebook_gen_mat(codebook_gen_matSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type noise(noiseSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type corr_mat(corr_matSEXP);
+    Rcpp::traits::input_parameter< int >::type ci(ciSEXP);
+    Rcpp::traits::input_parameter< double >::type threshold(thresholdSEXP);
+    Rcpp::traits::input_parameter< bool >::type decode_and_label(decode_and_labelSEXP);
+    rcpp_result_gen = Rcpp::wrap(generate_spots_ci(bc_counts, codebook_gen_mat, noise, corr_mat, ci, threshold, decode_and_label));
+    return rcpp_result_gen;
+END_RCPP
+}
+// find_nearby_barcodes_fast
+IntegerVector find_nearby_barcodes_fast(const int& bci, const IntegerMatrix& codebook, const int& max_correctable_Hamming_distance);
+RcppExport SEXP _flipFISH_find_nearby_barcodes_fast(SEXP bciSEXP, SEXP codebookSEXP, SEXP max_correctable_Hamming_distanceSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const int& >::type bci(bciSEXP);
+    Rcpp::traits::input_parameter< const IntegerMatrix& >::type codebook(codebookSEXP);
+    Rcpp::traits::input_parameter< const int& >::type max_correctable_Hamming_distance(max_correctable_Hamming_distanceSEXP);
+    rcpp_result_gen = Rcpp::wrap(find_nearby_barcodes_fast(bci, codebook, max_correctable_Hamming_distance));
+    return rcpp_result_gen;
+END_RCPP
+}
+// compute_PPV_fast
+NumericVector compute_PPV_fast(const List& barcodes_by_cell_true_list, const List& spots_bc_labels_list, const int& N_barcodes);
+RcppExport SEXP _flipFISH_compute_PPV_fast(SEXP barcodes_by_cell_true_listSEXP, SEXP spots_bc_labels_listSEXP, SEXP N_barcodesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const List& >::type barcodes_by_cell_true_list(barcodes_by_cell_true_listSEXP);
+    Rcpp::traits::input_parameter< const List& >::type spots_bc_labels_list(spots_bc_labels_listSEXP);
+    Rcpp::traits::input_parameter< const int& >::type N_barcodes(N_barcodesSEXP);
+    rcpp_result_gen = Rcpp::wrap(compute_PPV_fast(barcodes_by_cell_true_list, spots_bc_labels_list, N_barcodes));
+    return rcpp_result_gen;
+END_RCPP
+}
 // correlation_from_params
 Eigen::MatrixXd correlation_from_params(const std::vector<double>& theta, int n);
 RcppExport SEXP _flipFISH_correlation_from_params(SEXP thetaSEXP, SEXP nSEXP) {
@@ -35,8 +103,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // mQC
-List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, double blank_weight, double prior_weight, double dispersion_weight, NumericVector obs_erc, double erc_weight, int n_restarts, bool use_mcmcsa, double mcmcsa_step_hi, double mcmcsa_step_lo, double mcmcsa_temp_hi, double mcmcsa_temp_lo, int mcmcsa_seed);
-RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP blank_weightSEXP, SEXP prior_weightSEXP, SEXP dispersion_weightSEXP, SEXP obs_ercSEXP, SEXP erc_weightSEXP, SEXP n_restartsSEXP, SEXP use_mcmcsaSEXP, SEXP mcmcsa_step_hiSEXP, SEXP mcmcsa_step_loSEXP, SEXP mcmcsa_temp_hiSEXP, SEXP mcmcsa_temp_loSEXP, SEXP mcmcsa_seedSEXP) {
+List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, double blank_weight, double prior_weight, double dispersion_weight, NumericVector obs_erc, double erc_weight, int n_restarts);
+RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP blank_weightSEXP, SEXP prior_weightSEXP, SEXP dispersion_weightSEXP, SEXP obs_ercSEXP, SEXP erc_weightSEXP, SEXP n_restartsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -54,13 +122,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type obs_erc(obs_ercSEXP);
     Rcpp::traits::input_parameter< double >::type erc_weight(erc_weightSEXP);
     Rcpp::traits::input_parameter< int >::type n_restarts(n_restartsSEXP);
-    Rcpp::traits::input_parameter< bool >::type use_mcmcsa(use_mcmcsaSEXP);
-    Rcpp::traits::input_parameter< double >::type mcmcsa_step_hi(mcmcsa_step_hiSEXP);
-    Rcpp::traits::input_parameter< double >::type mcmcsa_step_lo(mcmcsa_step_loSEXP);
-    Rcpp::traits::input_parameter< double >::type mcmcsa_temp_hi(mcmcsa_temp_hiSEXP);
-    Rcpp::traits::input_parameter< double >::type mcmcsa_temp_lo(mcmcsa_temp_loSEXP);
-    Rcpp::traits::input_parameter< int >::type mcmcsa_seed(mcmcsa_seedSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight, prior_weight, dispersion_weight, obs_erc, erc_weight, n_restarts, use_mcmcsa, mcmcsa_step_hi, mcmcsa_step_lo, mcmcsa_temp_hi, mcmcsa_temp_lo, mcmcsa_seed));
+    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, blank_weight, prior_weight, dispersion_weight, obs_erc, erc_weight, n_restarts));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -182,9 +244,14 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_flipFISH_find_HD_by_row", (DL_FUNC) &_flipFISH_find_HD_by_row, 2},
+    {"_flipFISH_find_spot_labels_fast", (DL_FUNC) &_flipFISH_find_spot_labels_fast, 3},
+    {"_flipFISH_generate_spots_ci", (DL_FUNC) &_flipFISH_generate_spots_ci, 7},
+    {"_flipFISH_find_nearby_barcodes_fast", (DL_FUNC) &_flipFISH_find_nearby_barcodes_fast, 3},
+    {"_flipFISH_compute_PPV_fast", (DL_FUNC) &_flipFISH_compute_PPV_fast, 3},
     {"_flipFISH_correlation_from_params", (DL_FUNC) &_flipFISH_correlation_from_params, 2},
     {"_flipFISH_unique_Hamming_cb", (DL_FUNC) &_flipFISH_unique_Hamming_cb, 1},
-    {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 20},
+    {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 14},
     {"_flipFISH_mQC_msle_at", (DL_FUNC) &_flipFISH_mQC_msle_at, 12},
     {"_flipFISH_mQC_ecc_jacobian_at", (DL_FUNC) &_flipFISH_mQC_ecc_jacobian_at, 6},
     {"_flipFISH_mQC_counts_at", (DL_FUNC) &_flipFISH_mQC_counts_at, 6},

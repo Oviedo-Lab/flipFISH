@@ -1,10 +1,12 @@
 ---
 title: "Dependency licenses"
 author: "Michael Barkasi"
-date: "July 6, 2026 (v1.0)"
+date: "October 13, 2026 (v1.0)"
 ---
 
 This package uses code from the following packages, which are distributed under the licenses listed below.
+
+* Updated October 13, 2026, by Claude Sonnet 5; checked by MB.
 
 <h1> Rcpp </h1>
 
@@ -46,3 +48,54 @@ https://ggplot2.tidyverse.org/
 
 The MIT license  
 https://github.com/tidyverse/ggplot2
+
+<h1> MASS </h1>
+
+by: Brian Ripley and Bill Venables
+
+https://cran.r-project.org/web/packages/MASS/index.html  
+http://www.stats.ox.ac.uk/pub/MASS4/
+
+GPL-2 | GPL-3  
+https://www.r-project.org/Licenses/GPL-2  
+https://www.r-project.org/Licenses/GPL-3
+
+<h1> Matrix </h1>
+
+by: Douglas Bates, Martin Maechler, and Mikael Jagan
+
+https://cran.r-project.org/web/packages/Matrix/index.html  
+https://codeberg.org/jaganmn/Matrix
+
+GPL (>= 2) | file LICENCE  
+https://www.r-project.org/Licenses/GPL-2
+
+<h1> gridExtra </h1>
+
+by: Baptiste Auguie and Anton Antonov
+
+https://cran.r-project.org/web/packages/gridExtra/index.html  
+https://github.com/baptiste/gridextra
+
+GPL (>= 2)  
+https://www.r-project.org/Licenses/GPL-2
+
+<h1> grid </h1>
+
+by: Paul Murrell (part of the base R distribution; R Core Team)
+
+https://stat.ethz.ch/R-manual/R-devel/library/grid/html/00Index.html
+
+Part of R -- GPL-2 | GPL-3  
+https://www.r-project.org/Licenses/
+
+<h1> dplyr </h1>
+
+by: Hadley Wickham, Romain François, Lionel Henry, Kirill Müller, Davis Vaughan, and Posit Software, PBC
+
+https://dplyr.tidyverse.org/  
+https://github.com/tidyverse/dplyr
+
+The MIT license  
+https://github.com/tidyverse/dplyr/blob/main/LICENSE.md
+
