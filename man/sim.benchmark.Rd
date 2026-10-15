@@ -7,25 +7,17 @@
 sim.benchmark(
   STdata,
   codebook,
-  n_sims = 100,
+  bit_org = NULL,
+  n_sims = 5,
   n_forks = 1,
   max_flips = 0,
   report_freq = 10,
   maxeval = 500,
+  n_restarts = 1,
   maxHam = NULL,
   fliprate_priors = list(),
   stip_fliprate_priors = list(),
-  blank_weight = 1,
-  prior_weight = 0,
-  dispersion_weight = 0,
-  erc_weight = 0,
-  n_restarts = 1,
-  use_mcmcsa = FALSE,
-  mcmcsa_step_hi = 0.05,
-  mcmcsa_step_lo = 0.005,
-  mcmcsa_temp_hi = 0.1,
-  mcmcsa_temp_lo = 0.01,
-  mcmcsa_seed = 12345
+  weights = list(blank = 1, prior = 0, dispersion = 0, erc = 0)
 )
 }
 \arguments{
@@ -46,18 +38,6 @@ sim.benchmark(
 \item{maxHam}{Maximum Hamming distance for misreads to be corrected (max correctable Hamming distance), default NULL sets it to one less than the minimum Hamming distance between codebook entries.}
 
 \item{stip_fliprate_priors}{Priors used ONLY for drawing the simulated "true" flip rates/correlations (the \code{fr_stip} returned value), as opposed to \code{fliprate_priors}, which is used for fitting as usual. Default \code{list()} falls back to \code{fliprate_priors} itself, i.e. truth and fit share one prior (prior package behavior). Pass a different list here -- e.g. from \code{build_corr_priors()} with a near-zero \code{sd_other}, to simulate a correlation structure (such as bit pairs sharing an imaging round/channel) -- while fitting with a different prior (e.g. an unstructured one, or one with different tier weights) via \code{fliprate_priors}. This is what lets \code{sim.benchmark} test whether a structured fitting prior actually helps when the simulated truth really has that structure, as opposed to when it doesn't.}
-
-\item{use_mcmcsa}{If TRUE, use the MCMCSA simulated-annealing optimizer instead of L-BFGS (nlopt), default FALSE.}
-
-\item{mcmcsa_step_hi}{MCMCSA only: starting (largest) per-step Gaussian proposal SD, linearly decayed to \code{mcmcsa_step_lo} over \code{maxeval} steps, default 0.05.}
-
-\item{mcmcsa_step_lo}{MCMCSA only: ending (smallest) per-step Gaussian proposal SD, default 0.005.}
-
-\item{mcmcsa_temp_hi}{MCMCSA only: starting (largest) annealing temperature, linearly decayed to \code{mcmcsa_temp_lo} over \code{maxeval} steps, default 0.1.}
-
-\item{mcmcsa_temp_lo}{MCMCSA only: ending (smallest) annealing temperature, default 0.01.}
-
-\item{mcmcsa_seed}{MCMCSA only: base RNG seed (offset by restart number), default 12345.}
 }
 \value{
 A list giving:\itemize{

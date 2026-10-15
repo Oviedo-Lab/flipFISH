@@ -64,7 +64,6 @@ check_data <- function(
     }
     
     # Check and set maxHam (max correctable Hamming distance)
-    if (!is.numeric(maxHam))
     codebook_distances <- unique_Hamming_cb(as.matrix(codebook))
     if (is.null(maxHam)) {
       maxHam <- min(codebook_distances) - 1

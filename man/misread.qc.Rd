@@ -7,28 +7,19 @@
 misread.qc(
   STdata,
   codebook,
+  bit_org = NULL,
   n_forks = 1,
   max_flips = 0,
   report_freq = 10,
   maxeval = 500,
+  n_restarts = 1,
   maxHam = NULL,
   fliprate_priors = list(),
-  blank_weight = 1,
-  prior_weight = 0,
-  dispersion_weight = 0,
-  obs_erc = numeric(0),
-  erc_weight = 0,
-  n_restarts = 1,
-  use_mcmcsa = FALSE,
-  mcmcsa_step_hi = 0.05,
-  mcmcsa_step_lo = 0.005,
-  mcmcsa_temp_hi = 0.1,
-  mcmcsa_temp_lo = 0.01,
-  mcmcsa_seed = 12345
+  weights = list(blank = 1, prior = 0, dispersion = 0, erc = 0)
 )
 }
 \arguments{
-\item{STdata}{Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts". Must have barcode names (e.g., gene or protein species) as row names.}
+\item{STdata}{Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", "counts_uncorrected". Must have barcode names (e.g., gene or protein species) as row names.}
 
 \item{codebook}{Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0, depending on whether an mRNA molecule of the species represented by the row is expected to luminescence in the bit represented by the column. All row names from \code{STdata} must be included in the row names for \code{codebook}.}
 
@@ -41,18 +32,6 @@ misread.qc(
 \item{maxeval}{Maximum number of objective function evaluations for L-BFGS, default 500.}
 
 \item{maxHam}{Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries.}
-
-\item{use_mcmcsa}{If TRUE, use the MCMCSA simulated-annealing optimizer instead of L-BFGS (nlopt), default FALSE.}
-
-\item{mcmcsa_step_hi}{MCMCSA only: starting (largest) per-step Gaussian proposal SD, linearly decayed to \code{mcmcsa_step_lo} over \code{maxeval} steps, default 0.05.}
-
-\item{mcmcsa_step_lo}{MCMCSA only: ending (smallest) per-step Gaussian proposal SD, default 0.005.}
-
-\item{mcmcsa_temp_hi}{MCMCSA only: starting (largest) annealing temperature, linearly decayed to \code{mcmcsa_temp_lo} over \code{maxeval} steps, default 0.1.}
-
-\item{mcmcsa_temp_lo}{MCMCSA only: ending (smallest) annealing temperature, default 0.01.}
-
-\item{mcmcsa_seed}{MCMCSA only: base RNG seed (offset by restart number), default 12345.}
 }
 \value{
 A list giving:\itemize{

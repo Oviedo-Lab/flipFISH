@@ -104,7 +104,7 @@ struct ST_data {
   LUTr           correction_table_inverted;
   // Parameter estimation
   EvalResults    eval_results;
-  Vint           bc_counts_true;      // For storing
+  Vint           bc_counts_true;      // Expected true counts for each barcode, based on estimated misread loss
   double         best_msle;
   int            n_forks;             // For computing expected counts in parallel
   int            max_flips;           // For approximating expected counts estimate by ignoring highly unlikely misreads
@@ -1317,7 +1317,7 @@ static double mQC_msle(
       }
     }
     
-    // Compute gradient of MSLE wrt x: Optional joint loss on exact-match (uncorrected) read counts (erc)
+    // Optional joint loss (and gradient) on exact-match (uncorrected) read counts (erc)
     if (need_erc_term) {
       const auto& erc = std::get<0>(erchc);
       double msle_erc = compute_msle(d->bc_counts_erc_obs, erc, d->msle_weights);
@@ -1475,20 +1475,22 @@ List mQC(
     colnames(erchc_plus) = CharacterVector({"erc", "ecc", "ehc", "CR", "PPV", "PPV_lower", "PPV_upper"});
     NumericVector fr(n);
     
-    // Run L-BFGS via nlopt, with optional multi-start
+    // Setup nlopt
     double ftol_rel = 1e-8;
     double xtol_rel = 1e-6;
     if (n_restarts < 1) n_restarts = 1;
-    Rcpp::Rcout << "\nRunning L-BFGS (nlopt::LD_LBFGS)" << ", maxeval=" << maxeval << ", ftol_rel=" << ftol_rel
-                << ", xtol_rel=" << xtol_rel << ", n_restarts=" << n_restarts << std::endl;
-    
     std::mt19937 restart_rng(4507919u + static_cast<unsigned int>(N_barcodes) + static_cast<unsigned int>(n));
     double       best_minf = std::numeric_limits<double>::infinity();
     Vdbl         best_x;
     EvalResults  best_eval_results;
     bool         any_success = false;
+    Rcpp::Rcout << "\nRunning L-BFGS (nlopt::LD_LBFGS)" << ", maxeval=" << maxeval << ", ftol_rel=" << ftol_rel
+                << ", xtol_rel=" << xtol_rel << ", n_restarts=" << n_restarts << std::endl;
     
+    // Run L-BFGS via nlopt, with optional multi-start
     for (int r = 0; r < n_restarts; ++r) {
+      
+      // Set initial parameter (flip rate) values
       Vdbl x0_r = x0;
       if (r > 0) {
         unsigned int seed_r = restart_rng();
@@ -1498,9 +1500,9 @@ List mQC(
       // Reset per-restart tracking so eval_results/best_msle reflect only this restart
       STdata.best_msle    = std::numeric_limits<double>::infinity();
       STdata.eval_results = EvalResults();
-      
       if (n_restarts > 1) Rcpp::Rcout << "\n-- Restart " << (r+1) << "/" << n_restarts << " --" << std::endl;
       
+      // Initialize and set optimizer
       double minf_r = std::numeric_limits<double>::quiet_NaN();
       nlopt::opt opt_r(nlopt::LD_LBFGS, n);
       opt_r.set_lower_bounds(lb);
@@ -1509,6 +1511,8 @@ List mQC(
       opt_r.set_ftol_rel(ftol_rel);
       opt_r.set_xtol_rel(xtol_rel);
       opt_r.set_maxeval(maxeval);
+      
+      // Run optimizer
       try {
         nlopt::result res = opt_r.optimize(x0_r, minf_r);
         Rcpp::Rcout << "  L-BFGS finished (result code " << (int)res << "), final msle: " << minf_r << std::endl;
@@ -1517,6 +1521,7 @@ List mQC(
         minf_r = STdata.best_msle;
       }
       
+      // Check results from this restart and save if best
       if (!std::isnan(minf_r) && minf_r < best_minf) {
         best_minf         = minf_r;
         best_x            = x0_r;
@@ -1699,7 +1704,7 @@ NumericMatrix mQC_ecc_jacobian_at(
     auto       prepped = prepare_STdata_at(FR, bc_counts, codebook, maxHam, n_forks, max_flips);
     ST_data&   STdata  = prepped.first;
     FlipRates& fr      = prepped.second;
-
+   
     // Compute expected counts with the ecc gradient requested
     int  N_barcodes = STdata.cb.barcodes.size();
     int  n_params   = (int)FR.size();
@@ -1756,7 +1761,7 @@ NumericMatrix mQC_counts_at(
     ST_data&   STdata  = prepped.first;
     FlipRates& fr      = prepped.second;
     int  N_barcodes    = STdata.cb.barcodes.size();
-
+   
     auto erchc = expected_bc_counts(
       fr, STdata.bc_counts_true, STdata.cb.barcodes, STdata.correction_table_inverted,
       STdata.n_forks, max_flips
@@ -2181,7 +2186,7 @@ List test_fr_recovery(
     //     (msle_stip >= msle_est)
     NumericVector msle_est(n_sims);
     NumericVector msle_stip(n_sims);
-
+   
     for (int s = 0; s < n_sims; ++s) {
       
       // Simulate corrected reads from this data and stipulated set of flip rates 
@@ -2234,7 +2239,7 @@ List test_fr_recovery(
       CR__est(s,_) = NumericVector(erchc_plus(_, 3));
       PPV_est(s,_) = NumericVector(erchc_plus(_, 4));
       msle_est[s]  = Rcpp::as<double>(res["msle"]);
-
+     
       // Evaluate the same penalized objective at the true/stipulated FR, against this replicate's
       // own simulated bc_counts (the exact matrix just handed to mQC() above)
       msle_stip[s] = mQC_msle_at(
@@ -2244,7 +2249,7 @@ List test_fr_recovery(
         blank_weight, prior_weight, dispersion_weight,
         obs_erc_s, erc_weight
       );
-
+     
     }
     
     return List::create(
