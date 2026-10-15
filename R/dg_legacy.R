@@ -21,6 +21,8 @@
 #      misread.qc() already uses, and splits it locally -- no change to any downstream numerical logic.
 #   2. Parallelism: the original relied on a script-level global (`core_num`) read inside `runparallel()`.
 #      Here `n_forks` is threaded through explicitly as a function argument instead.
+# Note that maxHam has also been exposed as an argument to misread.qc.DG with a default value of 4 matching
+# the original hard-coded value. 
 # #########################################################################################################
 
 # ----- style constants (originally script-level globals used by the plotting helpers) --------------------
@@ -83,7 +85,7 @@
     N_blanks,
     N_genes
   ) {
-
+   
     # Stipulate true transcript counts per cell, using over-dispersed Poisson distribution
     # ... translate these values into the standard gamma-distribution parameters (rate and shape)
     gamma_rt <- gene_kernel_rates/gamma_variance
@@ -98,13 +100,13 @@
     for (ci in 1:N_cells) {
       barcode_counts_true[ci,!blank_mask] <- rpois(N_genes, lambda = transcription_rates[ci,])
     }
-
+   
     # Set all true blank counts to zero
     blank_idx <- which(blank_mask)
     for (bci in 1:N_blanks) {
       barcode_counts_true[,blank_idx[bci]] <- 0
     }
-
+   
     # Collect true barcode counts for each cell
     barcodes_by_cell_true <- list()
     length(barcodes_by_cell_true) <- N_cells
@@ -112,15 +114,15 @@
       barcodes_by_cell_true[[ci]] <- rep(1:ncol(barcode_counts_true), times = barcode_counts_true[ci,])
       # ... this is n_spots, or sum(barcode_counts_true[ci,])
     }
-
+   
     # Return results:
     #   barcode_counts_true: N_cells x N_barcodes matrix giving true counts of each barcode in each cell
     #   barcodes_by_cell_true: list of length N_cells, each element is a vector of length n_spots (varies by cell), giving the barcode index for each spot in that cell
     out <- list(
-      barcode_counts_true = barcode_counts_true,
+      barcode_counts_true   = barcode_counts_true,
       barcodes_by_cell_true = barcodes_by_cell_true
     )
-
+   
   }
 
 # Function for making codebook
@@ -145,7 +147,7 @@
 # Function to set the correlation matrix for luminance noise
 .DG_set_luminance_noise_correlation_matrix <- function(
     noise_correlation_bias = 0,
-    noise_correlation_sd = 1,
+    noise_correlation_sd   = 1,
     lum_noise_correlations = NULL,
     N_bits,
     N_corrs
@@ -156,9 +158,9 @@
     }
     # ... clamp these (nearPD would force this anyway)
     lum_noise_correlations[lum_noise_correlations < -1] <- -1
-    lum_noise_correlations[lum_noise_correlations > 1] <- 1
+    lum_noise_correlations[lum_noise_correlations > 1]  <- 1
     # ... distribute into correlation matrix
-    Sigma <- matrix(NA, nrow = N_bits, ncol = N_bits)
+    Sigma                   <- matrix(NA, nrow = N_bits, ncol = N_bits)
     Sigma[upper.tri(Sigma)] <- lum_noise_correlations
     # ... make diagonal 1
     diag(Sigma) <- 1
@@ -175,13 +177,13 @@
     flip_rate_10,
     flip_rate_01
   ) {
-
+   
     # Initialize matrix to hold noise values (sd for each bit, for each barcode)
-    codebook_dim <- dim(codebook_generation_matrix)
-    N_bits <- codebook_dim[2]
-    N_barcodes <- codebook_dim[1]
+    codebook_dim   <- dim(codebook_generation_matrix)
+    N_bits         <- codebook_dim[2]
+    N_barcodes     <- codebook_dim[1]
     codebook_noise <- matrix(NA, nrow = N_barcodes, ncol = N_bits)
-
+   
     # Check that flip rates are in the right form
     length_flip_rate_10 <- length(flip_rate_10)
     if (length_flip_rate_10 != N_bits) {
@@ -199,25 +201,25 @@
         stop("flip_rate_01 must be a single value or a vector of length equal to the number of bits in the codebook.")
       }
     }
-
+   
     for (bi in 1:N_bits) {
       # For bit bi, grab the seeds (expected luminance value) for each barcode
-      these_seeds <- codebook_generation_matrix[,bi]
+      these_seeds                 <- codebook_generation_matrix[,bi]
       # Make mask for the positive bits (1)
-      pos_mask <- these_seeds > 0
+      pos_mask                    <- these_seeds > 0
       # Make mask for the negative bits (0)
-      neg_mask <- these_seeds < 0
+      neg_mask                    <- these_seeds < 0
       # Find luminance value such that flip_rate_10 of a standard normal distribution would fall below this value
-      inv_flip_rate_10 <- qnorm(flip_rate_10[bi])
+      inv_flip_rate_10            <- qnorm(flip_rate_10[bi])
       # "denormalize" to find the standard deviation of the distribution with this same qnorm, but the seeded mean
       codebook_noise[pos_mask,bi] <- -these_seeds[pos_mask] / inv_flip_rate_10
       # Same as above, but for flip_rate_01
-      inv_flip_rate_01 <- qnorm(1 - flip_rate_01[bi])
+      inv_flip_rate_01            <- qnorm(1 - flip_rate_01[bi])
       codebook_noise[neg_mask,bi] <- -these_seeds[neg_mask] / inv_flip_rate_01
     }
-
+   
     return(codebook_noise)
-
+   
   }
 
 # Function to extract luminance noise from spots
@@ -228,14 +230,14 @@
     codebook_gen_mat,
     N_bits
   ) {
-    spots_ci <- spots[[ci]]
-    N_barcodes <- ncol(bc_counts)
-    total_rows <- sum(bc_counts[ci,])
-    noise_ci <- matrix(NA, nrow = total_rows, ncol = N_bits)
+    spots_ci     <- spots[[ci]]
+    N_barcodes   <- ncol(bc_counts)
+    total_rows   <- sum(bc_counts[ci,])
+    noise_ci     <- matrix(NA, nrow = total_rows, ncol = N_bits)
     # Precompute start and end indices per barcode
     bc_counts_ci <- bc_counts[ci, ]
-    end_rows <- cumsum(bc_counts_ci)
-    start_rows <- end_rows - bc_counts_ci + 1
+    end_rows     <- cumsum(bc_counts_ci)
+    start_rows   <- end_rows - bc_counts_ci + 1
     for (bci in seq_len(N_barcodes)) {
       s <- start_rows[bci]
       e <- end_rows[bci]
@@ -255,12 +257,12 @@
     corr_mat,
     N_bits,
     decode_and_label,
-    codebook = NULL,
-    max_correctable_Hamming_distance = NULL,
+    codebook  = NULL,
+    maxHam    = NULL,
     threshold = 0
   ) {
     N_barcodes <- ncol(bc_counts)
-
+   
     use_Rcpp <- TRUE
     if (use_Rcpp) {
       spots_ci <- generate_spots_ci(
@@ -277,21 +279,21 @@
       spots_ci <- matrix(NA, nrow = sum(bc_counts[ci,]), ncol = N_bits)
       for (bci in 1:N_barcodes) {
         # ... for each barcode, use true counts to find its rows in spots_ci
-        end_row <- sum(bc_counts[ci,1:bci])
+        end_row   <- sum(bc_counts[ci,1:bci])
         start_row <- end_row - bc_counts[ci,bci] + 1
         # ... if there are rows to fill, generate spots
         if (end_row >= start_row) {
           # ... grab the generation kernel values for this barcode
-          this_bc <- codebook_gen_mat[bci,]
+          this_bc      <- codebook_gen_mat[bci,]
           # ... set the sd for the noise for each bit and put into matrix form
           noise_matrix <- diag(noise[bci,])
           # ... turn correlation matrix into covariance matrix with proper sd for the noise causing the stipulated flip rates
           Sigma_noised <- noise_matrix %*% corr_mat %*% noise_matrix
           # ... generate noised kernel
-          spot_seeds <- MASS::mvrnorm(n = bc_counts[ci,bci], mu = this_bc, Sigma = Sigma_noised)
+          spot_seeds   <- MASS::mvrnorm(n = bc_counts[ci,bci], mu = this_bc, Sigma = Sigma_noised)
           # ... save
           if (decode_and_label) spots_ci[start_row:end_row,] <- matrix(as.numeric(spot_seeds > threshold), nrow = bc_counts[ci,bci])
-          else spots_ci[start_row:end_row,] <- matrix(spot_seeds, nrow = bc_counts[ci,bci])
+          else spots_ci[start_row:end_row,]                  <- matrix(spot_seeds, nrow = bc_counts[ci,bci])
         }
       }
     }
@@ -300,14 +302,14 @@
       spot_labels <- find_spot_labels_fast(
         as.matrix(codebook) * 1L,
         as.matrix(spots_ci) * 1L,
-        max_correctable_Hamming_distance * 1L
+        maxHam * 1L
       )
       # Returns a list of two integer vectors, the first corrected labels, the second uncorrected labels
       return(spot_labels)
     } else {
       return(spots_ci)
     }
-
+   
   }
 
 # Function to generate RNA molecules
@@ -319,19 +321,17 @@
   ) {
     # The function .DG_generate_simulated_spots generates the observed luminance sequences, while
     #   this function generates the corresponding "ground truth" RNA molecules generating those sequences
-
+   
     # Get the counts for the current cell
-    counts <- bc_counts[ci, ]
-    total_RNA <- sum(counts)
-
+    counts          <- bc_counts[ci, ]
+    total_RNA       <- sum(counts)
     # Repeat the barcode indices according to their counts
     barcode_indices <- rep(seq_len(nrow(codebook)), times = counts)
-
     # Construct the RNA matrix by indexing the codebook
-    RNA_ci <- matrix(as.numeric(t(codebook[barcode_indices, ])), nrow = total_RNA, ncol = N_bits, byrow = TRUE)
-
+    RNA_ci          <- matrix(as.numeric(t(codebook[barcode_indices, ])), nrow = total_RNA, ncol = N_bits, byrow = TRUE)
+   
     return(RNA_ci)
-
+    
   }
 
 # 4. Functions to decode and correct observed spots #####################################################
@@ -351,11 +351,11 @@
 .DG_find_decoded_spot_rate <- function(
     spot_labels
   ) {
-    N_cells <- length(spot_labels)
-    total_spots <- 0
+    N_cells       <- length(spot_labels)
+    total_spots   <- 0
     decoded_spots <- 0
     for (ci in 1:N_cells) {
-      total_spots <- total_spots + length(spot_labels[[ci]])
+      total_spots   <- total_spots + length(spot_labels[[ci]])
       decoded_spots <- decoded_spots + sum(!is.na(spot_labels[[ci]]))
     }
     return(decoded_spots / total_spots)
@@ -378,7 +378,7 @@
     ci,
     spots,
     codebook,
-    max_correctable_Hamming_distance
+    maxHam
   ) {
     # Get matrix of spots
     spots_ci <- spots[[ci]]
@@ -386,7 +386,7 @@
     spot_labels <- find_spot_labels_fast(
       as.matrix(codebook) * 1L,
       as.matrix(spots_ci) * 1L,
-      max_correctable_Hamming_distance * 1L
+      maxHam * 1L
       )
     # Returns a list of two integer vectors, the first corrected labels, the second uncorrected labels
     return(spot_labels)
@@ -396,14 +396,14 @@
 .DG_check_correctable_distances <- function(
     spots,
     codebook,
-    max_correctable_Hamming_distance
+    maxHam
   ) {
-
+   
     N_cells <- length(spots)
-    distances_found <- rep(FALSE, max_correctable_Hamming_distance + 1)
-
+    distances_found <- rep(FALSE, maxHam + 1)
+   
     for (ci in 1:N_cells) {
-
+     
       spots_ci <- spots[[ci]]
       n_spots <- nrow(spots_ci)
       for (si in 1:n_spots) {
@@ -413,7 +413,7 @@
         hamming_distances <- rowSums(hamming_distances)
         # ... apply correction (if possible) to the observed spot
         min_HD <- min(hamming_distances)
-        if (min_HD <= max_correctable_Hamming_distance) {
+        if (min_HD <= maxHam) {
           min_HD_mask <- hamming_distances == min_HD
           if (sum(min_HD_mask) == 1) {
             distances_found[min_HD + 1] <- TRUE
@@ -421,14 +421,14 @@
         }
         if (all(distances_found)) break
       }
-
+     
       if (all(distances_found)) break
-
+     
     }
-
-    distances_found <- c(0:max_correctable_Hamming_distance)[distances_found]
+   
+    distances_found <- c(0:maxHam)[distances_found]
     return(distances_found)
-
+   
   }
 
 # Calculate flip rates per cell (without correction)
@@ -437,24 +437,24 @@
     spots,
     verbose = TRUE
   ) {
-
+   
     # Find flip rates and take mean
-    N_cells <- length(RNA)
+    N_cells   <- length(RNA)
     pos_flips <- 0
-    pos_bits <- 0
+    pos_bits  <- 0
     neg_flips <- 0
-    neg_bits <- 0
+    neg_bits  <- 0
     for (ci in 1:N_cells) {
-      RNA_ci <- c(RNA[[ci]])
+      RNA_ci   <- c(RNA[[ci]])
       spots_ci <- c(spots[[ci]])
       pos_mask <- RNA_ci > 0
       neg_mask <- RNA_ci == 0
       # ... number of 1s that flipped to 0 and total number of 1s
       pos_flips <- pos_flips + sum(spots_ci[pos_mask] != 1)
-      pos_bits <- pos_bits + sum(pos_mask)
+      pos_bits  <- pos_bits + sum(pos_mask)
       # ... number of 0s that flipped to 1 and total number of 0s
       neg_flips <- neg_flips + sum(spots_ci[neg_mask] != 0)
-      neg_bits <- neg_bits + sum(neg_mask)
+      neg_bits  <- neg_bits + sum(neg_mask)
     }
     flip_rate_10_mean <- pos_flips / pos_bits
     flip_rate_01_mean <- neg_flips / neg_bits
@@ -462,11 +462,11 @@
       cat("\n\tFlip rate 1 -> 0:", flip_rate_10_mean)
       cat("\n\tFlip rate 0 -> 1:", flip_rate_01_mean)
     }
-
+   
     out <- c(flip_rate_10_mean, flip_rate_01_mean)
     names(out) <- c("flip_rate_10", "flip_rate_01")
     return(out)
-
+   
   }
 
 # 5. Functions to run and analyze simulation #############################################################
@@ -478,35 +478,35 @@
     summary_stats_blanks,
     flip_rate_10,                           # Probability of a 1 being flipped to a 0, either scalar or vector of length equal to number of bits
     flip_rate_01,                           # Probability of a 0 being flipped to a 1, either scalar or vector of length equal to number of bits
-    max_correctable_Hamming_distance,       # For the automatic error correction, assumes an "extended" Hamming code with min 4 bits between all barcodes
+    maxHam,                                 # For the automatic error correction, assumes an "extended" Hamming code with min 4 bits between all barcodes
     bit_noise_correlations_bias = 0,        # For correlating noise in the bit reads
-    bit_noise_correlations_sd = 1,          # For correlating noise in the bit reads
-    bit_lum_noise_correlations = NULL,      # For stipulating correlations between bits (bit bias and sd will be ignored)
-    N_cells = 1e3,                          # Number of cells to simulate
-    blank_weight = 1,
-    maintain_gene_identity = TRUE,
-    return_flip_rates = FALSE,
-    n_forks = 1,
-    verbose = FALSE
+    bit_noise_correlations_sd   = 1,        # For correlating noise in the bit reads
+    bit_lum_noise_correlations  = NULL,     # For stipulating correlations between bits (bit bias and sd will be ignored)
+    N_cells                     = 1e3,      # Number of cells to simulate
+    blank_weight                = 1,
+    maintain_gene_identity      = TRUE,
+    return_flip_rates           = FALSE,
+    n_forks                     = 1,
+    verbose                     = FALSE
   ) {
-
+   
     # Extract summary stats
-    observed_gene_rates <- summary_stats_genes$rates
-    observed_gene_variance <- summary_stats_genes$variance
-    observed_blank_rates <- summary_stats_blanks$rates
+    observed_gene_rates     <- summary_stats_genes$rates
+    observed_gene_variance  <- summary_stats_genes$variance
+    observed_blank_rates    <- summary_stats_blanks$rates
     observed_blank_variance <- summary_stats_blanks$variance
-
+   
     # Extract simulation parameters
-    N_bits <- ncol(codebook)
-    N_barcodes <- nrow(codebook)
-    N_blanks <- length(observed_blank_rates)
-    N_genes <- length(observed_gene_rates)
+    N_bits              <- ncol(codebook)
+    N_barcodes          <- nrow(codebook)
+    N_blanks            <- length(observed_blank_rates)
+    N_genes             <- length(observed_gene_rates)
     mean_Hamming_weight <- mean(rowSums(codebook))
     # ... calculate number of bit-pair correlations
     N_corrs <- 0
     for (bits_left in N_bits:1) N_corrs <- N_corrs + bits_left
     N_corrs <- N_corrs - N_bits
-
+   
     # Report simulation parameters
     if (verbose) {
       cat("\nSimulation parameters set:")
@@ -526,14 +526,14 @@
       }
       cat("\n\tFlip rate 1 -> 0:", mean(flip_rate_10))
       cat("\n\tFlip rate 0 -> 1:", mean(flip_rate_01))
-      cat("\n\tMax correctable Hamming distance:", max_correctable_Hamming_distance)
+      cat("\n\tMax correctable Hamming distance:", maxHam)
     }
-
+   
     # Make generation matrix for codebook, representing the expected luminance values for each bit in each barcode
     # ... regenerated with random (but properly valenced) numbers each simulation
     if (verbose) cat("\nMaking codebook generation matrix")
     codebook_generation_matrix <- .DG_make_codebook_generation_matrix(codebook)
-
+   
     # Make blank mask from row names
     if (verbose) cat("\nMaking blank mask from codebook row names")
     blank_mask <- rep(FALSE, N_barcodes)
@@ -542,23 +542,23 @@
       cat("\nNo blanks detected in codebook row names, setting blanks randomly. This could be a problem.")
       blank_mask[sample(1:nrow(codebook), size = N_blanks, replace = FALSE)] <- TRUE
     }
-
+   
     # Set the correlation matrix for luminance noise
     # ... correlations set randomly each simulation
     if (verbose) cat("\nSetting correlation matrix for luminance noise")
     Sigma <- .DG_set_luminance_noise_correlation_matrix(
       noise_correlation_bias = bit_noise_correlations_bias,
-      noise_correlation_sd = bit_noise_correlations_sd,
+      noise_correlation_sd   = bit_noise_correlations_sd,
       lum_noise_correlations = bit_lum_noise_correlations,
-      N_bits = N_bits,
-      N_corrs = N_corrs
+      N_bits                 = N_bits,
+      N_corrs                = N_corrs
     )
-
+    
     # Predict decoding rate
-    expected_flip_rate <- (mean(flip_rate_10)*mean_Hamming_weight + mean(flip_rate_01)*(N_bits - mean_Hamming_weight)) / N_bits
-    expected_decoding_rate <- ppois(q = max_correctable_Hamming_distance/2, lambda = expected_flip_rate * N_bits)
+    expected_flip_rate     <- (mean(flip_rate_10)*mean_Hamming_weight + mean(flip_rate_01)*(N_bits - mean_Hamming_weight)) / N_bits
+    expected_decoding_rate <- ppois(q = maxHam/2, lambda = expected_flip_rate * N_bits)
     if (verbose) cat("\nPredicted decoding rate:", expected_decoding_rate)
-
+   
     # Set true counts
     # ... set randomly each simulation, based around the summary statistics of the observed data
     if (verbose) cat("\nSetting true counts for each gene and blank")
@@ -571,102 +571,102 @@
       N_blanks,
       N_genes
     )
-
+   
     # Set noise based on requested flip rates
     # ... set randomly each simulation, with expected flip rates
     if (verbose) cat("\nSetting simulated noise (sd) needed in each bit for stipulated flip rates")
     codebook_noise <- .DG_set_noise_by_flip_rates(
       codebook_generation_matrix = codebook_generation_matrix,
-      flip_rate_10 = flip_rate_10,
-      flip_rate_01 = flip_rate_01
+      flip_rate_10               = flip_rate_10,
+      flip_rate_01               = flip_rate_01
     )
-
+   
     # Generate simulated spots
     if (verbose) cat("\nGenerating simulated spots")
     spots <- .DG_runparallel(
       1:N_cells,
       .DG_generate_simulated_spots,
-      n_forks = n_forks,
-      noise = codebook_noise,
-      bc_counts = true_spot_info$barcode_counts_true,
+      n_forks          = n_forks,
+      noise            = codebook_noise,
+      bc_counts        = true_spot_info$barcode_counts_true,
       codebook_gen_mat = codebook_generation_matrix,
-      corr_mat = Sigma,
-      N_bits = N_bits,
+      corr_mat         = Sigma,
+      N_bits           = N_bits,
       decode_and_label = !verbose && !return_flip_rates,
-      codebook = codebook,
-      max_correctable_Hamming_distance = max_correctable_Hamming_distance
+      codebook         = codebook,
+      maxHam           = maxHam
     )
-
+   
     # ... initialize flip rates
     # ... computationally, very expensive to check, only check if verbose
     flip_rates <- c(NA, NA)
     names(flip_rates) <- c("flip_rate_10", "flip_rate_01")
-
+    
     if (verbose) {
-
+     
       # Check luminance noise correlations
       cat("\nChecking luminance noise correlations by bit")
       # ... find noise by bit by cell
       luminance_noise <- .DG_runparallel(
         1:N_cells,
         .DG_find_noise,
-        n_forks = n_forks,
-        spots = spots,
-        bc_counts = true_spot_info$barcode_counts_true,
+        n_forks          = n_forks,
+        spots            = spots,
+        bc_counts        = true_spot_info$barcode_counts_true,
         codebook_gen_mat = codebook_generation_matrix,
-        N_bits = N_bits
+        N_bits           = N_bits
       )
       # ... collapse into single matrix of noise values (rows as spots, columns as bits)
       luminance_noise <- do.call(rbind, luminance_noise)
       # ... calculate correlations in noise between bits
-      corrs_all <- matrix(NA, nrow = N_corrs, ncol = 2)
-      idx <- 0
+      corrs_all       <- matrix(NA, nrow = N_corrs, ncol = 2)
+      idx             <- 0
       for (bi in 1:(N_bits-1)) {
         for (bj in (bi+1):N_bits) {
-          idx <- idx + 1
+          idx                  <- idx + 1
           noise_correlation <- cor(
             luminance_noise[,bi],
             luminance_noise[,bj]
           )
           expected_correlation <- Sigma[bi,bj]
-          corrs_all[idx,] <- c(noise_correlation, expected_correlation)
+          corrs_all[idx,]      <- c(noise_correlation, expected_correlation)
         }
       }
       # ... print results
       cat("\nCorrelation between observed and expected luminance-noise correlations:",
           cor(corrs_all[,1], corrs_all[,2], use = "pairwise.complete.obs"))
-
+     
       # Decode spots
       cat("\nDecoding spots")
       spots <- .DG_runparallel(
         1:N_cells,
         .DG_decode_spots,
-        n_forks = n_forks,
-        spots = spots,
+        n_forks   = n_forks,
+        spots     = spots,
         threshold = 0
       )
-
+     
       # Check unique correctable error sizes
       cat("\nChecking unique correctable error sizes")
       corrected_distances <- .DG_check_correctable_distances(
-        spots = spots,
+        spots    = spots,
         codebook = codebook,
-        max_correctable_Hamming_distance = max_correctable_Hamming_distance
+        maxHam   = maxHam
       )
       cat("\nUnique correctable error sizes:",
           paste(corrected_distances, collapse = ", "))
-
+     
       # Find the ground truth behind the simulated spots
       cat("\nGenerating simulated mRNA molecules responsible for those spots (ground truth)")
       RNA <- .DG_runparallel(
         1:N_cells,
         .DG_generate_RNA,
-        n_forks = n_forks,
+        n_forks   = n_forks,
         bc_counts = true_spot_info$barcode_counts_true,
-        codebook = codebook,
-        N_bits = N_bits
+        codebook  = codebook,
+        N_bits    = N_bits
       )
-
+     
       # Check flip rates
       cat("\nChecking bit-flip rates")
       flip_rates <- .DG_check_flip_rates(
@@ -674,67 +674,67 @@
         spots,
         verbose = verbose
       )
-
+     
       # Find uncorrected bc and apply read corrections
       if (verbose) cat("\nFinding uncorrected barcode labels and applying read corrections")
       spots <- .DG_runparallel(
         1:N_cells,
         .DG_apply_spot_correction,
-        n_forks = n_forks,
-        spots = spots,
+        n_forks  = n_forks,
+        spots    = spots,
         codebook = codebook,
-        max_correctable_Hamming_distance = max_correctable_Hamming_distance
+        maxHam   = maxHam
       )
-
+     
     } else if (return_flip_rates) {
-
+     
       # Decode spots
       spots <- .DG_runparallel(
         1:N_cells,
         .DG_decode_spots,
-        n_forks = n_forks,
-        spots = spots,
+        n_forks   = n_forks,
+        spots     = spots,
         threshold = 0
       )
-
+     
       # Find the ground truth behind the simulated spots
       RNA <- .DG_runparallel(
         1:N_cells,
         .DG_generate_RNA,
-        n_forks = n_forks,
+        n_forks   = n_forks,
         bc_counts = true_spot_info$barcode_counts_true,
-        codebook = codebook,
-        N_bits = N_bits
+        codebook  = codebook,
+        N_bits    = N_bits
       )
-
+     
       # Check flip rates
       flip_rates <- .DG_check_flip_rates(
         RNA,
         spots,
         verbose = verbose
       )
-
+     
       # Find uncorrected bc and apply read corrections
       spots <- .DG_runparallel(
         1:N_cells,
         .DG_apply_spot_correction,
-        n_forks = n_forks,
-        spots = spots,
+        n_forks  = n_forks,
+        spots    = spots,
         codebook = codebook,
-        max_correctable_Hamming_distance = max_correctable_Hamming_distance
+        maxHam   = maxHam
       )
-
+      
     }
-
-    spots_corrected_bc_labels <- lapply(spots, `[[`, "spot_labels")
-    spots_bc_labels <- lapply(spots, `[[`, "spot_labels_uncorrected")
-    spot_decoding_rate <- .DG_find_decoded_spot_rate(spots_bc_labels)
+    
+    spots_corrected_bc_labels    <- lapply(spots, `[[`, "spot_labels")
+    spots_bc_labels              <- lapply(spots, `[[`, "spot_labels_uncorrected")
+    spot_decoding_rate           <- .DG_find_decoded_spot_rate(spots_bc_labels)
     spot_decoding_rate_corrected <- .DG_find_decoded_spot_rate(spots_corrected_bc_labels)
     if (verbose) {
       cat("\nSpot decoding rate, no error correction:", spot_decoding_rate)
       cat("\nSpot decoding rate, with error correction:", spot_decoding_rate_corrected)
     }
-
+   
     # Compute PPV
     if (verbose) cat("\nComputing PPV")
     PPV_corrected_decoding <- compute_PPV_fast(
@@ -743,35 +743,35 @@
       N_barcodes
     )
     PPV_corrected_decoding <- PPV_corrected_decoding[!blank_mask]
-
+    
     # Extract barcode counts from spot labels
     if (verbose) cat("\nExtracting barcode counts from spot labels")
-    barcode_counts_est <- .DG_find_barcode_counts(spots_bc_labels, N_barcodes)
-    barcode_counts_est_corrected <- .DG_find_barcode_counts(spots_corrected_bc_labels, N_barcodes)
+    barcode_counts_est                        <- .DG_find_barcode_counts(spots_bc_labels, N_barcodes)
+    barcode_counts_est_corrected              <- .DG_find_barcode_counts(spots_corrected_bc_labels, N_barcodes)
     # ... extract results
-    total_barcode_counts_est <- colSums(barcode_counts_est, na.rm = TRUE)
-    total_barcode_counts_est_genes <- total_barcode_counts_est[!blank_mask]
-    total_barcode_counts_est_corrected <- colSums(barcode_counts_est_corrected, na.rm = TRUE)
-    total_barcode_counts_est_corrected_genes <- total_barcode_counts_est_corrected[!blank_mask]
+    total_barcode_counts_est                  <- colSums(barcode_counts_est, na.rm = TRUE)
+    total_barcode_counts_est_genes            <- total_barcode_counts_est[!blank_mask]
+    total_barcode_counts_est_corrected        <- colSums(barcode_counts_est_corrected, na.rm = TRUE)
+    total_barcode_counts_est_corrected_genes  <- total_barcode_counts_est_corrected[!blank_mask]
     total_barcode_counts_est_corrected_blanks <- total_barcode_counts_est_corrected[blank_mask]
-    max_blank_count <- max(total_barcode_counts_est_corrected_blanks)
-    sim_gene_order <- order(total_barcode_counts_est_corrected_genes, decreasing = TRUE)
-    sim_blank_order <- order(total_barcode_counts_est_corrected_blanks, decreasing = TRUE)
-
+    max_blank_count                           <- max(total_barcode_counts_est_corrected_blanks)
+    sim_gene_order                            <- order(total_barcode_counts_est_corrected_genes, decreasing = TRUE)
+    sim_blank_order                           <- order(total_barcode_counts_est_corrected_blanks, decreasing = TRUE)
+    
     # ... while we're at it, make sorted vector for the real data
-    obs_counts_genes <- observed_gene_rates * N_cells
-    obs_counts_blanks <- observed_blank_rates * N_cells
-    obs_counts <- rep(NA, N_barcodes)
-    obs_counts[!blank_mask] <- obs_counts_genes
-    obs_counts[blank_mask] <- obs_counts_blanks
-    max_blank_count_obs <- max(obs_counts_blanks)
-    obs_gene_order <- order(obs_counts_genes, decreasing = TRUE)
-    obs_blank_order <- order(obs_counts_blanks, decreasing = TRUE)
+    obs_counts_genes                          <- observed_gene_rates * N_cells
+    obs_counts_blanks                         <- observed_blank_rates * N_cells
+    obs_counts                                <- rep(NA, N_barcodes)
+    obs_counts[!blank_mask]                   <- obs_counts_genes
+    obs_counts[blank_mask]                    <- obs_counts_blanks
+    max_blank_count_obs                       <- max(obs_counts_blanks)
+    obs_gene_order                            <- order(obs_counts_genes, decreasing = TRUE)
+    obs_blank_order                           <- order(obs_counts_blanks, decreasing = TRUE)
     obs_counts_sorted <- c(
       obs_counts_genes[obs_gene_order],
       obs_counts_blanks[obs_blank_order] # use same order as in simulation so we can compare relative bit-flip rates
     )
-
+   
     if (maintain_gene_identity) {
       counts_sorted <- c(
         total_barcode_counts_est_corrected_genes[obs_gene_order],
@@ -783,14 +783,14 @@
         total_barcode_counts_est_corrected_blanks[sim_blank_order]
       )
     }
-
+    
     # Find mse of the log of the data
     gene_weight <- 1 + (N_blanks/N_genes) * (1 - blank_weight)
-    weights <- c(rep(gene_weight, N_genes), rep(blank_weight, N_blanks))
-    sim_se <- (log(counts_sorted + 1) - log(obs_counts_sorted + 1))^2
-    sim_mse <- mean(sim_se * weights)
+    weights     <- c(rep(gene_weight, N_genes), rep(blank_weight, N_blanks))
+    sim_se      <- (log(counts_sorted + 1) - log(obs_counts_sorted + 1))^2
+    sim_mse     <- mean(sim_se * weights)
     if (verbose) cat("\nWeighted mean squared log-error:", sim_mse)
-
+    
     # Compute confidence ratio for barcode counts
     if (verbose) cat("\nComputing confidence ratio")
     CR <- total_barcode_counts_est / total_barcode_counts_est_corrected
@@ -799,44 +799,44 @@
       stop("Confidence ratio contains invalid values (NA, Inf, NaN, or <= 0).")
     }
     # ... extract results
-    CR_genes <- CR[!blank_mask]
-    CR_blanks <- CR[blank_mask]
+    CR_genes     <- CR[!blank_mask]
+    CR_blanks    <- CR[blank_mask]
     max_blank_CR <- max(CR_blanks)
-    CR_sorted <- c(
+    CR_sorted    <- c(
       CR_genes[order(CR_genes, decreasing = TRUE)],
       CR_blanks[order(CR_blanks, decreasing = TRUE)]
     )
-
+   
     # Find relationship between CR and PPV
     # ... fit linear model with intercept = 0
-    CR_PPV_lm <- lm(PPV_corrected_decoding ~ CR_genes + 0)
+    CR_PPV_lm       <- lm(PPV_corrected_decoding ~ CR_genes + 0)
     # ... extract slope
     CR_PPV_lm_slope <- coef(CR_PPV_lm)[["CR_genes"]]
     # ... compute predictions and MSE
-    predictions <- CR_PPV_lm_slope * CR_genes
-    mse <- mean((PPV_corrected_decoding - predictions)^2)
+    predictions     <- CR_PPV_lm_slope * CR_genes
+    mse             <- mean((PPV_corrected_decoding - predictions)^2)
     if (verbose) {
       cat("\nLinear model of PPV ~ CR + 0:")
       cat("\n\tSlope:", CR_PPV_lm_slope)
       cat("\n\tMSE:", mse)
     }
-
+   
     # Extract cutoff stats
     # ... assume that PPV is normally distributed for genes below the max-count blank cutoff
-    retained_gene_mask <- total_barcode_counts_est_corrected_genes > max_blank_count
-    PPV_mean_filtered <- mean(PPV_corrected_decoding[!retained_gene_mask])
-    PPV_sd_filtered <- sd(PPV_corrected_decoding[!retained_gene_mask])
+    retained_gene_mask      <- total_barcode_counts_est_corrected_genes > max_blank_count
+    PPV_mean_filtered       <- mean(PPV_corrected_decoding[!retained_gene_mask])
+    PPV_sd_filtered         <- sd(PPV_corrected_decoding[!retained_gene_mask])
     # ... assume that PPV is exponentially distributed for genes above the max-count blank cutoff
-    PPV_mean_retained <- mean(PPV_corrected_decoding[retained_gene_mask])
+    PPV_mean_retained       <- mean(PPV_corrected_decoding[retained_gene_mask])
     # ... get percent of genes filtered by CR cutoff
     ratio_genes_CR_filtered <- sum(CR_genes <= max_blank_CR) / length(CR_genes)
-
+   
     # Gather results
     bit_noise_correlations_bias_out <- bit_noise_correlations_bias
-    bit_noise_correlations_sd_out <- bit_noise_correlations_sd
+    bit_noise_correlations_sd_out   <- bit_noise_correlations_sd
     if (!is.null(bit_lum_noise_correlations)) {
       bit_noise_correlations_bias_out <- mean(bit_lum_noise_correlations)
-      bit_noise_correlations_sd_out <- sd(bit_lum_noise_correlations)
+      bit_noise_correlations_sd_out   <- sd(bit_lum_noise_correlations)
     }
     sim_summary <- c(
       CR_PPV_lm_slope,
@@ -868,77 +868,77 @@
       "bit_noise_cor_bias_stip", "bit_noise_cor_sd_stip",
       "spot_decoding_rate", "spot_decoding_rate_corrected"
       )
-
+   
     # Each row is a simulated gene:
     gene_summary <- data.frame(
-      Count = total_barcode_counts_est_genes,
+      Count           = total_barcode_counts_est_genes,
       Count_corrected = total_barcode_counts_est_corrected_genes,
-      CR = CR_genes,
-      PPV = PPV_corrected_decoding
+      CR              = CR_genes,
+      PPV             = PPV_corrected_decoding
     )
     rownames(gene_summary) <- rownames(codebook)[!blank_mask]
-
+   
     results <- list(
-      gene_summary = gene_summary,
+      gene_summary  = gene_summary,
       counts_sorted = data.frame(sim = counts_sorted, obs = obs_counts_sorted),
-      sim_summary = sim_summary
+      sim_summary   = sim_summary
     )
-
+   
     if (verbose) {
-
-      blank_line_width <- 1.0
-      observed_gene_counts <- summary_stats_genes$counts
+     
+      blank_line_width      <- 1.0
+      observed_gene_counts  <- summary_stats_genes$counts
       observed_blank_counts <- summary_stats_blanks$counts
-
+     
       # barcode count distributions
-      df_obs_est <- data.frame(x = log(c(observed_gene_counts, observed_blank_counts)+1))
-      df_sim_est <- data.frame(x = log(colSums(barcode_counts_est_corrected)+1))
+      df_obs_est  <- data.frame(x = log(c(observed_gene_counts, observed_blank_counts)+1))
+      df_sim_est  <- data.frame(x = log(colSums(barcode_counts_est_corrected)+1))
       df_sim_true <- data.frame(x = log(colSums(true_spot_info$barcode_counts_true)+1))
-
+     
       cat("\nMean spots per cell:",
-          "\n\tObserved, decoded:", mean(c(observed_gene_rates, observed_blank_rates)),
+          "\n\tObserved, decoded:",  mean(c(observed_gene_rates, observed_blank_rates)),
           "\n\tSimulated, decoded:", mean(colSums(barcode_counts_est_corrected)/N_cells),
-          "\n\tSimulated, true:", mean(colSums(true_spot_info$barcode_counts_true)/N_cells))
-
+          "\n\tSimulated, true:",    mean(colSums(true_spot_info$barcode_counts_true)/N_cells))
+     
       plot_obs_est <- ggplot(df_obs_est, aes(x)) +
         geom_histogram(bins = 30, fill = "lightblue", color = "black") +
         labs(title = "Real decoded counts", x = "Barcode count", y = NULL) +
         theme_minimal() +
         theme(
           legend.position = "none",
-          plot.title = element_text(hjust = 0.5, size = .DG_title_size*0.8),
-          axis.title = element_text(size = .DG_axis_size),
-          axis.text = element_text(size = .DG_axis_size),
-          legend.title = element_text(size = .DG_legend_size),
-          legend.text = element_text(size = .DG_legend_size)
+          plot.title      = element_text(hjust = 0.5, size = .DG_title_size*0.8),
+          axis.title      = element_text(size = .DG_axis_size),
+          axis.text       = element_text(size = .DG_axis_size),
+          legend.title    = element_text(size = .DG_legend_size),
+          legend.text     = element_text(size = .DG_legend_size)
         )
-
+     
       plot_sim_est <- ggplot(df_sim_est, aes(x)) +
         geom_histogram(bins = 30, fill = "lightgreen", color = "black") +
         labs(title = "Simulated decoded counts", x = "Barcode count", y = NULL) +
         theme_minimal() +
         theme(
           legend.position = "none",
-          plot.title = element_text(hjust = 0.5, size = .DG_title_size*0.8),
-          axis.title = element_text(size = .DG_axis_size),
-          axis.text = element_text(size = .DG_axis_size),
-          legend.title = element_text(size = .DG_legend_size),
-          legend.text = element_text(size = .DG_legend_size)
+          plot.title      = element_text(hjust = 0.5, size = .DG_title_size*0.8),
+          axis.title      = element_text(size = .DG_axis_size),
+          axis.text       = element_text(size = .DG_axis_size),
+          legend.title    = element_text(size = .DG_legend_size),
+          legend.text     = element_text(size = .DG_legend_size)
         )
-
+     
       plot_sim_true <- ggplot(df_sim_true, aes(x)) +
         geom_histogram(bins = 30, fill = "steelblue", color = "black") +
         labs(title = "Simulated ground-truth counts", x = "Barcode count", y = NULL) +
         theme_minimal() +
         theme(
           legend.position = "none",
-          plot.title = element_text(hjust = 0.5, size = .DG_title_size*0.8),
-          axis.title = element_text(size = .DG_axis_size),
-          axis.text = element_text(size = .DG_axis_size),
-          legend.title = element_text(size = .DG_legend_size),
-          legend.text = element_text(size = .DG_legend_size)
+          plot.title      = element_text(hjust = 0.5, size = .DG_title_size*0.8),
+          axis.title      = element_text(size = .DG_axis_size),
+          axis.text       = element_text(size = .DG_axis_size),
+          legend.title    = element_text(size = .DG_legend_size),
+          legend.text     = element_text(size = .DG_legend_size)
         )
-
+     
       gridExtra::grid.arrange(
         plot_obs_est, plot_sim_est, plot_sim_true,
         nrow = 1,
@@ -947,64 +947,64 @@
           gp = grid::gpar(fontsize = .DG_title_size)
         )
       )
-
+     
       bc_type_colors <- c(
         "Retained" = .DG_retained_color, "Filtered" = .DG_filtered_color, "Blanks" = .DG_blanks_color,
         "Retained_obs" = .DG_retained_color_obs, "Filtered_obs" = .DG_filtered_color_obs, "Blanks_obs" = .DG_blanks_color_obs
       )
-
+     
       # CR filter
-      bc_type <- rep("Retained", length(CR_sorted))
-      bc_type[CR_sorted <= max_blank_CR] <- "Filtered"
+      bc_type                                          <- rep("Retained", length(CR_sorted))
+      bc_type[CR_sorted <= max_blank_CR]               <- "Filtered"
       bc_type[seq_along(CR_sorted) > length(CR_genes)] <- "Blanks"
       df_CR_sorted <- data.frame(
-        index = seq_along(CR_sorted),
-        CR = CR_sorted,
+        index   = seq_along(CR_sorted),
+        CR      = CR_sorted,
         bc_type = bc_type
       )
       df_CR_sorted$CR[df_CR_sorted$CR == 0] <- min(df_CR_sorted$CR[df_CR_sorted$CR > 0]) * 0.01
-      df_CR_sorted$bc_type <- factor(df_CR_sorted$bc_type, levels = c("Retained", "Filtered", "Blanks"))
+      df_CR_sorted$bc_type                  <- factor(df_CR_sorted$bc_type, levels = c("Retained", "Filtered", "Blanks"))
       plot_CR_sorted <- ggplot(df_CR_sorted, aes(x = index, y = CR, color = bc_type)) +
         geom_point(size = 3) +
         scale_y_log10() +  # Log scale for better visibility
         scale_color_manual(values = bc_type_colors) +
         geom_vline(
           xintercept = mean(c(length(CR_genes), length(CR_genes)+1)),
-          color = "black",
-          linetype = "dashed",
-          linewidth = 0.5
+          color      = "black",
+          linetype   = "dashed",
+          linewidth  = 0.5
         ) +
         geom_vline(
           xintercept = mean(c(min(which(CR_sorted <= max_blank_CR)), min(which(CR_sorted <= max_blank_CR)) + 1)),
-          color = .DG_filter_color,
-          linetype = .DG_filter_style,
-          linewidth = blank_line_width
+          color      = .DG_filter_color,
+          linetype   = .DG_filter_style,
+          linewidth  = blank_line_width
         ) +
         labs(title = "Max-CR filter", x = "Barcodes sorted by CR", y = "Confidence ratio (CR)", color = "Barcode status") +
         theme_minimal() +
         theme(
           legend.position = "bottom",
-          plot.title = element_text(hjust = 0.5, size = .DG_title_size),
-          axis.title = element_text(size = .DG_axis_size),
-          axis.text.y = element_text(size = .DG_axis_size),
-          axis.text.x = element_text(size = .DG_axis_size),
-          legend.title = element_text(size = .DG_legend_size),
-          legend.text = element_text(size = .DG_legend_size)
+          plot.title      = element_text(hjust = 0.5, size = .DG_title_size),
+          axis.title      = element_text(size = .DG_axis_size),
+          axis.text.y     = element_text(size = .DG_axis_size),
+          axis.text.x     = element_text(size = .DG_axis_size),
+          legend.title    = element_text(size = .DG_legend_size),
+          legend.text     = element_text(size = .DG_legend_size)
         )
-
+     
       # Count filter
-      bc_type <- rep("Retained", length(counts_sorted))
-      bc_type[counts_sorted <= max_blank_count] <- "Filtered"
+      bc_type                                                                              <- rep("Retained", length(counts_sorted))
+      bc_type[counts_sorted <= max_blank_count]                                            <- "Filtered"
       bc_type[seq_along(counts_sorted) > length(total_barcode_counts_est_corrected_genes)] <- "Blanks"
-      bc_type_obs <- rep("Retained_obs", length(obs_counts_sorted))
-      bc_type_obs[obs_counts_sorted <= max_blank_count_obs] <- "Filtered_obs"
-      bc_type_obs[seq_along(obs_counts_sorted) > length(obs_counts_genes)] <- "Blanks_obs"
+      bc_type_obs                                                                          <- rep("Retained_obs", length(obs_counts_sorted))
+      bc_type_obs[obs_counts_sorted <= max_blank_count_obs]                                <- "Filtered_obs"
+      bc_type_obs[seq_along(obs_counts_sorted) > length(obs_counts_genes)]                 <- "Blanks_obs"
       df_counts_sorted <- data.frame(
-        index = c(seq_along(counts_sorted), seq_along(obs_counts_sorted)),
-        Count = c(counts_sorted, obs_counts_sorted),
-        bc_type = c(bc_type, bc_type_obs),
+        index     = c(seq_along(counts_sorted), seq_along(obs_counts_sorted)),
+        Count     = c(counts_sorted, obs_counts_sorted),
+        bc_type   = c(bc_type, bc_type_obs),
         data_type = c(rep("Simulated", length(counts_sorted)), rep("Observed", length(obs_counts_sorted))),
-        size = c(rep(3, length(counts_sorted)), rep(1.5, length(obs_counts_sorted)))
+        size      = c(rep(3, length(counts_sorted)), rep(1.5, length(obs_counts_sorted)))
       )
       df_counts_sorted$Count[df_counts_sorted$Count == 0] <- 1
       df_counts_sorted$bc_type <- factor(
@@ -1020,43 +1020,43 @@
         scale_color_manual(values = bc_type_colors) +
         geom_vline(
           xintercept = mean(c(min(which(obs_counts_sorted <= max_blank_count_obs)), min(which(obs_counts_sorted <= max_blank_count_obs)) + 1)),
-          color = .DG_filter_color_obs,
-          linetype = .DG_filter_style,
-          linewidth = blank_line_width/2
+          color      = .DG_filter_color_obs,
+          linetype   = .DG_filter_style,
+          linewidth  = blank_line_width/2
         ) +
         geom_vline(
           xintercept = mean(c(length(total_barcode_counts_est_corrected_genes), length(total_barcode_counts_est_corrected_genes)+1)),
-          color = "black",
-          linetype = "dashed",
-          linewidth = 0.5
+          color      = "black",
+          linetype   = "dashed",
+          linewidth  = 0.5
         ) +
         geom_vline(
           xintercept = mean(c(min(which(counts_sorted <= max_blank_count)), min(which(counts_sorted <= max_blank_count)) + 1)),
-          color = .DG_filter_color,
-          linetype = .DG_filter_style,
-          linewidth = blank_line_width
+          color      = .DG_filter_color,
+          linetype   = .DG_filter_style,
+          linewidth  = blank_line_width
         ) +
         labs(title = "Max-count filter", x = "Barcodes sorted by count", y = "Total counts per barcode", color = "Barcode status") +
         theme_minimal() +
         theme(
           legend.position = "bottom",
-          plot.title = element_text(hjust = 0.5, size = .DG_title_size),
-          axis.title = element_text(size = .DG_axis_size),
-          axis.text.y = element_text(size = .DG_axis_size),
-          axis.text.x = element_text(size = .DG_axis_size),
-          legend.title = element_text(size = .DG_legend_size),
-          legend.text = element_text(size = .DG_legend_size)
+          plot.title      = element_text(hjust = 0.5, size = .DG_title_size),
+          axis.title      = element_text(size = .DG_axis_size),
+          axis.text.y     = element_text(size = .DG_axis_size),
+          axis.text.x     = element_text(size = .DG_axis_size),
+          legend.title    = element_text(size = .DG_legend_size),
+          legend.text     = element_text(size = .DG_legend_size)
         )
-
+     
       print(plot_CR_sorted)
       print(plot_counts_sorted)
-
+     
       # CR vs PPV (genes only)
-      ret <- rep("no", length(CR_genes))
+      ret                          <- rep("no", length(CR_genes))
       ret[CR_genes > max_blank_CR] <- "yes"
-      df_CR_filter <- data.frame(
-        CR = CR_genes,
-        PPV = PPV_corrected_decoding,
+      df_CR_filter                 <- data.frame(
+        CR       = CR_genes,
+        PPV      = PPV_corrected_decoding,
         Retained = ret
       )
       plot_CR_filter <- ggplot(df_CR_filter, aes(x = CR, y = PPV, color = Retained)) +
@@ -1064,9 +1064,9 @@
         scale_color_manual(values = c("no" = "gray", "yes" = .DG_dot_color)) +
         geom_vline(
           xintercept = max_blank_CR,
-          color = .DG_filter_color,
-          linetype = .DG_filter_style,
-          linewidth = blank_line_width
+          color      = .DG_filter_color,
+          linetype   = .DG_filter_style,
+          linewidth  = blank_line_width
         ) +
         ylim(c(0, 1)) +  # Limit y-axis to [0, 1]
         xlim(c(0, 1)) +
@@ -1074,19 +1074,19 @@
         theme_minimal() +
         theme(
           legend.position = "none",
-          plot.title = element_text(hjust = 0.5, size = .DG_title_size*0.8),
-          axis.title = element_text(size = .DG_axis_size),
-          axis.text = element_text(size = .DG_axis_size),
-          legend.title = element_text(size = .DG_legend_size),
-          legend.text = element_text(size = .DG_legend_size)
+          plot.title      = element_text(hjust = 0.5, size = .DG_title_size*0.8),
+          axis.title.     = element_text(size = .DG_axis_size),
+          axis.text       = element_text(size = .DG_axis_size),
+          legend.title    = element_text(size = .DG_legend_size),
+          legend.text     = element_text(size = .DG_legend_size)
         )
-
+     
       # Total Barcode Counts vs PPV (genes only)
-      ret <- rep("no", length(total_barcode_counts_est_corrected_genes))
+      ret                                                             <- rep("no", length(total_barcode_counts_est_corrected_genes))
       ret[total_barcode_counts_est_corrected_genes > max_blank_count] <- "yes"
       df_count_filter <- data.frame(
-        Count = total_barcode_counts_est_corrected_genes,
-        PPV = PPV_corrected_decoding,
+        Count    = total_barcode_counts_est_corrected_genes,
+        PPV      = PPV_corrected_decoding,
         Retained = ret
       )
       plot_count_filter <- ggplot(df_count_filter, aes(x = Count, y = PPV, color = Retained)) +
@@ -1095,21 +1095,21 @@
         scale_color_manual(values = c("no" = "gray", "yes" = .DG_dot_color)) +
         geom_vline(
           xintercept = max_blank_count,
-          color = .DG_filter_color,
-          linetype = .DG_filter_style,
-          linewidth = blank_line_width
+          color      =  .DG_filter_color,
+          linetype   = .DG_filter_style,
+          linewidth  = blank_line_width
         ) +
         labs(title = "Max blank count", x = "Total counts per barcode", y = NULL) +
         theme_minimal() +
         theme(
           legend.position = "none",
-          plot.title = element_text(hjust = 0.5, size = .DG_title_size*0.8),
-          axis.title = element_text(size = .DG_axis_size),
-          axis.text = element_text(size = .DG_axis_size),
-          legend.title = element_text(size = .DG_legend_size),
-          legend.text = element_text(size = .DG_legend_size)
+          plot.title      = element_text(hjust = 0.5, size = .DG_title_size*0.8),
+          axis.title      = element_text(size = .DG_axis_size),
+          axis.text       = element_text(size = .DG_axis_size),
+          legend.title    = element_text(size = .DG_legend_size),
+          legend.text     = element_text(size = .DG_legend_size)
         )
-
+     
       filter_comp <- gridExtra::arrangeGrob(
         plot_count_filter, plot_CR_filter,
         nrow = 1,
@@ -1118,54 +1118,54 @@
           gp = grid::gpar(fontsize = .DG_title_size)
           )
         )
-
+     
       gridExtra::grid.arrange(
         grid::textGrob("PPV", rot = 90, gp = grid::gpar(fontsize = .DG_axis_size)),
         filter_comp,
         ncol = 2,
         widths = grid::unit.c(grid::unit(1, "lines"), grid::unit(1, "null"))
       )
-
+     
     }
-
+   
     return(results)
-
- }
+   
+  }
 
 # Plot run QC (PPV cutoff)
 .DG_plot_PPV_cutoff <- function(
     PPV_resamples,
     CI_range = 0.95,
-    min_PPV = 0.8
+    min_PPV  = 0.8
   ) {
-
-    CI_range_low <- (1 - CI_range)/2
+   
+    CI_range_low  <- (1 - CI_range)/2
     CI_range_high <- CI_range + CI_range_low
-
+   
     # Compute column medians
-    lower_q <- apply(PPV_resamples, 2, function(x) quantile(x, CI_range_low, na.rm = TRUE))
+    lower_q      <- apply(PPV_resamples, 2, function(x) quantile(x, CI_range_low, na.rm = TRUE))
     # Order columns by decreasing lower quantile
     ordered_cols <- names(sort(lower_q, decreasing = TRUE))
-
+   
     # Reorder columns in PPV_resamples
-    PPV_resamples_ordered <- PPV_resamples[ , ordered_cols]
-    col_range <- sample(1:ncol(PPV_resamples_ordered), size = ncol(PPV_resamples_ordered), replace = FALSE)
-    col_range <- sort(col_range, decreasing = FALSE)
-    PPV_resamples_long <- stack(PPV_resamples_ordered)
+    PPV_resamples_ordered        <- PPV_resamples[ , ordered_cols]
+    col_range                    <- sample(1:ncol(PPV_resamples_ordered), size = ncol(PPV_resamples_ordered), replace = FALSE)
+    col_range                    <- sort(col_range, decreasing = FALSE)
+    PPV_resamples_long           <- stack(PPV_resamples_ordered)
     colnames(PPV_resamples_long) <- c("value", "variable")
-
+   
     # Summarize median and 95% confidence interval
-
+   
     summary_df <- PPV_resamples_long |>
       dplyr::group_by(variable) |>
       dplyr::summarize(
         median = median(value, na.rm = TRUE),
-        lower = quantile(value, CI_range_low, na.rm = TRUE),
-        upper = quantile(value, CI_range_high, na.rm = TRUE)
+        lower  = quantile(value, CI_range_low, na.rm = TRUE),
+        upper  = quantile(value, CI_range_high, na.rm = TRUE)
       )
-    summary_df$above_cutoff <- rep("bad", nrow(summary_df))
+    summary_df$above_cutoff                             <- rep("bad", nrow(summary_df))
     summary_df$above_cutoff[summary_df$lower > min_PPV] <- "good"
-
+   
     # Plot
     PPV_plot <- ggplot(summary_df, aes(x = variable, y = median)) +
       geom_point(aes(color = above_cutoff), size = 3) +
@@ -1175,25 +1175,25 @@
       theme(
         panel.grid.major.x = element_blank(),
         panel.grid.minor.x = element_blank(),
-        axis.text.x = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.title = element_text(size = 18),      # Axis titles
-        axis.text = element_text(size = 12),       # Axis tick labels
-        plot.title = element_text(size = 24, hjust = 0.5),  # Title
-        legend.text = element_text(size = 12),
-        legend.title = element_text(size = 14)) +
+        axis.text.x        = element_blank(),
+        axis.ticks.x       = element_blank(),
+        axis.title         = element_text(size = 18),               # Axis titles
+        axis.text          = element_text(size = 12),               # Axis tick labels
+        plot.title         = element_text(size = 24, hjust = 0.5),  # Title
+        legend.text        = element_text(size = 12),
+        legend.title       = element_text(size = 14)) +
       scale_color_manual(values = c("good" = "blue", "bad" = "black")) +
       guides(color = "none") +
       labs(
-        y = paste0("Estimated PPV: Median with ", CI_range, " CI"),
-        x = paste0("Gene barcodes by lower ", CI_range_low, " quantile of PPV confidence interval"),
+        y     = paste0("Estimated PPV: Median with ", CI_range, " CI"),
+        x     = paste0("Gene barcodes by lower ", CI_range_low, " quantile of PPV confidence interval"),
         title = "Estimated Precision (PPV) by Gene Barcode")
     # ^ Save as 1600 x 925
-
+   
     return(
       list(PPV_plot = PPV_plot, summary_df = summary_df)
     )
-
+   
   }
 
 # Plot simulation QC
@@ -1202,22 +1202,22 @@
     obs_counts_sorted,
     N_genes
   ) {
-
+   
     bc_type_colors <- c(
-      "Gene (sim)" = .DG_retained_color, "Blank (sim)" = .DG_blanks_color,
+      "Gene (sim)" = .DG_retained_color,     "Blank (sim)" = .DG_blanks_color,
       "Gene (run)" = .DG_retained_color_obs, "Blank (run)" = .DG_blanks_color_obs
     )
-
-    bc_type <- rep("Gene (sim)", length(counts_sorted))
-    bc_type[seq_along(counts_sorted) > N_genes] <- "Blank (sim)"
-    bc_type_obs <- rep("Gene (run)", length(obs_counts_sorted))
+   
+    bc_type                                             <- rep("Gene (sim)", length(counts_sorted))
+    bc_type[seq_along(counts_sorted) > N_genes]         <- "Blank (sim)"
+    bc_type_obs                                         <- rep("Gene (run)", length(obs_counts_sorted))
     bc_type_obs[seq_along(obs_counts_sorted) > N_genes] <- "Blank (run)"
-
+   
     df_counts_sorted <- data.frame(
-      index = c(seq_along(counts_sorted), seq_along(obs_counts_sorted)),
-      Count = c(counts_sorted, obs_counts_sorted),
+      index   = c(seq_along(counts_sorted), seq_along(obs_counts_sorted)),
+      Count   = c(counts_sorted, obs_counts_sorted),
       bc_type = c(bc_type, bc_type_obs),
-      size = c(rep(3, length(counts_sorted)), rep(1.5, length(obs_counts_sorted)))
+      size    = c(rep(3, length(counts_sorted)), rep(1.5, length(obs_counts_sorted)))
     )
     df_counts_sorted$Count[df_counts_sorted$Count == 0] <- 1
     df_counts_sorted$bc_type <- factor(
@@ -1227,32 +1227,32 @@
         "Blank (sim)", "Blank (run)"
       )
     )
-
+   
     counts_sorted_plot <- ggplot(df_counts_sorted) +
       geom_point(size = df_counts_sorted$size, aes(x = index, y = Count, color = bc_type)) +
       scale_y_log10() +  # Log scale for better visibility
       scale_color_manual(values = bc_type_colors) +
       geom_vline(
         xintercept = mean(c(N_genes, N_genes+1)),
-        color = "black",
-        linetype = "dashed",
-        linewidth = 0.5
+        color      = "black",
+        linetype   = "dashed",
+        linewidth  = 0.5
       ) +
       labs(title = "Simulated vs Run Counts", x = "Barcodes sorted by run count", y = "Spot count", color = "Count type") +
       theme_minimal() +
       theme(
         legend.position = "right",
-        plot.title = element_text(hjust = 0.5, size = .DG_title_size),
-        axis.title = element_text(size = .DG_axis_size),
-        axis.text.y = element_text(size = .DG_axis_size),
-        axis.text.x = element_blank(),
-        axis.ticks.x = element_blank(),
-        legend.title = element_text(size = .DG_legend_size),
-        legend.text = element_text(size = .DG_legend_size)
+        plot.title      = element_text(hjust = 0.5, size = .DG_title_size),
+        axis.title      = element_text(size = .DG_axis_size),
+        axis.text.y     = element_text(size = .DG_axis_size),
+        axis.text.x     = element_blank(),
+        axis.ticks.x    = element_blank(),
+        legend.title    = element_text(size = .DG_legend_size),
+        legend.text     = element_text(size = .DG_legend_size)
       )
-
+   
     return(counts_sorted_plot)
-
+   
   }
 
 # Plot simulation step information
@@ -1261,105 +1261,105 @@
     burnin,
     FR_search
   ) {
-
+   
     # Add step column
     sim_summaries$step <- c(1:nrow(sim_summaries))
-
+   
     # Set v-line points
-    burnin <- burnin + FR_search
-    FR_search <- mean(c(FR_search, FR_search + 1))
-    burnin <- mean(c(burnin, burnin + 1))
-    vline_points <- c(FR_search, burnin)
-
+    burnin             <- burnin + FR_search
+    FR_search          <- mean(c(FR_search, FR_search + 1))
+    burnin             <- mean(c(burnin, burnin + 1))
+    vline_points       <- c(FR_search, burnin)
+   
     # plot sim_mse
     plot_mse <- ggplot(sim_summaries, aes(x = step, y = sim_mse)) +
       geom_line() +
       geom_vline(
         xintercept = vline_points,
-        color = "black",
-        linetype = "dashed",
-        linewidth = 0.5
+        color.     = "black",
+        linetype   = "dashed",
+        linewidth  = 0.5
       ) +
       labs(title = "MCMCSA step diagnostics", x = "step", y = "MSE (log)") +
       theme_minimal() +
       theme(
         legend.position = "none",
-        plot.title = element_text(hjust = 0.5, size = .DG_title_size),
-        axis.title = element_text(size = .DG_axis_size),
-        axis.text.y = element_text(size = .DG_axis_size),
-        axis.text.x = element_text(size = .DG_axis_size),
-        legend.title = element_text(size = .DG_legend_size),
-        legend.text = element_text(size = .DG_legend_size)
+        plot.title      = element_text(hjust = 0.5, size = .DG_title_size),
+        axis.title      = element_text(size = .DG_axis_size),
+        axis.text.y     = element_text(size = .DG_axis_size),
+        axis.text.x     = element_text(size = .DG_axis_size),
+        legend.title    = element_text(size = .DG_legend_size),
+        legend.text     = element_text(size = .DG_legend_size)
       )
-
+   
     # plot flip rates
     df_flip <- rbind(
       data.frame(
-        step = sim_summaries$step,
+        step     = sim_summaries$step,
         FlipRate = sim_summaries$flip_rate_10_stip,
-        Type = "1 to 0"),
+        Type     = "1 to 0"),
       data.frame(
-        step = sim_summaries$step,
+        step     = sim_summaries$step,
         FlipRate = sim_summaries$flip_rate_01_stip,
-        Type = "0 to 1")
+        Type     = "0 to 1")
     )
-
+   
     # Plot
     plot_flip_rates <- ggplot(df_flip, aes(x = step, y = FlipRate, color = Type)) +
       geom_line() +
       geom_vline(
         xintercept = vline_points,
-        color = "black",
-        linetype = "dashed",
-        linewidth = 0.5
+        color      = "black",
+        linetype   = "dashed",
+        linewidth  = 0.5
       ) +
       labs(title = "MCMCSA Flip Rates", x = "step", y = "Flip Rate") +
       theme_minimal() +
       theme(
-        plot.title = element_text(hjust = 0.5, size = .DG_title_size),
-        axis.title = element_text(size = .DG_axis_size),
-        axis.text.y = element_text(size = .DG_axis_size),
-        axis.text.x = element_text(size = .DG_axis_size),
+        plot.title   = element_text(hjust = 0.5, size = .DG_title_size),
+        axis.title   = element_text(size = .DG_axis_size),
+        axis.text.y  = element_text(size = .DG_axis_size),
+        axis.text.x  = element_text(size = .DG_axis_size),
         legend.title = element_text(size = .DG_legend_size),
-        legend.text = element_text(size = .DG_legend_size)
+        legend.text  = element_text(size = .DG_legend_size)
       )
-
+   
     # plot bit noise correlations
     df_flip <- rbind(
       data.frame(
-        step = sim_summaries$step,
+        step       = sim_summaries$step,
         corr_param = sim_summaries$bit_noise_cor_sd_stip,
-        Type = "sd"),
+        Type       = "sd"),
       data.frame(
-        step = sim_summaries$step,
+        step       = sim_summaries$step,
         corr_param = sim_summaries$bit_noise_cor_bias_stip,
-        Type = "bias")
-    )
-
+        Type       = "bias")
+    ) 
+   
     # Plot
     plot_corr_param <- ggplot(df_flip, aes(x = step, y = corr_param, color = Type)) +
       geom_line() +
       geom_vline(
         xintercept = vline_points,
-        color = "black",
-        linetype = "dashed",
-        linewidth = 0.5
+        color      = "black",
+        linetype   = "dashed",
+        linewidth  = 0.5
       ) +
       labs(title = "MCMCSA bit-noise correlation parameters", x = "step", y = "Value") +
       theme_minimal() +
       theme(
-        plot.title = element_text(hjust = 0.5, size = .DG_title_size),
-        axis.title = element_text(size = .DG_axis_size),
-        axis.text.y = element_text(size = .DG_axis_size),
-        axis.text.x = element_text(size = .DG_axis_size),
+        plot.title   = element_text(hjust = 0.5, size = .DG_title_size),
+        axis.title   = element_text(size = .DG_axis_size),
+        axis.text.y  = element_text(size = .DG_axis_size),
+        axis.text.x  = element_text(size = .DG_axis_size),
         legend.title = element_text(size = .DG_legend_size),
-        legend.text = element_text(size = .DG_legend_size)
+        legend.text  = element_text(size = .DG_legend_size)
       )
-
+   
     print(plot_mse)
     print(plot_flip_rates)
     print(plot_corr_param)
-
+   
   }
 
 #' Run misread QC analysis using the legacy dichotomized-Gaussian (DG) spot simulation method
@@ -1524,7 +1524,7 @@ misread.qc.DG <- function(
       summary_stats_blanks = summary_stats_blanks,
       flip_rate_10 = flip_rate_10_current,
       flip_rate_01 = flip_rate_01_current,
-      max_correctable_Hamming_distance = maxHam,
+      maxHam = maxHam,
       bit_lum_noise_correlations = lum_noise_correlations_current,
       blank_weight = max_blank_weight,
       maintain_gene_identity = FALSE,
@@ -1606,7 +1606,7 @@ misread.qc.DG <- function(
         summary_stats_blanks = summary_stats_blanks,
         flip_rate_10 = flip_rate_10_next,
         flip_rate_01 = flip_rate_01_next,
-        max_correctable_Hamming_distance = maxHam,
+        maxHam = maxHam,
         bit_lum_noise_correlations = lum_noise_correlations_next,
         blank_weight = blank_weight_schedule[step + 1],
         maintain_gene_identity = maintain_gene_identity,
