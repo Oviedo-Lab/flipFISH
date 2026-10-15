@@ -7,6 +7,7 @@
 misread.qc.DG(
   STdata,
   codebook,
+  maxHam = 4,
   resamples,
   burnin = NULL,
   FR_search = NULL,
@@ -25,6 +26,8 @@ misread.qc.DG(
 \item{STdata}{Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts". Must have barcode names (e.g., gene or protein species) as row names, with blank species having "Blank" in their name.}
 
 \item{codebook}{Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0. All row names from \code{STdata} must be included in the row names for \code{codebook}.}
+
+\item{maxHam}{Maximum correctable Hamming distance used for error correction, default 4 (matches the original method's hard-coded value, an "extended" Hamming code assumption).}
 
 \item{resamples}{Number of steps to take in the post-burn-in random walk (these are the steps summarized in the returned results).}
 
@@ -73,7 +76,7 @@ future development -- it is not the package's primary (recommended) method, and 
 analytic model for comparable codebooks.
 }
 \details{
-Unlike \code{misread.qc}, this function does not accept \code{maxHam}: the original method hard-codes a
-maximum correctable Hamming distance of 4 (an "extended" Hamming code assumption) rather than deriving it
-from the codebook.
+Unlike \code{misread.qc}, \code{maxHam} here is not derived from the codebook; the original method
+hard-coded a maximum correctable Hamming distance of 4 (an "extended" Hamming code assumption), which is
+kept as the default here.
 }

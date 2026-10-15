@@ -476,8 +476,8 @@
     codebook,
     summary_stats_genes,
     summary_stats_blanks,
-    flip_rate_10,                           # Probability of a 0 being flipped to a 1, either scalar or vector of length equal to number of bits
-    flip_rate_01,                           # Probability of a 1 being flipped to a 0, either scalar or vector of length equal to number of bits
+    flip_rate_10,                           # Probability of a 1 being flipped to a 0, either scalar or vector of length equal to number of bits
+    flip_rate_01,                           # Probability of a 0 being flipped to a 1, either scalar or vector of length equal to number of bits
     max_correctable_Hamming_distance,       # For the automatic error correction, assumes an "extended" Hamming code with min 4 bits between all barcodes
     bit_noise_correlations_bias = 0,        # For correlating noise in the bit reads
     bit_noise_correlations_sd = 1,          # For correlating noise in the bit reads
@@ -1375,12 +1375,13 @@
 #' future development -- it is not the package's primary (recommended) method, and is much slower than the
 #' analytic model for comparable codebooks.
 #'
-#' Unlike \code{misread.qc}, this function does not accept \code{maxHam}: the original method hard-codes a
-#' maximum correctable Hamming distance of 4 (an "extended" Hamming code assumption) rather than deriving it
-#' from the codebook.
+#' Unlike \code{misread.qc}, \code{maxHam} here is not derived from the codebook; the original method
+#' hard-coded a maximum correctable Hamming distance of 4 (an "extended" Hamming code assumption), which is
+#' kept as the default here.
 #'
 #' @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts". Must have barcode names (e.g., gene or protein species) as row names, with blank species having "Blank" in their name.
 #' @param codebook Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0. All row names from \code{STdata} must be included in the row names for \code{codebook}.
+#' @param maxHam Maximum correctable Hamming distance used for error correction, default 4 (matches the original method's hard-coded value, an "extended" Hamming code assumption).
 #' @param resamples Number of steps to take in the post-burn-in random walk (these are the steps summarized in the returned results).
 #' @param burnin Number of burn-in steps before resampling begins, default \code{resamples/2}.
 #' @param FR_search Number of initial steps used to search for a reasonable overall (mean) flip rate before burn-in, default \code{resamples/2}.
@@ -1405,6 +1406,7 @@
 misread.qc.DG <- function(
     STdata,
     codebook,
+    maxHam = 4,                    # Maximum correctable Hamming distance (original method hard-coded this to 4)
     resamples,                     # Number of steps to take in random walk
     burnin = NULL,
     FR_search = NULL,
@@ -1522,7 +1524,7 @@ misread.qc.DG <- function(
       summary_stats_blanks = summary_stats_blanks,
       flip_rate_10 = flip_rate_10_current,
       flip_rate_01 = flip_rate_01_current,
-      max_correctable_Hamming_distance = 4,
+      max_correctable_Hamming_distance = maxHam,
       bit_lum_noise_correlations = lum_noise_correlations_current,
       blank_weight = max_blank_weight,
       maintain_gene_identity = FALSE,
@@ -1604,7 +1606,7 @@ misread.qc.DG <- function(
         summary_stats_blanks = summary_stats_blanks,
         flip_rate_10 = flip_rate_10_next,
         flip_rate_01 = flip_rate_01_next,
-        max_correctable_Hamming_distance = 4,
+        max_correctable_Hamming_distance = maxHam,
         bit_lum_noise_correlations = lum_noise_correlations_next,
         blank_weight = blank_weight_schedule[step + 1],
         maintain_gene_identity = maintain_gene_identity,
