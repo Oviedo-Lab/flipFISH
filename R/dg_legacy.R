@@ -1406,19 +1406,19 @@
 misread.qc.DG <- function(
     STdata,
     codebook,
-    maxHam = 4,                    # Maximum correctable Hamming distance (original method hard-coded this to 4)
-    resamples,                     # Number of steps to take in random walk
-    burnin = NULL,
-    FR_search = NULL,
-    max_step_size = 0.2,         # Size of each step in the random walk
-    min_step_size_divider = 10,   # Scale step-size down linearly to max_step_size/min_step_size_divider over burnin
-    max_temperature = 0.2,     # Temperature for the MCMC simulation
-    min_temperature_scale = 0.5, # Scale temperature down linearly to max_temperature/(min_step_size_divider/min_temperature_scale) over burnin
-    max_blank_weight = NULL,
-    min_blank_weight = NULL,
-    n_tracker_updates = 100,
-    n_forks = 1,
-    N_cells = 1e3                 # Number of cells to simulate per step (originally hard-coded via .DG_run_simulation()'s own default; exposed here, same default, so it can be lowered for quick/dev runs)
+    maxHam                = 4,     # Maximum correctable Hamming distance (original method hard-coded this to 4)
+    resamples             = 1000,  # Number of steps to take in random walk
+    burnin                = NULL,
+    FR_search             = NULL,
+    max_step_size         = 0.2,   # Size of each step in the random walk
+    min_step_size_divider = 10,    # Scale step-size down linearly to max_step_size/min_step_size_divider over burnin
+    max_temperature       = 0.2,   # Temperature for the MCMC simulation
+    min_temperature_scale = 0.5,   # Scale temperature down linearly to max_temperature/(min_step_size_divider/min_temperature_scale) over burnin
+    max_blank_weight      = NULL,
+    min_blank_weight      = NULL,
+    n_tracker_updates     = 100,
+    n_forks               = 1,
+    N_cells               = 1e3    # Number of cells to simulate per step (originally hard-coded via .DG_run_simulation()'s own default; exposed here, same default, so it can be lowered for quick/dev runs)
   ) {
 
     cat("\n\nEstimating FPQC metrics with Markov chain Monte Carlo simulated annealing (legacy DG method)")
