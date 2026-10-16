@@ -7,6 +7,9 @@ date: "October 13, 2026 (v1.0)"
 This package uses code from the following packages, which are distributed under the licenses listed below.
 
 * Updated October 13, 2026, by Claude Sonnet 5; checked by MB.
+* Updated October 16, 2026, by Claude Sonnet 5, to add BH (new LinkingTo dependency), and to add
+  parallel and mvtnorm, both already in use (parallel in R/main.R and R/dg_legacy.R; mvtnorm in
+  tests/testthat/) but missing from this file until now.
 
 <h1> Rcpp </h1>
 
@@ -28,6 +31,16 @@ https://gitlab.com/libeigen/eigen
 
 MPL2 (Mozilla Public License)  
 https://www.mozilla.org/en-US/MPL/2.0/FAQ/
+
+<h1> BH </h1>
+
+by: Dirk Eddelbuettel, John W. Emerson, and Michael J. Kane (packaging the Boost C++ libraries' header files for use via LinkingTo)
+
+https://cran.r-project.org/web/packages/BH/index.html  
+https://github.com/eddelbuettel/bh
+
+Boost Software License 1.0 (BSL-1.0)  
+https://www.boost.org/LICENSE_1_0.txt
 
 <h1> nlopt </h1>
 
@@ -89,6 +102,15 @@ https://stat.ethz.ch/R-manual/R-devel/library/grid/html/00Index.html
 Part of R -- GPL-2 | GPL-3  
 https://www.r-project.org/Licenses/
 
+<h1> parallel </h1>
+
+by: R Core Team (part of the base R distribution)
+
+https://stat.ethz.ch/R-manual/R-devel/library/parallel/html/00Index.html
+
+Part of R -- GPL-2 | GPL-3  
+https://www.r-project.org/Licenses/
+
 <h1> dplyr </h1>
 
 by: Hadley Wickham, Romain François, Lionel Henry, Kirill Müller, Davis Vaughan, and Posit Software, PBC
@@ -98,4 +120,14 @@ https://github.com/tidyverse/dplyr
 
 The MIT license  
 https://github.com/tidyverse/dplyr/blob/main/LICENSE.md
+
+<h1> mvtnorm </h1>
+
+by: Alan Genz, Frank Bretz, Tetsuhisa Miwa, Xuefei Mi, Friedrich Leisch, Fabian Scheipl, Bjoern Bornkamp, Martin Maechler, and Torsten Hothorn (test-only dependency, via Suggests -- not used by the package itself at runtime)
+
+https://cran.r-project.org/web/packages/mvtnorm/index.html  
+https://codeberg.org/thothorn/mvtnorm
+
+GPL-2  
+https://www.r-project.org/Licenses/GPL-2
 
