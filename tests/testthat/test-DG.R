@@ -1,16 +1,16 @@
 
 # File written by Claude Sonnet 5
 
-# Smoke test for misread.qc.DG(), the verbatim-ported legacy dichotomized-Gaussian (DG) spot-simulation
-# method (see R/dg_legacy.R, src/dg_legacy.cpp). Uses a small subset of the bundled m1 sample data
-# (inst/extdata/dg_legacy/) -- a tiny codebook/cell count just to confirm the ported pipeline runs
-# end-to-end and returns results of the expected shape; it is not a correctness/recovery check.
+# Smoke test for misread.qc.DG.legacy(), the verbatim-ported legacy dichotomized-Gaussian (DG)
+# spot-simulation method (see R/dg_legacy.R, src/dg_legacy.cpp). Uses a small subset of the bundled m1
+# sample data (inst/extdata/dg_legacy/) -- a tiny codebook/cell count just to confirm the ported pipeline
+# runs end-to-end and returns results of the expected shape; it is not a correctness/recovery check.
 
 library(flipFISH)
 
 extdata_path <- system.file("extdata", "dg_legacy", package = "flipFISH")
 
-test_that("misread.qc.DG runs end-to-end on a small subset of the bundled legacy data", {
+test_that("misread.qc.DG.legacy runs end-to-end on a small subset of the bundled legacy data", {
   skip_if(extdata_path == "", "bundled DG legacy sample data not found")
 
   codebook <- read.csv(file.path(extdata_path, "codebook_obs.csv"), row.names = 1)
@@ -31,7 +31,7 @@ test_that("misread.qc.DG runs end-to-end on a small subset of the bundled legacy
   codebook_small <- codebook[rownames(STdata), , drop = FALSE]
 
   set.seed(1)
-  res <- misread.qc.DG(
+  res <- misread.qc.DG.legacy(
     STdata, codebook_small,
     resamples = 2, burnin = 5, FR_search = 5,
     n_tracker_updates = 2, n_forks = 1, N_cells = 20

@@ -7,22 +7,25 @@
 # Verbatim port of the original "dichotomized Gaussian" (DG) spot-simulation method -- the simulation-based
 # approach used to produce this project's earlier results -- from the external repo/folder
 # paper_calling_rate_sim/MERFISH_calling_rate_sim/main.R (paired with src/dg_legacy.cpp, the ported
-# fast_functions.cpp). Kept fully separate from the analytic model in R/main.R / src/main.cpp: nothing here
-# is shared with or called by misread.qc()/sim.benchmark(), and nothing in main.R is called from here.
-# This file exists only so the original results can in principle be reproduced, and as a base for possible
-# future development -- it is not the package's primary (recommended) method.
+# fast_functions.cpp). The exported entry point is misread.qc.DG.legacy() (renamed from the original
+# misread.qc.DG() when the C++-backed, actively-developed misread.qc.DG()/mQC_DG() was added to
+# R/main.R / src/main.cpp). This file exists only so the original results can in principle be reproduced;
+# it is not the package's primary (recommended) method. Nothing in main.R's numerical logic is shared with
+# or calls into this file -- the one exception is that misread.qc.DG()'s thin R wrapper reuses this file's
+# private .DG_plot_* ggplot helpers for its own post-hoc plotting, since both files are part of the same
+# package namespace; those helpers themselves are untouched.
 #
 # Every internal helper below is a straight rename of its original counterpart to a ".DG_"-prefixed name
 # (so it stays unexported under the package's `exportPattern("^[[:alpha:]]+")` and can never collide with
 # anything else in flipFISH); every function BODY is otherwise unchanged. The only two substantive
 # deviations from verbatim, both confined to the single exported entry point below, are:
 #   1. Input data: the original top-level driver (`run_MCMCSA`) read summary-stats CSVs from disk by
-#      mouse_id/path. misread.qc.DG() instead takes STdata/codebook in-memory, in the same shape
+#      mouse_id/path. misread.qc.DG.legacy() instead takes STdata/codebook in-memory, in the same shape
 #      misread.qc() already uses, and splits it locally -- no change to any downstream numerical logic.
 #   2. Parallelism: the original relied on a script-level global (`core_num`) read inside `runparallel()`.
 #      Here `n_forks` is threaded through explicitly as a function argument instead.
-# Note that maxHam has also been exposed as an argument to misread.qc.DG with a default value of 4 matching
-# the original hard-coded value. 
+# Note that maxHam has also been exposed as an argument to misread.qc.DG.legacy with a default value of 4
+# matching the original hard-coded value.
 # #########################################################################################################
 
 # ----- style constants (originally script-level globals used by the plotting helpers) --------------------
@@ -1364,16 +1367,17 @@
 
 #' Run misread QC analysis using the legacy dichotomized-Gaussian (DG) spot simulation method
 #'
-#' \code{misread.qc.DG} is a verbatim-ported, historical alternative to \code{misread.qc}: rather than
-#' fitting an analytic conditional-probability model, it estimates bit-flip rates/correlations (and the
-#' resulting PPV) by directly simulating "ground truth" RNA hybridization spots and noisy MERFISH barcode
-#' decoding, then adjusting the simulated flip rates and bit-noise correlations with a Markov Chain Monte
-#' Carlo with Simulated Annealing (MCMCSA) search until the simulated barcode-count distribution matches
-#' the observed one (summarized by \code{STdata}). This is the method used to produce this project's
-#' earlier (pre-\code{misread.qc}) results; it is kept here, fully separate from \code{misread.qc}/
-#' \code{sim.benchmark}, only so those results can in principle be reproduced, and as a base for possible
-#' future development -- it is not the package's primary (recommended) method, and is much slower than the
-#' analytic model for comparable codebooks.
+#' \code{misread.qc.DG.legacy} is a verbatim-ported, historical alternative to \code{misread.qc}: rather
+#' than fitting an analytic conditional-probability model, it estimates bit-flip rates/correlations (and
+#' the resulting PPV) by directly simulating "ground truth" RNA hybridization spots and noisy MERFISH
+#' barcode decoding, then adjusting the simulated flip rates and bit-noise correlations with a Markov
+#' Chain Monte Carlo with Simulated Annealing (MCMCSA) search until the simulated barcode-count
+#' distribution matches the observed one (summarized by \code{STdata}). This is the method used to
+#' produce this project's earlier (pre-\code{misread.qc}) results; it is kept here, fully separate from
+#' \code{misread.qc}/\code{sim.benchmark}, only so those results can in principle be reproduced, and as a
+#' reference for \code{misread.qc.DG} (the C++-backed, actively-developed DG method) -- it is not the
+#' package's primary (recommended) method, and is much slower than the analytic model for comparable
+#' codebooks.
 #'
 #' Unlike \code{misread.qc}, \code{maxHam} here is not derived from the codebook; the original method
 #' hard-coded a maximum correctable Hamming distance of 4 (an "extended" Hamming code assumption), which is
@@ -1403,7 +1407,7 @@
 #'    \item \code{sorted_count_plot}: a ggplot object comparing simulated vs. observed sorted barcode counts over the \code{resamples} rows following burn-in.
 #' }
 #' @export
-misread.qc.DG <- function(
+misread.qc.DG.legacy <- function(
     STdata,
     codebook,
     maxHam                = 4,     # Maximum correctable Hamming distance (original method hard-coded this to 4)

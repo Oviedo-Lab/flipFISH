@@ -284,15 +284,24 @@ misread.qc <- function(
     maxHam            = NULL,
     fliprate_priors   = list(),
     weights           = list(
-      blank      = 1.0, 
-      prior      = 0.0, 
-      dispersion = 0.0, 
-      erc        = 0.0
-    )
+      blank       = 1.0, 
+      prior       = 0.0, 
+      dispersion  = 0.0, 
+      erc         = 0.0,
+      feasibility = 0.0
+    ),
+    max_feasibility_barcodes = 40
   ) {
     cat("\nRunning misread QC with L-BFGS (nlopt)")
     cat("\nMax evaluations:", maxeval)
-    
+
+    # Fill in any weight the caller's list omits with its default, so a partial `weights` list
+    # (e.g. missing `erc`) doesn't silently pass NULL -> numeric(0) through to mQC() below
+    weights <- modifyList(
+      list(blank = 1.0, prior = 0.0, dispersion = 0.0, erc = 0.0, feasibility = 0.0),
+      weights
+    )
+
     # Confirm forking is possible and check number of cores
     n_forks    <- check_forks(n_forks)
     
@@ -327,7 +336,9 @@ misread.qc <- function(
       as.double(weights$dispersion),
       as.double(data_check$obs_erc),
       as.double(weights$erc),
-      as.integer(n_restarts)
+      as.integer(n_restarts),
+      as.double(weights$feasibility),
+      as.integer(max_feasibility_barcodes)
     )
     
     # Annotate result output
@@ -348,7 +359,204 @@ misread.qc <- function(
     cat("\n0>1:", round(rate01_mean, 4))
     
     return(qc)
-    
+   
+  }
+
+#' Run misread QC analysis using the dichotomized-Gaussian (DG) spot-simulation / MCMCSA method
+#'
+#' \code{misread.qc.DG} is a thin wrapper around the C++ \code{mQC_DG()} engine -- the same pattern
+#' \code{misread.qc()}/\code{mQC()} use -- implementing literal correlated-Gaussian-noise spot
+#' simulation, decoded and compared against \code{STdata}'s observed barcode counts via a Markov
+#' Chain Monte Carlo with Simulated Annealing (MCMCSA) search over bit-flip rates and bit-flip
+#' correlations. It supersedes \code{misread.qc.DG.legacy} (the verbatim-preserved historical port) in
+#' three ways: (1) it correctly inverts the desired bit-flip correlations into the underlying Gaussian
+#' noise correlations actually needed to simulate them -- \code{misread.qc.DG.legacy} plugged bit-flip
+#' correlations in directly where Gaussian noise correlations were needed, and projects the result to
+#' the nearest valid (positive-semidefinite) correlation matrix per barcode when the requested
+#' correlations aren't jointly realizable; (2) it uses separate correlation matrices for when a given
+#' bit reads 1 vs. 0 (\code{corr1}/\code{corr0}), matching \code{misread.qc}'s \code{FlipRates}
+#' structure, instead of one shared matrix; and (3) it reuses \code{misread.qc}'s structured, tiered
+#' priors (\code{fliprate_priors}/\code{bit_org}) for the MCMCSA walk's proposal step sizes and
+#' acceptance-penalty term, not just its initial draw -- a tightly-pinned prior tier gets both a
+#' smaller per-step proposal and a larger penalty for moving away from it. The random-walk/annealing
+#' mechanics themselves (schedules, the two-phase FR_search-then-burnin design, stochastic bit/pair
+#' pruning, burn-in mean-rate enforcement) are unchanged from \code{misread.qc.DG.legacy}.
+#'
+#' One simplification relative to \code{misread.qc.DG.legacy}: the burn-in-phase mean-flip-rate
+#' enforcement targets the mean of the \emph{stipulated} (proposed/accepted) flip rates over the
+#' flip-rate-search window, rather than re-deriving an independently \emph{observed} flip rate from
+#' regenerating ground-truth RNA and comparing it to decoded spots. The two should track each other
+#' closely in expectation; this avoids porting that secondary diagnostic machinery. Correspondingly,
+#' \code{sim_summaries}' \code{flip_rate_10}/\code{flip_rate_01} columns (the observed-from-spots
+#' variant) are always \code{NA} here, same as \code{misread.qc.DG.legacy} already is except near its
+#' own \code{FR_search} boundary.
+#'
+#' @param STdata Numeric matrix or data frame with rows as barcodes, columns labeled "rates", "variance", "counts". Must have barcode names (e.g., gene or protein species) as row names, with blank species having "Blank" in their name.
+#' @param codebook Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0. All row names from \code{STdata} must be included in the row names for \code{codebook}.
+#' @param bit_org Optional data frame/matrix with one row per bit (columns \code{imagingRound}/\code{color}) giving the imaging-round/color-channel structure of the codebook, used to build a tiered \code{fliprate_priors} via \code{build_corr_priors()} -- same as \code{misread.qc}'s \code{bit_org} argument. Default \code{NULL} skips this (unstructured prior, unless \code{fliprate_priors} is supplied directly).
+#' @param maxHam Maximum correctable Hamming distance used for error correction, default \code{NULL} sets it to one less than the minimum Hamming distance between codebook entries.
+#' @param resamples Number of steps to take in the post-burn-in random walk (these are the steps summarized in the returned results).
+#' @param burnin Number of burn-in steps before resampling begins, default \code{resamples/2}.
+#' @param FR_search Number of initial steps used to search for a reasonable overall (mean) flip rate before burn-in, default \code{resamples/2}.
+#' @param max_step_size Size of the largest per-step Gaussian proposal in the random walk, default 0.2.
+#' @param min_step_size_divider Step size is scaled down linearly to \code{max_step_size/min_step_size_divider} over burn-in, default 10.
+#' @param max_temperature Simulated-annealing temperature at the start of the walk, default 0.2.
+#' @param min_temperature_scale Temperature is scaled down linearly to \code{max_temperature/(min_step_size_divider/min_temperature_scale)} over burn-in, default 0.5.
+#' @param n_tracker_updates Number of progress updates to print over the full walk, default 100.
+#' @param n_forks Number of process forks to use for simulating spots (i.e., parallel computation), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.
+#' @param N_cells Number of cells to simulate at each step, default 1000. Lowering this trades simulation accuracy for speed -- useful for quick/development runs. Caution: too small a value (a few dozen, on a codebook with many bits) can make the MCMCSA walk itself pathologically slow rather than just less accurate -- the per-step simulation becomes so noisy that the acceptance rate can collapse to near zero once the annealing temperature cools, requiring many thousands of proposals to advance. If a run seems stuck (no progress message for a long time), try raising \code{N_cells} before assuming something is wrong.
+#' @param fliprate_priors Structured prior on flip rates/bit-flip correlations, same format \code{misread.qc}/\code{build_corr_priors()} use. Default \code{list()} (unstructured). Drives the MCMCSA walk's initial draw, per-pair proposal step-size tiering (via \code{sdcorr_pairs}), and the prior-penalty term (via \code{weights$prior}/\code{weights$dispersion}).
+#' @param weights List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank}/\code{min_blank} are the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, mirroring \code{misread.qc}'s constant \code{weights$blank} but as a schedule rather than a single scalar, since \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; \code{prior}/\code{dispersion}/\code{feasibility} all default to 0, matching \code{misread.qc}'s "0 disables it" convention: \code{prior}/\code{dispersion} are the same Gaussian-prior/dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes corr1/corr0 for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.
+#' @param max_feasibility_barcodes Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty per step, for speed on large codebooks. Ignored when \code{weights$feasibility} is 0.
+#' @return A list giving:\itemize{
+#'    \item \code{sim_summaries}: a data frame, one row per accepted MCMCSA step, of simulation-fit summary statistics (CR/PPV slope and MSE, stipulated flip rates/correlations, decoding rates, etc.).
+#'    \item \code{PPV}: a data frame, one row per accepted MCMCSA step and one column per gene barcode, of the simulated PPV for that barcode at that step.
+#'    \item \code{PPV_summary}: a data frame summarizing \code{PPV} (over the \code{resamples} rows following burn-in) per gene barcode: median, lower/upper 95\% CI, and whether the lower CI clears 0.8.
+#'    \item \code{Counts_sorted_sim}/\code{Counts_sorted_obs}: data frames, one row per step, of the simulated and observed barcode counts (sorted consistently for comparison).
+#'    \item \code{PPV_plot}: a ggplot object visualizing \code{PPV_summary}.
+#'    \item \code{sorted_count_plot}: a ggplot object comparing simulated vs. observed sorted barcode counts over the \code{resamples} rows following burn-in.
+#' }
+#' @export
+misread.qc.DG <- function(
+    STdata,
+    codebook,
+    bit_org                  = NULL,
+    maxHam                   = NULL,
+    resamples                = 1000,
+    burnin                   = NULL,
+    FR_search                = NULL,
+    max_step_size            = 0.2,
+    min_step_size_divider    = 10,
+    max_temperature          = 0.2,
+    min_temperature_scale    = 0.5,
+    n_tracker_updates        = 100,
+    n_forks                  = 1,
+    N_cells                  = 1e3,
+    fliprate_priors          = list(),
+    weights                  = list(
+      max_blank   = NULL,
+      min_blank   = NULL,
+      prior       = 0.0,
+      dispersion  = 0.0,
+      feasibility = 0.0
+    ),
+    max_feasibility_barcodes = 40
+  ) {
+
+    cat("\n\nEstimating FPQC metrics with Markov chain Monte Carlo simulated annealing (DG method)")
+
+    # Fill in any weight the caller's list omits with its default (same rationale as misread.qc())
+    weights <- modifyList(
+      list(max_blank = NULL, min_blank = NULL, prior = 0.0, dispersion = 0.0, feasibility = 0.0),
+      weights
+    )
+
+    # Confirm forking is possible and check number of cores (reuses misread.qc()'s own helper)
+    n_forks <- check_forks(n_forks)
+
+    # Check bit size, prep codebook and STdata, and set maxHam (reuses misread.qc()'s own helper;
+    # strips an optional counts_uncorrected column, which mQC_DG() has no use for)
+    data_check <- check_data(STdata, codebook, bit_org, maxHam)
+
+    # Build flip rate priors from bit_org, same as misread.qc()
+    N_bits <- ncol(data_check$codebook)
+    if (!is.null(dim(data_check$bit_org))) {
+      fliprate_priors_bo <- build_corr_priors(
+        N_bits      = N_bits,
+        bit_round   = data_check$bit_org$imagingRound,
+        bit_channel = data_check$bit_org$color
+      )
+      fliprate_priors_bo[names(fliprate_priors)] <- fliprate_priors
+      fliprate_priors <- fliprate_priors_bo
+    }
+
+    # Resolve NULL schedule defaults (same logic misread.qc.DG.legacy() uses)
+    blank_mask <- grepl("Blank", rownames(data_check$STdata), ignore.case = FALSE)
+    N_genes    <- sum(!blank_mask)
+    N_blanks   <- sum(blank_mask)
+    if (is.null(FR_search)) FR_search <- as.integer(resamples / 2)
+    if (is.null(burnin))    burnin    <- as.integer(resamples / 2)
+    max_blank_weight_limit <- N_genes / N_blanks + 1
+    if (is.null(weights$max_blank)) {
+      weights$max_blank <- max_blank_weight_limit
+    } else if (weights$max_blank > max_blank_weight_limit) {
+      cat("\n\nRequested max blank weight too high, resetting to limit:", max_blank_weight_limit)
+      weights$max_blank <- max_blank_weight_limit
+    }
+    if (is.null(weights$min_blank)) {
+      weights$min_blank <- 2
+    } else if (weights$min_blank < 1) {
+      weights$min_blank <- 1
+    }
+
+    # Run the MCMCSA walk
+    res <- mQC_DG(
+      as.matrix(data_check$STdata),
+      as.matrix(data_check$codebook),
+      as.integer(data_check$maxHam),
+      as.integer(resamples),
+      as.integer(burnin),
+      as.integer(FR_search),
+      as.double(max_step_size),
+      as.integer(min_step_size_divider),
+      as.double(max_temperature),
+      as.double(min_temperature_scale),
+      as.double(weights$max_blank),
+      as.double(weights$min_blank),
+      as.integer(n_tracker_updates),
+      as.integer(n_forks),
+      as.integer(N_cells),
+      as.list(fliprate_priors),
+      as.double(weights$prior),
+      as.double(weights$dispersion),
+      as.double(weights$feasibility),
+      as.integer(max_feasibility_barcodes)
+    )
+
+    # Annotate results. Plotting stays in R, reusing dg_legacy.R's private .DG_plot_* helpers (same
+    # package namespace; that file itself is untouched).
+    gene_names               <- rownames(data_check$STdata)[res$gene_idx + 1]
+    sim_summaries            <- as.data.frame(res$sim_summaries)
+    colnames(sim_summaries)  <- c(
+      "CR_PPV_slope", "CR_PPV_mse", "sim_mse",
+      "PPV_mean_filtered", "PPV_sd_filtered", "PPV_mean_retained", "ratio_genes_CR_filtered",
+      "flip_rate_10_stip", "flip_rate_10", "flip_rate_01_stip", "flip_rate_01",
+      "bit_noise_cor_bias_stip", "bit_noise_cor_sd_stip",
+      "spot_decoding_rate", "spot_decoding_rate_corrected"
+    )
+    PPV               <- as.data.frame(res$PPV)
+    colnames(PPV)     <- gene_names
+    Counts_sorted_sim <- as.data.frame(res$Counts_sorted_sim)
+    Counts_sorted_obs <- as.data.frame(res$Counts_sorted_obs)
+
+    # Same resamples-row window misread.qc.DG.legacy() uses (1-indexed, inclusive of the last burn-in
+    # row through the last resampled row)
+    n_steps        <- nrow(PPV)
+    resamples_rows <- (FR_search + burnin):(FR_search + burnin + resamples)
+    resamples_rows <- resamples_rows[resamples_rows >= 1 & resamples_rows <= n_steps]
+
+    PPV_plot_info <- .DG_plot_PPV_cutoff(PPV[resamples_rows, , drop = FALSE])
+    PPV_summary   <- PPV_plot_info$summary_df
+    PPV_plot      <- PPV_plot_info$PPV_plot
+    print(PPV_plot)
+
+    counts_sorted_sim_ <- apply(Counts_sorted_sim[resamples_rows, , drop = FALSE], 2, median)
+    counts_sorted_obs_ <- unlist(as.vector(Counts_sorted_obs[1, ]))
+    sorted_count_plot  <- .DG_plot_counts_sorted(counts_sorted_sim_, counts_sorted_obs_, length(gene_names))
+    print(sorted_count_plot)
+
+    .DG_plot_MCMC_steps(sim_summaries, burnin, FR_search)
+
+    return(list(
+      sim_summaries     = sim_summaries,
+      PPV               = PPV,
+      PPV_summary       = PPV_summary,
+      Counts_sorted_sim = Counts_sorted_sim,
+      Counts_sorted_obs = Counts_sorted_obs,
+      PPV_plot          = PPV_plot,
+      sorted_count_plot = sorted_count_plot
+    ))
+
   }
 
 #' Benchmark \code{misread.qc} function with Bernoulli simulations
@@ -394,7 +602,13 @@ sim.benchmark <- function(
     )
   ) {
     cat("\nBenchmarking misread QC with Bernoulli simulations, using L-BFGS (nlopt)")
-    
+
+    # Fill in any weight the caller's list omits with its default (same rationale as misread.qc())
+    weights <- modifyList(
+      list(blank = 1.0, prior = 0.0, dispersion = 0.0, erc = 0.0),
+      weights
+    )
+
     # Confirm forking is possible and check number of cores
     n_forks    <- check_forks(n_forks)
     
@@ -448,7 +662,7 @@ sim.benchmark <- function(
 
 #' Plot estimated PPV by barcode from \code{misread.qc} results
 #'
-#' This function takes the results from the misread.qc function and makes a plot of the estimated positive predictive value (PPV) for each barcode. Barcodes are sorted by PPV value, in decreasing order, and a dashed red line indicates the minimum PPV cutoff for "good" barcodes. Barcodes above the cutoff are colored blue, while those that are not are colored black. 
+#' This function takes the results from the misread.qc function and makes a plot of the estimated positive predictive value (PPV) for each barcode, along with its 95\% confidence interval (\code{PPV_lower}/\code{PPV_upper} from \code{erctc_plus}) shown as error bars. Barcodes are sorted by PPV value, in decreasing order, and a dashed red line indicates the minimum PPV cutoff for "good" barcodes. Barcodes above the cutoff are colored blue, while those that are not are colored black.
 #'
 #' @name plot.PPV
 #' @rdname plot-PPV
@@ -458,27 +672,33 @@ sim.benchmark <- function(
 #' )
 #' @param qc List, results from misread.qc function.
 #' @param min_PPV Numeric, PPV cutoff for "good" barcodes, defaults to 0.8.
-#' @return ggplot object showing estimated PPV for each barcode with cutoff.
+#' @return ggplot object showing estimated PPV, with its 95\% confidence interval, for each barcode with cutoff.
 #' @export
 plot.PPV <- function(
     qc,
     min_PPV = 0.8
   ) {
-    
+   
     # Grab data
-    PPV <- qc$erctc_plus$PPV
-    
+    PPV       <- qc$erctc_plus$PPV
+    PPV_lower <- qc$erctc_plus$PPV_lower
+    PPV_upper <- qc$erctc_plus$PPV_upper
+   
     # Sort by decreasing values
     above_cutoff <- rep("Bad", length(PPV))
-    above_cutoff[PPV > min_PPV] <- "Good"
+    above_cutoff[PPV_lower > min_PPV] <- "Good"
+    ord <- order(PPV_lower, decreasing = TRUE)
     df <- data.frame(
-      x            = seq_along(PPV), 
-      PPV          = PPV[order(PPV, decreasing = TRUE)], 
-      above_cutoff = above_cutoff
+      x            = seq_along(PPV),
+      PPV          = PPV[ord],
+      PPV_lower    = PPV_lower[ord],
+      PPV_upper    = PPV_upper[ord],
+      above_cutoff = above_cutoff[ord]
       )
-    
+   
     # Plot
     PPV_plot <- ggplot(df, aes(x = x, y = PPV)) +
+      geom_errorbar(aes(ymin = PPV_lower, ymax = PPV_upper, color = above_cutoff), width = 0, alpha = 0.5) +
       geom_point(aes(color = above_cutoff), size = 3) +
       geom_hline(yintercept = min_PPV, linetype = "dashed", color = "red") +
       theme_minimal() +
@@ -492,10 +712,10 @@ plot.PPV <- function(
       labs(
         y     = paste0("Estimated PPV"),
         x     = paste0("Gene barcodes by PPV value"),
-        title = "Estimated Precision (PPV) by Gene Barcode")
-    
+        title = "Estimated Precision (PPV) by Gene Barcode, with 95% CI")
+   
     return(PPV_plot)
-    
+   
   }
 
 #' Plot predicted vs observed counts from \code{misread.qc} results

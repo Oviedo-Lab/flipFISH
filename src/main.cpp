@@ -1,6 +1,7 @@
 
 // Rcpp
 // [[Rcpp::depends(RcppEigen)]]
+// [[Rcpp::depends(BH)]]
 #include <Rcpp.h>
 #include <RcppEigen.h>
 #include <random>
@@ -11,6 +12,8 @@
 #include <unistd.h>     // fork, pipe, read, write, close
 #include <sys/wait.h>   // waitpid
 #include <nlopt.hpp>    // L-BFGS and other gradient-based optimizers
+#include <boost/math/distributions/normal.hpp>     // norm_cdf() -- native (no R callback) normal CDF/quantile
+#include <boost/math/special_functions/owens_t.hpp> // bvn_cdf_uppertail() -- native bivariate normal CDF
 using namespace Rcpp;
 using namespace Eigen;
 
@@ -118,26 +121,34 @@ struct ST_data {
   bool           has_erc_obs        = false;
   Vint           bc_counts_erc_obs;
   double         erc_weight         = 0.0;
+  // Feasibility penalty (shared with mQC_DG's MCMCSA objective; see dg_feasibility_penalty())
+  double         feasibility_weight       = 0.0;
+  int            max_feasibility_barcodes = 40;
   /*
-   * Regularization terms: 
-   * 
-   *   1. per-barcode weights for the corrected-count MSLE term (used to up-weight blank barcodes, 
-   *   whose true hit count is known to be zero and which therefore carry information 
+   * Regularization terms:
+   *
+   *   1. per-barcode weights for the corrected-count MSLE term (used to up-weight blank barcodes,
+   *   whose true hit count is known to be zero and which therefore carry information
    *   about misassignment/cross-talk that would otherwise be swamped by well-expressed genes).
-   *   
-   *   2. a Gaussian prior pulling flip rates/correlations toward plausible values (mainly to regularize 
+   *
+   *   2. a Gaussian prior pulling flip rates/correlations toward plausible values (mainly to regularize
    *   the otherwise unidentifiable pairwise bit-flip correlation terms).
-   *   
-   *   3. dispersion_weight penalizes the empirical variance of corr1 (and, separately, corr0) across 
-   *   bit-pairs for deviating from sdcorr^2. Without this, a degenerate solution where all corr1[i] (or 
-   *   corr0[i]) collapse to the same value -- including all zero -- incurs no extra cost beyond the 
+   *
+   *   3. dispersion_weight penalizes the empirical variance of corr1 (and, separately, corr0) across
+   *   bit-pairs for deviating from sdcorr^2. Without this, a degenerate solution where all corr1[i] (or
+   *   corr0[i]) collapse to the same value -- including all zero -- incurs no extra cost beyond the
    *   pointwise term, even though a nonzero sdcorr says we expect heterogeneity across bit-pairs.
-   *   
+   *
+   *   4. feasibility_weight penalizes corr1/corr0 for requiring a large correction before they could
+   *   be realized as an actual (PSD) per-barcode Gaussian correlation structure -- see
+   *   dg_feasibility_penalty() -- so this fit stays comparable to what the DG method (mQC_DG) could
+   *   actually simulate from the same corr1/corr0.
+   *
    * Exact-match read counts:
-   * 
-   *   Optional joint fit on exact-match (uncorrected) read counts, in addition to the corrected-count fit. 
-   *   This gives the optimizer a second, independent observable that constrains how much of each barcode's 
-   *   corrected count came from exact matches vs. correction, which is otherwise invisible to a 
+   *
+   *   Optional joint fit on exact-match (uncorrected) read counts, in addition to the corrected-count fit.
+   *   This gives the optimizer a second, independent observable that constrains how much of each barcode's
+   *   corrected count came from exact matches vs. correction, which is otherwise invisible to a
    *   corrected-count-only objective.
    */
 };
@@ -349,6 +360,283 @@ Eigen::MatrixXd correlation_from_params(
     return R;
     // ... written by ChatGPT
   }
+
+/*
+ * *********************************************************************************************************************
+ * Dichotomized-Gaussian (DG) correlation-matrix helpers
+ *
+ * corr1/corr0 (FlipRates) are correlations of the *dichotomized* (post-threshold, 0/1) bit-read
+ * outcomes -- the same quantity TR() already treats them as. Simulating from an actual dichotomized
+ * Gaussian needs the underlying *Gaussian* correlation that reproduces a target dichotomized
+ * correlation once thresholded; that inversion is what dg_find_sigma_RootBisection() does, via the
+ * classic bivariate-normal-CDF identity Cov(1[X>h],1[Y>k]) = P(X>h,Y>k) - P(X>h)P(Y>k).
+ *
+ * bvn_cdf_uppertail() computes P(X>h,Y>k) natively (Owen's T function, boost::math::owens_t) rather
+ * than calling back into R's mvtnorm::pmvnorm -- the bivariate case has a closed form, unlike the
+ * general N-dimensional case mvtnorm handles, so this stays fully native and fast inside the hot
+ * per-pair inversion loop. Verified against R's mvtnorm::pmvnorm (exact agreement, |diff| < 1e-10)
+ * over a grid spanning both signs of h/k and rho in [-0.9, 0.9].
+ */
+
+static boost::math::normal_distribution<double> dg_std_normal(0.0, 1.0);
+
+// Normal CDF, with inverse (native; no R callback)
+double norm_cdf(
+    const double& x,
+    const double& mu,
+    const double& sd,
+    const bool&   inverse
+  ) {
+    if (inverse) {
+      double xc = x;
+      if (xc < 1e-10)       {xc = 1e-10;}
+      if (xc > 1.0 - 1e-10) {xc = 1.0 - 1e-10;}
+      boost::math::normal_distribution<double> dist(mu, sd);
+      return boost::math::quantile(dist, xc);
+    } else {
+      boost::math::normal_distribution<double> dist(mu, sd);
+      return boost::math::cdf(dist, x);
+    }
+  }
+
+// Bivariate standard-normal upper-tail probability P(X>h, Y>k), correlation rho. Via the Owen (1956)
+// lower-tail identity Phi2(h,k;rho) = 0.5*(Phi(h)+Phi(k)) - T(h,a) - T(k,b) - delta, then
+// upper = 1 - Phi(h) - Phi(k) + Phi2(h,k;rho). Assumes h != 0 and k != 0 (always true here: h/k are
+// qnorm() of a flip rate, which is never exactly 0.5).
+double bvn_cdf_uppertail(
+    double h,
+    double k,
+    double rho
+  ) {
+    double denom = std::sqrt(1.0 - rho * rho);
+    double a     = (k - rho * h) / (h * denom);
+    double b     = (h - rho * k) / (k * denom);
+    double delta = 0.0;
+    if (h * k < 0.0 || (h * k == 0.0 && (h + k) < 0.0)) {delta = 0.5;}
+    double Phi_h = boost::math::cdf(dg_std_normal, h);
+    double Phi_k = boost::math::cdf(dg_std_normal, k);
+    double phi2_lower = 0.5 * (Phi_h + Phi_k)
+      - boost::math::owens_t(h, a) - boost::math::owens_t(k, b) - delta;
+    return 1.0 - Phi_h - Phi_k + phi2_lower;
+  }
+
+// Residual used by the root-bisection below: desired_cov minus the covariance a given Gaussian
+// correlation rho would actually produce once both bits are dichotomized at their own thresholds.
+double dg_sigma_formula_scalar(
+    double threshold_i,
+    double threshold_j,
+    double desired_cov,
+    double rho
+  ) {
+    double Phi2_upper = bvn_cdf_uppertail(threshold_i, threshold_j, rho);
+    double p_i        = 1.0 - boost::math::cdf(dg_std_normal, threshold_i); // P(read_i = 1)
+    double p_j         = 1.0 - boost::math::cdf(dg_std_normal, threshold_j); // P(read_j = 1)
+    return desired_cov - Phi2_upper + p_i * p_j;
+  }
+
+// Find the Gaussian correlation rho whose dichotomization (at threshold_i, threshold_j) reproduces
+// desired_cov -- the raw covariance of the two dichotomized (0/1) outcomes, i.e.
+// desired_corr * sqrt(p_i*(1-p_i)) * sqrt(p_j*(1-p_j)). Falls back to rho = 0 when desired_cov lies
+// outside what's achievable for these marginals at all (the classic Frechet-Hoeffding bound on
+// correlation given fixed marginals) -- same convention as the historical implementation this is
+// restored from. Verified end-to-end against the exact achieved-vs-target correlation (not just the
+// residual formula) for asymmetric marginals (|diff| < 1e-10 whenever the target was feasible).
+double dg_find_sigma_RootBisection(
+    double threshold_i,
+    double threshold_j,
+    double desired_cov
+  ) {
+    const int    max_iter = 60;
+    const double tol      = 1e-10;
+    double lo = -0.999, hi = 0.999;
+    double f_lo = dg_sigma_formula_scalar(threshold_i, threshold_j, desired_cov, lo);
+    double f_hi = dg_sigma_formula_scalar(threshold_i, threshold_j, desired_cov, hi);
+    if (std::fabs(f_lo) < tol) {return lo;}
+    if (std::fabs(f_hi) < tol) {return hi;}
+    if (f_lo * f_hi > 0.0)     {return 0.0;} // target covariance infeasible for these marginals
+    double mid = 0.0, f_mid = std::numeric_limits<double>::infinity();
+    int iter = 0;
+    while (std::fabs(f_mid) > tol && iter < max_iter) {
+      mid   = 0.5 * (lo + hi);
+      f_mid = dg_sigma_formula_scalar(threshold_i, threshold_j, desired_cov, mid);
+      if ((f_mid > 0.0) == (f_lo > 0.0)) {lo = mid; f_lo = f_mid;} else {hi = mid;}
+      iter++;
+    }
+    return mid;
+  }
+
+// Per-bit threshold tau such that "read = 1" iff Z > tau (Z ~ N(0,1)), given this bit's true value in
+// a specific barcode. Matches TR()'s own flip-rate semantics: P(read=0|true=1) = rate10 and
+// P(read=1|true=0) = rate01.
+double dg_bit_threshold(
+    int    bit_value,
+    double rate10_i,
+    double rate01_i
+  ) {
+    return bit_value == 1 ? norm_cdf(rate10_i, 0.0, 1.0, true) : norm_cdf(1.0 - rate01_i, 0.0, 1.0, true);
+  }
+
+// Build the raw (not yet guaranteed valid/PSD) Gaussian correlation matrix for one barcode's bits,
+// selecting corr1[ij]/corr0[ij] per pair using the same convention TR() already uses (keyed on the
+// larger-indexed bit's value in this barcode -- see TR(), "fr.corr1[ij] : fr.corr0[ij]").
+Eigen::MatrixXd dg_raw_gaussian_corr(
+    const Vint&      barcode_bits, // length N_bits, values 0/1
+    const FlipRates& fr,
+    const Vdbl&      thresholds    // length N_bits, this barcode's own dg_bit_threshold() per bit
+  ) {
+    int N_bits = barcode_bits.size();
+    Eigen::MatrixXd Sigma = Eigen::MatrixXd::Identity(N_bits, N_bits);
+    for (int i = 1; i < N_bits; ++i) {
+      for (int j = 0; j < i; ++j) {
+        int    k            = i * (i - 1) / 2 + j;
+        double desired_corr = barcode_bits[i] == 1 ? fr.corr1[k] : fr.corr0[k];
+        double p_i          = 1.0 - boost::math::cdf(dg_std_normal, thresholds[i]);
+        double p_j          = 1.0 - boost::math::cdf(dg_std_normal, thresholds[j]);
+        double desired_cov  = desired_corr * std::sqrt(p_i * (1.0 - p_i)) * std::sqrt(p_j * (1.0 - p_j));
+        double rho          = dg_find_sigma_RootBisection(thresholds[i], thresholds[j], desired_cov);
+        Sigma(i, j) = rho;
+        Sigma(j, i) = rho;
+      }
+    }
+    return Sigma;
+  }
+
+// Project a (possibly invalid) correlation matrix to the nearest valid one via R's
+// Matrix::nearPD(corr = TRUE, keepDiag = TRUE) -- an iterative alternating-projections algorithm that
+// (unlike naive eigenvalue clipping) both minimizes the distortion and preserves an exact unit
+// diagonal. Matrix is already an Imports dependency. Called once per distinct barcode bit-pattern per
+// MCMCSA step/objective evaluation (not per spot), so the R callback is amortized.
+Eigen::MatrixXd dg_nearest_corr_matrix(
+    const Eigen::MatrixXd& raw
+  ) {
+    int n = raw.rows();
+    Rcpp::Function nearPD("nearPD", Rcpp::Environment::namespace_env("Matrix"));
+    Rcpp::NumericMatrix raw_r(n, n);
+    for (int i = 0; i < n; ++i) {for (int j = 0; j < n; ++j) {raw_r(i, j) = raw(i, j);}}
+    Rcpp::List res = nearPD(
+      raw_r, Rcpp::Named("corr") = true, Rcpp::Named("keepDiag") = true, Rcpp::Named("do2eigen") = true
+    );
+    Rcpp::S4            mat_s4 = res["mat"];
+    Rcpp::NumericVector mat_x  = mat_s4.slot("x");
+    Eigen::MatrixXd     out(n, n);
+    for (int i = 0; i < n; ++i) {for (int j = 0; j < n; ++j) {out(i, j) = mat_x[j * n + i];}}
+    return out;
+  }
+
+// Dichotomized correlation a single pair would achieve (ignoring nearPD's cross-pair redistribution
+// -- i.e. the raw pairwise map alone) for a given desired correlation. Used both to build each
+// barcode's raw matrix and, cheaply, to estimate dg_feasibility_penalty()'s gradient without ever
+// re-calling nearPD.
+double dg_pairwise_achieved_corr(
+    double threshold_i,
+    double threshold_j,
+    double desired_corr,
+    double sd_i,
+    double sd_j
+  ) {
+    double desired_cov = desired_corr * sd_i * sd_j;
+    double rho         = dg_find_sigma_RootBisection(threshold_i, threshold_j, desired_cov);
+    double p_i         = 1.0 - boost::math::cdf(dg_std_normal, threshold_i);
+    double p_j         = 1.0 - boost::math::cdf(dg_std_normal, threshold_j);
+    double achieved_cov = bvn_cdf_uppertail(threshold_i, threshold_j, rho) - p_i * p_j;
+    return achieved_cov / (sd_i * sd_j);
+  }
+
+// How far corr1/corr0 would have to be distorted to become a valid (PSD) per-barcode Gaussian
+// correlation structure, measured in dichotomized-correlation units (so it's directly comparable to
+// corr1/corr0 themselves): for a deterministic subsample of up to max_barcodes distinct barcodes,
+// build the raw Gaussian correlation matrix, project it to the nearest valid one, convert each
+// off-diagonal entry's *achieved* dichotomized correlation back out (same forward formula used to
+// build it), and accumulate the squared difference from what corr1/corr0 actually asked for. Shared
+// by mQC_msle() (penalizes the analytic fit for drifting somewhere DG couldn't realize) and mQC_DG()'s
+// MCMCSA objective (added directly as part of the per-step simulation's own matrix assembly).
+//
+// Gradient (when do_grad): exact wrt the nearPD projection would require differentiating through an
+// iterative alternating-projections algorithm, which has no simple closed form. Instead, each pair's
+// contribution to d(achieved)/d(desired) is estimated locally via dg_pairwise_achieved_corr() alone --
+// i.e. ignoring nearPD's cross-pair redistribution -- which costs one extra cheap (no-nearPD,
+// no-R-callback) root-bisection per pair instead of re-running the whole expensive projection. This
+// still pushes optimization away from grossly infeasible per-pair targets (where the local map is
+// flat/clamped and the approximation is exact); it under-credits distortion that arises *only* from
+// joint infeasibility across pairs, which the nearPD-based value term still captures and reports.
+double dg_feasibility_penalty(
+    const FlipRates& fr,
+    const Codebook&  cb,
+    int              max_barcodes = 40,
+    bool             do_grad      = false,
+    Vdbl*            grad         = nullptr
+  ) {
+    int N_bits     = fr.rate10.size();
+    int corr_free  = N_bits * (N_bits - 1) / 2;
+    if (corr_free == 0) {return 0.0;}
+
+    int N_barcodes = cb.barcodes.size();
+    int step       = std::max(1, N_barcodes / max_barcodes);
+
+    Vdbl thresholds_1(N_bits), thresholds_0(N_bits); // this bit's threshold when it reads 1 vs 0
+    for (int i = 0; i < N_bits; ++i) {
+      thresholds_1[i] = dg_bit_threshold(1, fr.rate10[i], fr.rate01[i]);
+      thresholds_0[i] = dg_bit_threshold(0, fr.rate10[i], fr.rate01[i]);
+    }
+
+    const double eps = 1e-3;
+    double total_sq = 0.0;
+    int    n_terms   = 0;
+    for (int b = 0; b < N_barcodes; b += step) {
+      Vint barcode_bits(N_bits);
+      Vdbl thresholds(N_bits);
+      for (int i = 0; i < N_bits; ++i) {
+        barcode_bits[i] = (cb.barcodes[b] >> i) & 1ULL;
+        thresholds[i]   = barcode_bits[i] == 1 ? thresholds_1[i] : thresholds_0[i];
+      }
+      Eigen::MatrixXd raw       = dg_raw_gaussian_corr(barcode_bits, fr, thresholds);
+      Eigen::MatrixXd projected = dg_nearest_corr_matrix(raw);
+      for (int i = 1; i < N_bits; ++i) {
+        for (int j = 0; j < i; ++j) {
+          int    k            = i * (i - 1) / 2 + j;
+          bool   bit_i_is_1   = barcode_bits[i] == 1;
+          double desired_corr = bit_i_is_1 ? fr.corr1[k] : fr.corr0[k];
+          double p_i          = 1.0 - boost::math::cdf(dg_std_normal, thresholds[i]);
+          double p_j          = 1.0 - boost::math::cdf(dg_std_normal, thresholds[j]);
+          double sd_i         = std::sqrt(p_i * (1.0 - p_i));
+          double sd_j         = std::sqrt(p_j * (1.0 - p_j));
+          double achieved_cov  = bvn_cdf_uppertail(thresholds[i], thresholds[j], projected(i, j)) - p_i * p_j;
+          double achieved_corr = achieved_cov / (sd_i * sd_j);
+          double diff          = achieved_corr - desired_corr;
+          total_sq += diff * diff;
+          n_terms++;
+
+          if (do_grad) {
+            double ach_plus  = dg_pairwise_achieved_corr(thresholds[i], thresholds[j], desired_corr + eps, sd_i, sd_j);
+            double ach_minus = dg_pairwise_achieved_corr(thresholds[i], thresholds[j], desired_corr - eps, sd_i, sd_j);
+            double sensitivity = (ach_plus - ach_minus) / (2.0 * eps); // d(achieved_unprojected)/d(desired)
+            double dpenalty    = 2.0 * diff * (sensitivity - 1.0);    // d(diff^2)/d(desired)
+            int    param_idx   = bit_i_is_1 ? (2*N_bits + k) : (2*N_bits + corr_free + k);
+            (*grad)[param_idx] += dpenalty; // divided by n_terms once, after the loop
+          }
+        }
+      }
+    }
+    if (n_terms == 0) {return 0.0;}
+    if (do_grad) {
+      for (int k = 0; k < 2*corr_free; ++k) {(*grad)[2*N_bits + k] /= static_cast<double>(n_terms);}
+    }
+    return total_sq / static_cast<double>(n_terms);
+  }
+
+// Exported test helpers (see bvn_cdf_uppertail()/dg_find_sigma_RootBisection() above). Verified
+// against R's mvtnorm::pmvnorm (bivariate CDF) and against exact achieved-vs-target correlation
+// recovery (root-bisection) during development; these exports let tests re-check that directly
+// rather than only indirectly through a full mQC_DG() run.
+// [[Rcpp::export]]
+double bvn_cdf_uppertail_test(double h, double k, double rho) {
+  return bvn_cdf_uppertail(h, k, rho);
+}
+
+// [[Rcpp::export]]
+double dg_find_sigma_RootBisection_test(double threshold_i, double threshold_j, double desired_cov) {
+  return dg_find_sigma_RootBisection(threshold_i, threshold_j, desired_cov);
+}
 
 /*
  * *********************************************************************************************************************
@@ -1195,21 +1483,25 @@ static ST_data prepare_STdata_for_mQC(
     double        dispersion_weight,
     NumericVector obs_erc,
     double        erc_weight,
-    bool          warn_on_erc_mismatch
+    bool          warn_on_erc_mismatch,
+    double        feasibility_weight       = 0.0,
+    int           max_feasibility_barcodes = 40
   ) {
-   
+
     auto STdata = load_STdata(bc_counts, codebook, max_flips, maxHam, verbose);
     STdata.n_forks = n_forks;
-   
+
     // Set up MSLE weights and the flip-rate/correlation prior.
     STdata.msle_weights.assign(STdata.cb.barcodes.size(), 1.0);
     for (int idx : STdata.cb.blanks) {
       STdata.msle_weights[idx] = blank_weight;
     }
-    STdata.fr_priors         = pack_fr_priors(fliprate_priors);
-    STdata.prior_weight      = prior_weight;
-    STdata.dispersion_weight = dispersion_weight;
-   
+    STdata.fr_priors               = pack_fr_priors(fliprate_priors);
+    STdata.prior_weight            = prior_weight;
+    STdata.dispersion_weight       = dispersion_weight;
+    STdata.feasibility_weight      = feasibility_weight;
+    STdata.max_feasibility_barcodes = max_feasibility_barcodes;
+
     // Set up the optional joint erc-fit term
     if (obs_erc.size() == (int)STdata.cb.barcodes.size() && erc_weight > 0.0) {
       STdata.has_erc_obs = true;
@@ -1256,6 +1548,92 @@ static ST_data prepare_STdata_for_mQC(
  * *********************************************************************************************************************
  * Functions to estimate flip rates, PPV, and CR
  */
+
+// Gaussian-prior + dispersion penalty on flip rates and bit-flip correlations. Shared by the
+// analytic fit's objective (mQC_msle, below) and the DG fit's MCMCSA objective (mQC_DG, see the "DG
+// simulation functions" section near the end of this file) -- factored out so both methods' priors
+// are identical by construction, not just similarly parameterized. Returns the (unweighted-by-caller
+// already applied) penalty value; when do_grad is true, grad_scale-free partial derivatives wrt the
+// flat parameter vector [rate10|rate01|corr1|corr0] are accumulated additively into *grad (grad must
+// already be sized to n_params = 2*N_bits + 2*corr_free; the caller pre-zeros it).
+double fr_prior_penalty(
+    const FlipRates&      fr,
+    const FlipRatePriors& priors,
+    double                prior_weight,
+    double                dispersion_weight,
+    bool                  do_grad,
+    Vdbl*                 grad = nullptr
+  ) {
+    int    N_bits    = fr.rate10.size();
+    int    corr_free = N_bits * (N_bits - 1) / 2;
+    int    n_params  = 2*N_bits + 2*corr_free;
+    double total     = 0.0;
+
+    // Tiered correlation prior: priors.sdcorr_pairs, if supplied (see build_corr_priors() in R),
+    // gives each of the corr_free pairs its own sd instead of sharing the single scalar sdcorr.
+    bool has_pair_sd = !priors.sdcorr_pairs.empty();
+    if (has_pair_sd && (int)priors.sdcorr_pairs.size() != corr_free) {
+      Rcpp::stop("fliprate_priors$sdcorr_pairs must have length N_bits*(N_bits-1)/2 (one sd per bit pair).");
+    }
+
+    if (prior_weight > 0.0) {
+      double penalty = 0.0;
+      for (int i = 0; i < N_bits; ++i) {
+        double z = (fr.rate10[i] - priors.expected10) / priors.sd10;
+        penalty += z * z;
+        if (do_grad) (*grad)[i] += prior_weight * 2.0 * z / priors.sd10 / static_cast<double>(n_params);
+      }
+      for (int i = 0; i < N_bits; ++i) {
+        double z = (fr.rate01[i] - priors.expected01) / priors.sd01;
+        penalty += z * z;
+        if (do_grad) (*grad)[N_bits + i] += prior_weight * 2.0 * z / priors.sd01 / static_cast<double>(n_params);
+      }
+      for (int i = 0; i < corr_free; ++i) {
+        double sdcorr_i = has_pair_sd ? priors.sdcorr_pairs[i] : priors.sdcorr;
+        double z1 = (fr.corr1[i] - priors.expectedcorr) / sdcorr_i;
+        penalty  += z1 * z1;
+        if (do_grad) (*grad)[2*N_bits + i] += prior_weight * 2.0 * z1 / sdcorr_i / static_cast<double>(n_params);
+        double z0 = (fr.corr0[i] - priors.expectedcorr) / sdcorr_i;
+        penalty  += z0 * z0;
+        if (do_grad) (*grad)[2*N_bits + corr_free + i] += prior_weight * 2.0 * z0 / sdcorr_i / static_cast<double>(n_params);
+      }
+      penalty /= static_cast<double>(n_params);
+      total   += prior_weight * penalty;
+    }
+
+    if (dispersion_weight > 0.0 && corr_free > 1) {
+      // When a tiered sdcorr_pairs prior is in use, target the mean of the per-pair variances
+      // instead of a single sdcorr^2, so this penalty's "expected heterogeneity" stays consistent
+      // with the tiers rather than fighting them (e.g. pulling the near-zero tier back open).
+      double target_var;
+      if (has_pair_sd) {
+        double sumsq = 0.0;
+        for (double s : priors.sdcorr_pairs) sumsq += s * s;
+        target_var = sumsq / static_cast<double>(priors.sdcorr_pairs.size());
+      } else {
+        target_var = priors.sdcorr * priors.sdcorr;
+      }
+
+      auto dispersion_term = [&](const Vdbl& x, int grad_offset) {
+        double mean    = std::accumulate(x.begin(), x.end(), 0.0) / static_cast<double>(corr_free);
+        double var_emp = 0.0;
+        for (double xi : x) var_emp += (xi - mean) * (xi - mean);
+        var_emp       /= static_cast<double>(corr_free);
+        double diff    = var_emp - target_var;
+        if (do_grad) {
+          for (int i = 0; i < corr_free; ++i) {
+            (*grad)[grad_offset + i] += dispersion_weight * 4.0 * diff * (x[i] - mean) / static_cast<double>(corr_free);
+          }
+        }
+        return diff * diff;
+      };
+
+      double disp_penalty = dispersion_term(fr.corr1, 2*N_bits) + dispersion_term(fr.corr0, 2*N_bits + corr_free);
+      total += dispersion_weight * disp_penalty;
+    }
+
+    return total;
+  }
 
 // nlopt objective callback for L-BFGS minimization of msle.
 static double mQC_msle(
@@ -1332,72 +1710,27 @@ static double mQC_msle(
       }
     }
     
-    // Compute Gaussian-prior penalty on flip rates and bit-flip correlations
-    if (d->prior_weight > 0.0) {
-      double      penalty = 0.0;
-      const auto& priors  = d->fr_priors;
-      // Tiered correlation prior: priors.sdcorr_pairs, if supplied (see build_corr_priors() in R),
-      // gives each of the corr_free pairs its own sd instead of sharing the single scalar sdcorr.
-      bool has_pair_sd = !priors.sdcorr_pairs.empty();
-      if (has_pair_sd && (int)priors.sdcorr_pairs.size() != corr_free) {
-        Rcpp::stop("fliprate_priors$sdcorr_pairs must have length N_bits*(N_bits-1)/2 (one sd per bit pair).");
-      }
-      for (int i = 0; i < N_bits; ++i) {
-        double z = (fr.rate10[i] - priors.expected10) / priors.sd10;
-        penalty += z * z;
-        if (do_grad) grad[i] += d->prior_weight * 2.0 * z / priors.sd10 / static_cast<double>(n_params);
-      }
-      for (int i = 0; i < N_bits; ++i) {
-        double z = (fr.rate01[i] - priors.expected01) / priors.sd01;
-        penalty += z * z;
-        if (do_grad) grad[N_bits + i] += d->prior_weight * 2.0 * z / priors.sd01 / static_cast<double>(n_params);
-      }
-      for (int i = 0; i < corr_free; ++i) {
-        double sdcorr_i = has_pair_sd ? priors.sdcorr_pairs[i] : priors.sdcorr;
-        double z1 = (fr.corr1[i] - priors.expectedcorr) / sdcorr_i;
-        penalty  += z1 * z1;
-        if (do_grad) grad[2*N_bits + i] += d->prior_weight * 2.0 * z1 / sdcorr_i / static_cast<double>(n_params);
-        double z0 = (fr.corr0[i] - priors.expectedcorr) / sdcorr_i;
-        penalty  += z0 * z0;
-        if (do_grad) grad[2*N_bits + corr_free + i] += d->prior_weight * 2.0 * z0 / sdcorr_i / static_cast<double>(n_params);
-      }
-      penalty /= static_cast<double>(n_params);
-      msle    += d->prior_weight * penalty;
+    // Gaussian-prior + dispersion penalty on flip rates and bit-flip correlations (shared with the
+    // DG fit's MCMCSA objective -- see fr_prior_penalty() above).
+    if (d->prior_weight > 0.0 || d->dispersion_weight > 0.0) {
+      msle += fr_prior_penalty(fr, d->fr_priors, d->prior_weight, d->dispersion_weight, do_grad, &grad);
     }
-   
-    // Compute dispersion penalty
-    if (d->dispersion_weight > 0.0 && corr_free > 1) {
-      const auto& priors     = d->fr_priors;
-      // When a tiered sdcorr_pairs prior is in use, target the mean of the per-pair variances
-      // instead of a single sdcorr^2, so this penalty's "expected heterogeneity" stays consistent
-      // with the tiers rather than fighting them (e.g. pulling the near-zero tier back open).
-      double target_var;
-      if (!priors.sdcorr_pairs.empty()) {
-        double sumsq = 0.0;
-        for (double s : priors.sdcorr_pairs) sumsq += s * s;
-        target_var = sumsq / static_cast<double>(priors.sdcorr_pairs.size());
-      } else {
-        target_var = priors.sdcorr * priors.sdcorr;
+
+    // Feasibility penalty: how far corr1/corr0 would have to be distorted to become a valid (PSD)
+    // per-barcode Gaussian correlation structure -- see dg_feasibility_penalty() in the "DG
+    // simulation functions" section. Keeps the analytic fit's corr1/corr0 comparable to what
+    // mQC_DG() could actually simulate, instead of letting them wander somewhere DG would have to
+    // heavily correct.
+    if (d->feasibility_weight > 0.0) {
+      Vdbl feas_grad;
+      if (do_grad) {feas_grad.assign(n_params, 0.0);}
+      double pen = dg_feasibility_penalty(fr, d->cb, d->max_feasibility_barcodes, do_grad, do_grad ? &feas_grad : nullptr);
+      msle += d->feasibility_weight * pen;
+      if (do_grad) {
+        for (int k = 2*N_bits; k < n_params; ++k) {grad[k] += d->feasibility_weight * feas_grad[k];}
       }
-      
-      auto dispersion_term = [&](const Vdbl& x, int grad_offset) {
-        double mean    = std::accumulate(x.begin(), x.end(), 0.0) / static_cast<double>(corr_free);
-        double var_emp = 0.0;
-        for (double xi : x) var_emp += (xi - mean) * (xi - mean);
-        var_emp       /= static_cast<double>(corr_free);
-        double diff    = var_emp - target_var;
-        if (do_grad) {
-          for (int i = 0; i < corr_free; ++i) {
-            grad[grad_offset + i] += d->dispersion_weight * 4.0 * diff * (x[i] - mean) / static_cast<double>(corr_free);
-          }
-        }
-        return diff * diff;
-      };
-      
-      double disp_penalty = dispersion_term(fr.corr1, 2*N_bits) + dispersion_term(fr.corr0, 2*N_bits + corr_free);
-      msle += d->dispersion_weight * disp_penalty;
     }
-    
+
     // Advance eval counter
     d->eval_results.n_evals++;
     
@@ -1435,16 +1768,19 @@ List mQC(
     double        dispersion_weight = 0.0,             // Strength of the dispersion penalty matching empirical variance of corr1/corr0 to sdcorr^2 (0 disables it, matching prior behavior)
     NumericVector obs_erc           = NumericVector(), // Optional: observed exact-match (uncorrected) read counts per barcode, same row order as bc_counts. Empty (default) disables the erc loss term.
     double        erc_weight        = 0.0,             // Strength of the joint erc-fit loss term (0 disables it, matching prior behavior; ignored if obs_erc is empty)
-    int           n_restarts        = 1                // Number of L-BFGS restarts; restart 0 uses the standard init, restarts > 0 randomize the correlation block (1 matches prior behavior)
+    int           n_restarts        = 1,               // Number of L-BFGS restarts; restart 0 uses the standard init, restarts > 0 randomize the correlation block (1 matches prior behavior)
+    double        feasibility_weight       = 0.0,      // Strength of the penalty for corr1/corr0 needing a large correction to become a valid per-barcode Gaussian correlation structure (0 disables it; see dg_feasibility_penalty()). Keeps this fit comparable to mQC_DG().
+    int           max_feasibility_barcodes = 40        // Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty per evaluation, for speed on large codebooks
   ) {
-    
+   
     // Load in data and set up the msle objective (weights, priors, erc term, misread-loss rescaling)
     auto STdata = prepare_STdata_for_mQC(
       bc_counts, codebook, maxHam, n_forks, max_flips,
       true, // Make verbose printouts
       fliprate_priors, blank_weight, prior_weight, dispersion_weight,
       obs_erc, erc_weight,
-      true // warn on mismatched obs_erc length
+      true, // warn on mismatched obs_erc length
+      feasibility_weight, max_feasibility_barcodes
     );
     STdata.report_freq = report_freq;
    
@@ -1650,12 +1986,14 @@ double mQC_msle_at(
     int                         maxHam,
     int                         n_forks,
     int                         max_flips,
-    List                        fliprate_priors   = List(),
-    double                      blank_weight      = 1.0,
-    double                      prior_weight      = 0.0,
-    double                      dispersion_weight = 0.0,
-    NumericVector               obs_erc           = NumericVector(),
-    double                      erc_weight        = 0.0
+    List                        fliprate_priors          = List(),
+    double                      blank_weight             = 1.0,
+    double                      prior_weight             = 0.0,
+    double                      dispersion_weight        = 0.0,
+    NumericVector               obs_erc                  = NumericVector(),
+    double                      erc_weight               = 0.0,
+    double                      feasibility_weight       = 0.0,
+    int                         max_feasibility_barcodes = 40
   ) {
    
     // Load in data and set up the msle objective, mirroring mQC()'s setup exactly so the result
@@ -1665,10 +2003,11 @@ double mQC_msle_at(
       false, // Suppress verbose printouts
       fliprate_priors, blank_weight, prior_weight, dispersion_weight,
       obs_erc, erc_weight,
-      false // mirror mQC()'s prior (silent) behavior here -- no mismatch warning
+      false, // mirror mQC()'s prior (silent) behavior here -- no mismatch warning
+      feasibility_weight, max_feasibility_barcodes
     );
     STdata.report_freq = std::numeric_limits<int>::max();
-
+   
     // Evaluate the penalized MSLE objective at FR (empty grad vector => mQC_msle() skips gradients)
     Vdbl grad;
     Vdbl FR_(FR.begin(), FR.end());
@@ -2326,4 +2665,702 @@ double tr_sum_check(
       total += TR(static_cast<uint64_t>(bc), flips, fr);
     }
     return total;
+  }
+
+/*
+ * *********************************************************************************************************************
+ * DG simulation functions (mQC_DG): C++ port of R/dg_legacy.R's misread.qc.DG.legacy()/
+ * .DG_run_simulation() -- literal dichotomized-Gaussian spot simulation fit via MCMCSA, rather than
+ * mQC()'s analytic/gradient-based fit -- reusing FlipRates/FlipRatePriors/Codebook/ST_data and the
+ * corrected correlation-matrix machinery above instead of dg_legacy.R's own (uninverted,
+ * single-shared-matrix) noise model.
+ */
+
+// Draw n i.i.d. samples from N(mean, Sigma) given Sigma's lower-triangular Cholesky factor L (Sigma =
+// L*L^T). Native, via a caller-supplied std::mt19937 (NOT R's own RNG -- this is called from inside
+// forked child processes in make_SpotSim_DG() below, and R's embedded-interpreter RNG state is not
+// fork-safe to touch there; see make_SpotSim()'s own std::mt19937 use for precedent). Mathematically
+// identical to MASS::mvrnorm (any valid matrix square root produces the same multivariate normal law)
+// -- this just avoids the R callback dg_legacy.cpp's generate_spots_ci() pays per barcode per cell.
+Eigen::MatrixXd dg_mvn_draw_cholesky(
+    const Eigen::MatrixXd& L,
+    int                    n,
+    std::mt19937&          rng
+  ) {
+    int dim = L.rows();
+    std::normal_distribution<double> std_norm(0.0, 1.0);
+    Eigen::MatrixXd Z(n, dim);
+    for (int r = 0; r < n; ++r) {
+      for (int c = 0; c < dim; ++c) {Z(r, c) = std_norm(rng);}
+    }
+    return Z * L.transpose(); // row s = L * z_s; mean is always 0 here (thresholds carry bit-value info)
+  }
+
+// This step's total "true" transcript counts per barcode, summed across a freshly-simulated
+// population of N_cells, via the same over-dispersed-Poisson (Gamma-Poisson) model
+// .DG_set_true_spot_info() in R/dg_legacy.R uses: per cell, draw a Gamma-distributed transcription
+// rate per gene (capturing cell-level over-dispersion), then a Poisson count from that rate. Blanks
+// are always 0 (no true transcripts; their observed counts arise entirely from misreads).
+Vint dg_draw_true_counts(
+    const ST_data&   STdata,
+    const FlipRates& fr,
+    int              N_cells
+  ) {
+    int N_bits     = STdata.cb.N_bits;
+    int N_barcodes = STdata.cb.barcodes.size();
+
+    double mean_Hamming_weight = 0.0;
+    for (uint64_t bc : STdata.cb.barcodes) {mean_Hamming_weight += __builtin_popcountll(bc);}
+    mean_Hamming_weight /= static_cast<double>(N_barcodes);
+
+    double mean_rate10 = std::accumulate(fr.rate10.begin(), fr.rate10.end(), 0.0) / static_cast<double>(N_bits);
+    double mean_rate01 = std::accumulate(fr.rate01.begin(), fr.rate01.end(), 0.0) / static_cast<double>(N_bits);
+    double expected_flip_rate =
+      (mean_rate10 * mean_Hamming_weight + mean_rate01 * (N_bits - mean_Hamming_weight)) / static_cast<double>(N_bits);
+    double expected_decoding_rate = R::ppois(STdata.maxHam / 2.0, expected_flip_rate * N_bits, 1, 0);
+    if (expected_decoding_rate <= 0.0) {expected_decoding_rate = 1e-6;} // guard against pathological flip rates
+
+    Vint true_counts(N_barcodes, 0); // blanks stay 0
+    for (int idx : STdata.cb.genes) {
+      double gene_kernel_rate = STdata.bc_rates[idx] / expected_decoding_rate;
+      double gamma_variance   = STdata.bc_variance[idx];
+      double shape = gene_kernel_rate * gene_kernel_rate / gamma_variance;
+      double scale = gamma_variance / gene_kernel_rate;
+      int    total = 0;
+      for (int c = 0; c < N_cells; ++c) {
+        double lambda = R::rgamma(shape, scale);
+        total += static_cast<int>(R::rpois(lambda));
+      }
+      true_counts[idx] = total;
+    }
+    return true_counts;
+  }
+
+// Simulate `count` spots truly of barcode b and decode/correct them, given this barcode's
+// precomputed per-bit thresholds and Gaussian-correlation Cholesky factor (both built once, in the
+// parent process, by dg_precompute_barcode_noise() below -- building them requires dg_nearest_corr_
+// matrix()'s R callback (Matrix::nearPD), which is not safe to call from inside a forked child; this
+// function itself is pure C++, matching simulate_barcode_spots()'s own fork-safety). Returns the same
+// [read|corrected|hit] counts-per-barcode layout make_SpotSim()/simulate_barcode_spots() use.
+Vint simulate_barcode_spots_DG(
+    int                     b,
+    int                     count,
+    const Vdbl&             thresholds,
+    const Eigen::MatrixXd&  L,
+    const LUT&              correction_table,
+    const V64&              barcodes,
+    int                     N_bits,
+    std::mt19937&           rng
+  ) {
+    int  N_barcodes = barcodes.size();
+    Vint rch_counts(3 * N_barcodes, 0);
+    if (count <= 0) {return rch_counts;}
+    const int read_offset      = 0;
+    const int corrected_offset = N_barcodes;
+    const int hit_offset       = 2 * N_barcodes;
+
+    Eigen::MatrixXd draws = dg_mvn_draw_cholesky(L, count, rng);
+
+    for (int s = 0; s < count; ++s) {
+      Vint read_bits(N_bits);
+      for (int i = 0; i < N_bits; ++i) {read_bits[i] = draws(s, i) > thresholds[i] ? 1 : 0;}
+      uint64_t spot_bc_read = pack(read_bits);
+
+      auto it              = correction_table.find(spot_bc_read);
+      int  label_corrected = it == correction_table.end() ? -1 : it->second;
+      int  label_read      = -1;
+      if (label_corrected >= 0) {
+        uint64_t spot_bc_corrected = barcodes[label_corrected];
+        if (spot_bc_corrected == spot_bc_read) {label_read = label_corrected;}
+      }
+      if (label_read >= 0) {++rch_counts[read_offset + label_read];}
+      if (label_corrected >= 0) {
+        ++rch_counts[corrected_offset + label_corrected];
+        if (label_corrected == b) {++rch_counts[hit_offset + label_corrected];}
+      }
+    }
+    return rch_counts;
+  }
+
+// Build barcode b's per-bit thresholds and Gaussian-correlation Cholesky factor (raw matrix -> nearPD
+// projection -> Cholesky). Must run in the parent process (uses dg_nearest_corr_matrix()'s R
+// callback); see make_SpotSim_DG() for why this is split out from simulate_barcode_spots_DG().
+std::pair<Vdbl, Eigen::MatrixXd> dg_precompute_barcode_noise(
+    int              b,
+    const FlipRates& fr,
+    const V64&       barcodes,
+    int              N_bits
+  ) {
+    Vint barcode_bits(N_bits);
+    Vdbl thresholds(N_bits);
+    for (int i = 0; i < N_bits; ++i) {
+      barcode_bits[i] = (barcodes[b] >> i) & 1ULL;
+      thresholds[i]   = dg_bit_threshold(barcode_bits[i], fr.rate10[i], fr.rate01[i]);
+    }
+    Eigen::MatrixXd raw       = dg_raw_gaussian_corr(barcode_bits, fr, thresholds);
+    Eigen::MatrixXd projected = dg_nearest_corr_matrix(raw);
+    Eigen::LLT<Eigen::MatrixXd> llt(projected);
+    Eigen::MatrixXd L = (llt.info() == Eigen::Success)
+      ? Eigen::MatrixXd(llt.matrixL())
+      : Eigen::MatrixXd::Identity(N_bits, N_bits); // pathological fallback: treat as uncorrelated
+    return {thresholds, L};
+  }
+
+// Simulate and decode spot counts for every barcode with a nonzero true count this step, via DG
+// (correlated-Gaussian-noise) spot generation. Mirrors make_SpotSim()'s fork/pipe parallelism
+// (batches barcodes across n_forks processes, same pipe-based int-buffer handoff) -- the one
+// structural difference is the serial precompute pass below, run before forking, since building each
+// barcode's Cholesky factor needs an R callback (Matrix::nearPD) that forked children cannot safely
+// make.
+SpotSim make_SpotSim_DG(
+    const Vint&      true_counts,
+    const Codebook&  cb,
+    const FlipRates& fr,
+    const LUT&       correction_table,
+    int              ran_seed,
+    int              n_forks
+  ) {
+    SpotSim sim;
+    int N_barcodes = cb.barcodes.size();
+    int N_bits     = cb.N_bits;
+
+    // Active barcodes (nonzero true count this step) -- precompute their noise model serially, in
+    // this (parent) process, before any forking.
+    Vint active;
+    for (int b = 0; b < N_barcodes; ++b) {if (true_counts[b] > 0) {active.push_back(b);}}
+    std::vector<Vdbl>            thresholds_by_b(N_barcodes);
+    std::vector<Eigen::MatrixXd> L_by_b(N_barcodes);
+    for (int b : active) {
+      auto pre            = dg_precompute_barcode_noise(b, fr, cb.barcodes, N_bits);
+      thresholds_by_b[b]  = pre.first;
+      L_by_b[b]           = pre.second;
+    }
+
+    // Batch active barcodes across forks (same pattern as make_SpotSim())
+    int n_active = active.size();
+    int n_use    = std::max(1, std::min(n_forks, std::max(1, n_active)));
+    std::vector<Vint> barcode_batches(n_use);
+    for (int i = 0; i < n_active; ++i) {barcode_batches[i % n_use].push_back(active[i]);}
+
+    int  cache_size = 3 * N_barcodes;
+    Vint rch_counts(cache_size, 0);
+
+    if (n_use > 1) {
+      Vint pids(n_use);
+      std::vector<std::array<int, 2>> pipes(n_use);
+      for (int i = 0; i < n_use; ++i) {pipe(pipes[i].data());}
+
+      for (int i = 0; i < n_use; i++) {
+        pid_t pid = fork();
+        if (pid == 0) { // child
+          for (int j = 0; j < n_use; ++j) {
+            if (j == i) {close(pipes[j][0]);} else {close(pipes[j][0]); close(pipes[j][1]);}
+          }
+          Vint rch_counts_child(cache_size, 0);
+          for (int b : barcode_batches[i]) {
+            std::mt19937 rng(ran_seed + i*n_use + b);
+            Vint temp_vec = simulate_barcode_spots_DG(
+              b, true_counts[b], thresholds_by_b[b], L_by_b[b], correction_table, cb.barcodes, N_bits, rng
+            );
+            for (int j = 0; j < cache_size; ++j) {rch_counts_child[j] += temp_vec[j];}
+          }
+          const char* buffer        = reinterpret_cast<const char*>(rch_counts_child.data());
+          size_t      nbytes        = sizeof(int) * cache_size;
+          size_t      total_written = 0;
+          while (total_written < nbytes) {
+            ssize_t n_written = write(pipes[i][1], buffer + total_written, nbytes - total_written);
+            if (n_written <= 0) {
+              if (errno == EINTR) continue;
+              close(pipes[i][1]); _exit(1);
+            }
+            total_written += static_cast<size_t>(n_written);
+          }
+          close(pipes[i][1]); _exit(0);
+        } else if (pid > 0) {
+          pids[i] = pid;
+          close(pipes[i][1]);
+        } else {
+          Rcpp::stop("Fork failed!");
+        }
+      }
+
+      for (int i = 0; i < n_use; i++) {
+        Vint   temp_vec(cache_size, 0);
+        char*  buffer     = reinterpret_cast<char*>(temp_vec.data());
+        size_t nbytes     = sizeof(int) * cache_size;
+        size_t total_read = 0;
+        while (total_read < nbytes) {
+          ssize_t n_read = read(pipes[i][0], buffer + total_read, nbytes - total_read);
+          if (n_read == 0) {close(pipes[i][0]); Rcpp::stop("Unexpected EOF while reading pipe.");}
+          if (n_read <  0) {close(pipes[i][0]); Rcpp::stop("Pipe read failed");}
+          total_read += static_cast<size_t>(n_read);
+        }
+        for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
+        close(pipes[i][0]);
+        int status;
+        waitpid(pids[i], &status, 0);
+      }
+    } else {
+      for (int b : active) {
+        std::mt19937 rng(ran_seed + b);
+        Vint temp_vec = simulate_barcode_spots_DG(
+          b, true_counts[b], thresholds_by_b[b], L_by_b[b], correction_table, cb.barcodes, N_bits, rng
+        );
+        for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
+      }
+    }
+
+    sim.read_counts.resize(N_barcodes, 0);
+    sim.corrected_counts.resize(N_barcodes, 0);
+    sim.hit_counts.resize(N_barcodes, 0);
+    const int read_offset      = 0;
+    const int corrected_offset = N_barcodes;
+    const int hit_offset       = 2 * N_barcodes;
+    for (int b = 0; b < N_barcodes; b++) {
+      sim.read_counts[b]      = rch_counts[read_offset + b];
+      sim.corrected_counts[b] = rch_counts[corrected_offset + b];
+      sim.hit_counts[b]       = rch_counts[hit_offset + b];
+    }
+    return sim;
+  }
+
+// One MCMCSA step's simulation-fit summary, mirroring .DG_run_simulation()'s return value. Aggregate
+// statistics (mean/sd/OLS) skip NaN entries, matching R's implicit NaN-as-NA handling in mean()/sd()/
+// lm() -- PPV is undefined (NaN) for any gene with zero corrected spots this step, which is expected
+// and legitimate at small N_cells (see test-DG.R's existing tolerance for this).
+struct DGStepResult {
+  Vdbl sim_summary;       // 15 elements, same order/names as dg_legacy.R's sim_summary
+  Vdbl PPV_genes;         // length N_genes, may contain NaN
+  Vdbl counts_sorted;     // length N_genes + N_blanks
+  Vdbl obs_counts_sorted; // length N_genes + N_blanks
+};
+
+// OLS slope/MSE for y ~ slope*x + 0 (through the origin), skipping pairs where y is NaN
+std::pair<double, double> dg_ols_through_origin_skipna(const Vdbl& x, const Vdbl& y) {
+  double sxy = 0.0, sxx = 0.0;
+  int    n   = 0;
+  for (size_t i = 0; i < x.size(); ++i) {
+    if (std::isnan(y[i])) {continue;}
+    sxy += x[i] * y[i];
+    sxx += x[i] * x[i];
+    n++;
+  }
+  double slope = sxx > 0.0 ? sxy / sxx : 0.0;
+  double mse = 0.0;
+  for (size_t i = 0; i < x.size(); ++i) {
+    if (std::isnan(y[i])) {continue;}
+    double r = y[i] - slope * x[i];
+    mse += r * r;
+  }
+  mse = n > 0 ? mse / static_cast<double>(n) : NA_REAL;
+  return {slope, mse};
+}
+
+// Mean and sd of x, skipping NaN entries (sd is NA with fewer than 2 finite values, matching R's sd())
+std::pair<double, double> dg_mean_sd_skipna(const Vdbl& x) {
+  double sum = 0.0;
+  int    n   = 0;
+  for (double xi : x) {if (!std::isnan(xi)) {sum += xi; n++;}}
+  if (n == 0) {return {NA_REAL, NA_REAL};}
+  double mean = sum / static_cast<double>(n);
+  if (n < 2) {return {mean, NA_REAL};}
+  double ss = 0.0;
+  for (double xi : x) {if (!std::isnan(xi)) {ss += (xi - mean) * (xi - mean);}}
+  return {mean, std::sqrt(ss / static_cast<double>(n - 1))};
+}
+
+DGStepResult dg_simulation_step(
+    const ST_data&   STdata,
+    const FlipRates& fr,
+    int              N_cells,
+    double           blank_weight,
+    bool             maintain_gene_identity,
+    int              ran_seed,
+    int              n_forks
+  ) {
+    const Codebook& cb      = STdata.cb;
+    int N_genes  = cb.genes.size();
+    int N_blanks = cb.blanks.size();
+
+    // 1. Draw this step's true counts and simulate/decode spots
+    Vint true_counts = dg_draw_true_counts(STdata, fr, N_cells);
+    int  total_true  = std::accumulate(true_counts.begin(), true_counts.end(), 0);
+    SpotSim sim = make_SpotSim_DG(true_counts, cb, fr, STdata.correction_table, ran_seed, n_forks);
+
+    // 2. PPV per gene (hit / corrected; NaN when corrected == 0)
+    Vdbl PPV_genes(N_genes, std::numeric_limits<double>::quiet_NaN());
+    for (int g = 0; g < N_genes; ++g) {
+      int idx = cb.genes[g];
+      if (sim.corrected_counts[idx] > 0) {
+        PPV_genes[g] = static_cast<double>(sim.hit_counts[idx]) / static_cast<double>(sim.corrected_counts[idx]);
+      }
+    }
+
+    // 3. CR per barcode (read / corrected; 0 when corrected == 0, matching dg_legacy.R's convention)
+    int  N_barcodes = cb.barcodes.size();
+    Vdbl CR(N_barcodes, 0.0);
+    for (int b = 0; b < N_barcodes; ++b) {
+      CR[b] = sim.corrected_counts[b] > 0
+        ? static_cast<double>(sim.read_counts[b]) / static_cast<double>(sim.corrected_counts[b]) : 0.0;
+    }
+    Vdbl CR_genes(N_genes), CR_blanks(N_blanks);
+    for (int g = 0; g < N_genes;  ++g) {CR_genes[g]  = CR[cb.genes[g]];}
+    for (int b = 0; b < N_blanks; ++b) {CR_blanks[b] = CR[cb.blanks[b]];}
+    double max_blank_CR = N_blanks > 0 ? *std::max_element(CR_blanks.begin(), CR_blanks.end()) : 0.0;
+
+    // 4. Sorted-count comparison (observed vs. simulated corrected counts), weighted log-MSE
+    Vdbl obs_counts_genes(N_genes), obs_counts_blanks(N_blanks);
+    for (int g = 0; g < N_genes;  ++g) {obs_counts_genes[g]  = STdata.bc_rates[cb.genes[g]]  * N_cells;}
+    for (int b = 0; b < N_blanks; ++b) {obs_counts_blanks[b] = STdata.bc_rates[cb.blanks[b]] * N_cells;}
+    Vint obs_gene_order(N_genes), obs_blank_order(N_blanks);
+    for (int g = 0; g < N_genes;  ++g) {obs_gene_order[g]  = g;}
+    for (int b = 0; b < N_blanks; ++b) {obs_blank_order[b] = b;}
+    std::sort(obs_gene_order.begin(),  obs_gene_order.end(),  [&](int a, int b){return obs_counts_genes[a]  > obs_counts_genes[b];});
+    std::sort(obs_blank_order.begin(), obs_blank_order.end(), [&](int a, int b){return obs_counts_blanks[a] > obs_counts_blanks[b];});
+
+    Vdbl sim_counts_genes(N_genes), sim_counts_blanks(N_blanks);
+    for (int g = 0; g < N_genes;  ++g) {sim_counts_genes[g]  = static_cast<double>(sim.corrected_counts[cb.genes[g]]);}
+    for (int b = 0; b < N_blanks; ++b) {sim_counts_blanks[b] = static_cast<double>(sim.corrected_counts[cb.blanks[b]]);}
+    double max_blank_count = N_blanks > 0 ? *std::max_element(sim_counts_blanks.begin(), sim_counts_blanks.end()) : 0.0;
+
+    Vdbl counts_sorted(N_genes + N_blanks), obs_counts_sorted(N_genes + N_blanks);
+    for (int g = 0; g < N_genes;  ++g) {obs_counts_sorted[g]           = obs_counts_genes[obs_gene_order[g]];}
+    for (int b = 0; b < N_blanks; ++b) {obs_counts_sorted[N_genes + b] = obs_counts_blanks[obs_blank_order[b]];}
+
+    if (maintain_gene_identity) {
+      for (int g = 0; g < N_genes;  ++g) {counts_sorted[g]           = sim_counts_genes[obs_gene_order[g]];}
+      for (int b = 0; b < N_blanks; ++b) {counts_sorted[N_genes + b] = sim_counts_blanks[obs_blank_order[b]];}
+    } else {
+      Vint sim_gene_order(N_genes), sim_blank_order(N_blanks);
+      for (int g = 0; g < N_genes;  ++g) {sim_gene_order[g]  = g;}
+      for (int b = 0; b < N_blanks; ++b) {sim_blank_order[b] = b;}
+      std::sort(sim_gene_order.begin(),  sim_gene_order.end(),  [&](int a, int b){return sim_counts_genes[a]  > sim_counts_genes[b];});
+      std::sort(sim_blank_order.begin(), sim_blank_order.end(), [&](int a, int b){return sim_counts_blanks[a] > sim_counts_blanks[b];});
+      for (int g = 0; g < N_genes;  ++g) {counts_sorted[g]           = sim_counts_genes[sim_gene_order[g]];}
+      for (int b = 0; b < N_blanks; ++b) {counts_sorted[N_genes + b] = sim_counts_blanks[sim_blank_order[b]];}
+    }
+
+    double gene_weight = 1.0 + (static_cast<double>(N_blanks) / static_cast<double>(N_genes)) * (1.0 - blank_weight);
+    double sim_mse = 0.0;
+    for (int i = 0; i < N_genes + N_blanks; ++i) {
+      double w  = i < N_genes ? gene_weight : blank_weight;
+      double se = std::pow(std::log(counts_sorted[i] + 1.0) - std::log(obs_counts_sorted[i] + 1.0), 2.0);
+      sim_mse  += se * w;
+    }
+    sim_mse /= static_cast<double>(N_genes + N_blanks);
+
+    // 5. CR~PPV relationship and blank-cutoff filter diagnostics
+    auto   ols                 = dg_ols_through_origin_skipna(CR_genes, PPV_genes);
+    double CR_PPV_lm_slope     = ols.first;
+    double CR_PPV_mse          = ols.second;
+    Vdbl   PPV_filtered, PPV_retained;
+    int    n_CR_filtered = 0;
+    for (int g = 0; g < N_genes; ++g) {
+      bool retained = sim_counts_genes[g] > max_blank_count;
+      if (retained) {PPV_retained.push_back(PPV_genes[g]);} else {PPV_filtered.push_back(PPV_genes[g]);}
+      if (CR_genes[g] <= max_blank_CR) {n_CR_filtered++;}
+    }
+    auto   filt_stats          = dg_mean_sd_skipna(PPV_filtered);
+    double PPV_mean_filtered   = filt_stats.first;
+    double PPV_sd_filtered     = filt_stats.second;
+    double PPV_mean_retained   = dg_mean_sd_skipna(PPV_retained).first;
+    double ratio_genes_CR_filtered = static_cast<double>(n_CR_filtered) / static_cast<double>(N_genes);
+
+    // 6. Bit-noise correlation summary (pooled corr1+corr0 -- replaces the single shared
+    // bit_lum_noise_correlations vector dg_legacy.R's version of this column summarized)
+    Vdbl pooled_corr = fr.corr1;
+    pooled_corr.insert(pooled_corr.end(), fr.corr0.begin(), fr.corr0.end());
+    auto corr_stats = dg_mean_sd_skipna(pooled_corr);
+
+    // 7. Spot decoding rates (fraction of simulated spots successfully labeled, before/after correction)
+    int total_read = std::accumulate(sim.read_counts.begin(), sim.read_counts.end(), 0);
+    int total_corr = std::accumulate(sim.corrected_counts.begin(), sim.corrected_counts.end(), 0);
+    double spot_decoding_rate           = total_true > 0 ? static_cast<double>(total_read) / total_true : NA_REAL;
+    double spot_decoding_rate_corrected = total_true > 0 ? static_cast<double>(total_corr) / total_true : NA_REAL;
+
+    DGStepResult out;
+    out.sim_summary = {
+      CR_PPV_lm_slope, CR_PPV_mse, sim_mse,
+      PPV_mean_filtered, PPV_sd_filtered, PPV_mean_retained, ratio_genes_CR_filtered,
+      std::accumulate(fr.rate10.begin(), fr.rate10.end(), 0.0) / fr.rate10.size(), NA_REAL,
+      std::accumulate(fr.rate01.begin(), fr.rate01.end(), 0.0) / fr.rate01.size(), NA_REAL,
+      corr_stats.first, corr_stats.second,
+      spot_decoding_rate, spot_decoding_rate_corrected
+    };
+    out.PPV_genes         = PPV_genes;
+    out.counts_sorted     = counts_sorted;
+    out.obs_counts_sorted = obs_counts_sorted;
+    return out;
+  }
+
+// Draw k distinct indices from {0,...,n-1} without replacement, via R's own RNG (partial
+// Fisher-Yates using R::unif_rand()) so the whole MCMCSA walk's reproducibility is controlled by the
+// caller's set.seed(), matching dg_legacy.R's behavior. Only ever called from the parent process
+// (the outer MCMCSA loop in mQC_DG(), never from inside make_SpotSim_DG()'s forked children).
+Vint dg_sample_without_replacement(int n, int k) {
+  Vint idx(n);
+  for (int i = 0; i < n; ++i) {idx[i] = i;}
+  int k_use = std::max(0, std::min(k, n));
+  for (int i = 0; i < k_use; ++i) {
+    int j = i + static_cast<int>(R::unif_rand() * (n - i));
+    if (j >= n) {j = n - 1;}
+    std::swap(idx[i], idx[j]);
+  }
+  idx.resize(k_use);
+  return idx;
+}
+
+// C++ engine behind misread.qc.DG(): literal correlated-Gaussian-noise spot simulation (see the DG
+// correlation-matrix helpers above, and make_SpotSim_DG()) fit via Markov Chain Monte Carlo with
+// Simulated Annealing (MCMCSA) -- same walk mechanics as misread.qc.DG.legacy()/.DG_run_simulation()
+// (schedules, two-phase FR_search-then-burnin design, stochastic bit/pair pruning, burn-in mean-rate
+// enforcement), operating on FlipRates (rate10/rate01/corr1/corr0) and FlipRatePriors instead of
+// dg_legacy.R's flat flip-rate/single-correlation vectors. See misread.qc.DG()'s own documentation
+// (R/main.R) for the full argument/return contract; this function expects burnin/FR_search/
+// max_blank_weight/min_blank_weight already resolved (no NULL defaults at this level), and is not
+// itself documented via roxygen (no man page), matching mQC()'s own convention of leaving the
+// internal C++-exported engine undocumented at the Rd level.
+// [[Rcpp::export]]
+List mQC_DG(
+    NumericMatrix bc_counts,
+    IntegerMatrix codebook,
+    int           maxHam,
+    int           resamples,
+    int           burnin,
+    int           FR_search,
+    double        max_step_size,
+    int           min_step_size_divider,
+    double        max_temperature,
+    double        min_temperature_scale,
+    double        max_blank_weight,
+    double        min_blank_weight,
+    int           n_tracker_updates,
+    int           n_forks,
+    int           N_cells,
+    List          fliprate_priors         = List(),
+    double        prior_weight            = 0.0,
+    double        dispersion_weight       = 0.0,
+    double        feasibility_weight      = 0.0,
+    int           max_feasibility_barcodes = 40
+  ) {
+
+    ST_data STdata = load_STdata(bc_counts, codebook, codebook.ncol(), maxHam, true);
+    STdata.n_forks = n_forks;
+    FlipRatePriors fr_priors = pack_fr_priors(fliprate_priors);
+
+    int N_bits     = STdata.cb.N_bits;
+    int N_genes    = STdata.cb.genes.size();
+    int N_blanks   = STdata.cb.blanks.size();
+    int corr_free  = N_bits * (N_bits - 1) / 2;
+    int n_params   = 2*N_bits + 2*corr_free;
+    if (N_genes == 0 || N_blanks == 0) {
+      Rcpp::stop("Codebook must contain at least one gene and one blank barcode.");
+    }
+
+    double min_step_size   = max_step_size / min_step_size_divider;
+    double min_temperature = max_temperature / (min_step_size_divider / min_temperature_scale);
+
+    auto lin_seq = [](double from, double to, int n) {
+      Vdbl out(n);
+      if (n == 1) {out[0] = from; return out;}
+      for (int i = 0; i < n; ++i) {out[i] = from + (to - from) * static_cast<double>(i) / static_cast<double>(n - 1);}
+      return out;
+    };
+    auto lin_seq_int = [](int from, int to, int n) {
+      Vint out(n);
+      if (n == 1) {out[0] = from; return out;}
+      for (int i = 0; i < n; ++i) {
+        out[i] = static_cast<int>(std::round(from + (to - from) * static_cast<double>(i) / static_cast<double>(n - 1)));
+      }
+      return out;
+    };
+
+    Vdbl step_size_schedule   = lin_seq(max_step_size, min_step_size, FR_search);
+    Vdbl temperature_schedule = lin_seq(max_temperature, min_temperature, FR_search);
+    Vdbl blank_weight_schedule = lin_seq(max_blank_weight, min_blank_weight, FR_search);
+    Vint n_retained_bits       = lin_seq_int(N_bits - 1, 0, FR_search);
+    Vint n_retained_corrs      = lin_seq_int(corr_free - 1, 0, FR_search);
+    {
+      Vdbl s2 = lin_seq(max_step_size, min_step_size, burnin);
+      Vdbl t2 = lin_seq(max_temperature, min_temperature, burnin);
+      Vdbl b2 = lin_seq(max_blank_weight, min_blank_weight, burnin);
+      Vint rb2 = lin_seq_int(N_bits - 1, 0, burnin);
+      Vint rc2 = lin_seq_int(corr_free - 1, 0, burnin);
+      step_size_schedule.insert(step_size_schedule.end(), s2.begin(), s2.end());
+      temperature_schedule.insert(temperature_schedule.end(), t2.begin(), t2.end());
+      blank_weight_schedule.insert(blank_weight_schedule.end(), b2.begin(), b2.end());
+      n_retained_bits.insert(n_retained_bits.end(), rb2.begin(), rb2.end());
+      n_retained_corrs.insert(n_retained_corrs.end(), rc2.begin(), rc2.end());
+    }
+    step_size_schedule.insert(step_size_schedule.end(), resamples, min_step_size);
+    temperature_schedule.insert(temperature_schedule.end(), resamples, min_temperature);
+    blank_weight_schedule.insert(blank_weight_schedule.end(), resamples, min_blank_weight);
+    n_retained_bits.insert(n_retained_bits.end(), resamples, 0);
+    n_retained_corrs.insert(n_retained_corrs.end(), resamples, 0);
+
+    // Per-pair proposal-step-size tiering: tightly-pinned prior tiers (small sdcorr_pairs) get
+    // smaller per-step Gaussian proposals, not just a bigger acceptance penalty.
+    Vdbl corr_step_scale(corr_free, 1.0);
+    if (!fr_priors.sdcorr_pairs.empty() && fr_priors.sdcorr > 0.0) {
+      for (int k = 0; k < corr_free; ++k) {corr_step_scale[k] = fr_priors.sdcorr_pairs[k] / fr_priors.sdcorr;}
+    }
+
+    int n_steps = FR_search + burnin + resamples;
+    NumericMatrix sim_summaries(n_steps, 15);
+    NumericMatrix PPV_genes_mat(n_steps, N_genes);
+    NumericMatrix Counts_sorted_sim(n_steps, N_genes + N_blanks);
+    NumericMatrix Counts_sorted_obs(n_steps, N_genes + N_blanks);
+
+    auto fresh_seed = []() {return static_cast<unsigned int>(R::unif_rand() * 4294967295.0);};
+
+    Vdbl FR_current = draw_random_fr(STdata, fr_priors, fresh_seed());
+    FlipRates fr_current = pack_fr(FR_current, N_bits);
+
+    Rcpp::Rcout << "\n\nRunning initial simulation with structured-prior-drawn flip rates and correlations" << std::endl;
+    DGStepResult init_result = dg_simulation_step(STdata, fr_current, N_cells, max_blank_weight, false, (int)fresh_seed(), n_forks);
+    double sim_mse_current = init_result.sim_summary[2];
+    if (prior_weight > 0.0 || dispersion_weight > 0.0) {
+      sim_mse_current += fr_prior_penalty(fr_current, fr_priors, prior_weight, dispersion_weight, false, nullptr);
+    }
+    if (feasibility_weight > 0.0) {
+      sim_mse_current += feasibility_weight * dg_feasibility_penalty(fr_current, STdata.cb, max_feasibility_barcodes);
+    }
+    Rcpp::Rcout << "\nInitial mse: " << std::round(sim_mse_current * 1000.0) / 1000.0 << std::endl;
+
+    Rcpp::Rcout << "\n\nRunning Markov chain steps: \n\nRunning initial steps ..." << std::endl;
+    int    step = 0, ctr = 0, last_step = 0, last_ctr = 0, last_message = 0;
+    bool   maintain_gene_identity = false;
+    double rate10_mean = NA_REAL, rate01_mean = NA_REAL;
+    int    FR_sample_start = static_cast<int>(FR_search * 0.8);
+    Vint   progress_tracker = Vint();
+    {
+      Vdbl pt = lin_seq(1.0, static_cast<double>(n_steps), n_tracker_updates + 1);
+      for (double p : pt) {progress_tracker.push_back(static_cast<int>(std::round(p)));}
+      progress_tracker[n_tracker_updates - 1] = n_steps;
+    }
+
+    while (step < n_steps) {
+
+      ctr++;
+
+      Vdbl rate10_next(N_bits), rate01_next(N_bits);
+      for (int i = 0; i < N_bits; ++i) {
+        rate10_next[i] = fr_current.rate10[i] + R::norm_rand() * step_size_schedule[step];
+        rate01_next[i] = fr_current.rate01[i] + R::norm_rand() * step_size_schedule[step];
+      }
+      Vdbl corr1_next(corr_free), corr0_next(corr_free);
+      for (int k = 0; k < corr_free; ++k) {
+        double sd = step_size_schedule[step] * corr_step_scale[k];
+        corr1_next[k] = fr_current.corr1[k] + R::norm_rand() * sd;
+        corr0_next[k] = fr_current.corr0[k] + R::norm_rand() * sd;
+      }
+
+      // Stochastic pruning: retain current values at a randomly chosen subset of bits/pairs
+      Vint retained_bits  = dg_sample_without_replacement(N_bits, n_retained_bits[step]);
+      Vint retained_corrs = dg_sample_without_replacement(corr_free, n_retained_corrs[step]);
+      for (int i : retained_bits) {rate10_next[i] = fr_current.rate10[i]; rate01_next[i] = fr_current.rate01[i];}
+      for (int k : retained_corrs) {corr1_next[k] = fr_current.corr1[k]; corr0_next[k] = fr_current.corr0[k];}
+
+      bool in_burnin = step > FR_search && step <= FR_search + burnin;
+      bool have_means = !std::isnan(rate10_mean) && !std::isnan(rate01_mean);
+
+      if (in_burnin && have_means) {
+        double m10 = std::accumulate(rate10_next.begin(), rate10_next.end(), 0.0) / N_bits;
+        double m01 = std::accumulate(rate01_next.begin(), rate01_next.end(), 0.0) / N_bits;
+        for (int i = 0; i < N_bits; ++i) {
+          rate10_next[i] += rate10_mean - m10;
+          rate01_next[i] += rate01_mean - m01;
+        }
+      }
+      for (int i = 0; i < N_bits; ++i) {
+        bool oob10 = rate10_next[i] < 0.0 || rate10_next[i] > 1.0;
+        bool oob01 = rate01_next[i] < 0.0 || rate01_next[i] > 1.0;
+        if (in_burnin && have_means) {
+          if (oob10) {rate10_next[i] = rate10_mean;}
+          if (oob01) {rate01_next[i] = rate01_mean;}
+        } else {
+          if (oob10) {rate10_next[i] = fr_current.rate10[i];}
+          if (oob01) {rate01_next[i] = fr_current.rate01[i];}
+        }
+      }
+      for (int k = 0; k < corr_free; ++k) {
+        if (corr1_next[k] < -1.0 || corr1_next[k] > 1.0) {corr1_next[k] = fr_current.corr1[k];}
+        if (corr0_next[k] < -1.0 || corr0_next[k] > 1.0) {corr0_next[k] = fr_current.corr0[k];}
+      }
+
+      Vdbl FR_next(n_params);
+      for (int i = 0; i < N_bits; ++i) {FR_next[i] = rate10_next[i]; FR_next[N_bits + i] = rate01_next[i];}
+      for (int k = 0; k < corr_free; ++k) {FR_next[2*N_bits + k] = corr1_next[k]; FR_next[2*N_bits + corr_free + k] = corr0_next[k];}
+      FlipRates fr_next = pack_fr(FR_next, N_bits);
+
+      DGStepResult result = dg_simulation_step(
+        STdata, fr_next, N_cells, blank_weight_schedule[step], maintain_gene_identity, (int)fresh_seed(), n_forks
+      );
+      double sim_mse_next = result.sim_summary[2];
+      if (prior_weight > 0.0 || dispersion_weight > 0.0) {
+        sim_mse_next += fr_prior_penalty(fr_next, fr_priors, prior_weight, dispersion_weight, false, nullptr);
+      }
+      if (feasibility_weight > 0.0) {
+        sim_mse_next += feasibility_weight * dg_feasibility_penalty(fr_next, STdata.cb, max_feasibility_barcodes);
+      }
+
+      double acceptance_prob = std::min(1.0, std::exp(-(sim_mse_next - sim_mse_current) / temperature_schedule[step]));
+      double draw = R::unif_rand();
+      if (draw < acceptance_prob || step == FR_search) {
+
+        fr_current      = fr_next;
+        sim_mse_current = sim_mse_next;
+        step++;
+
+        for (int c = 0; c < 15; ++c) {sim_summaries(step - 1, c) = result.sim_summary[c];}
+        for (int g = 0; g < N_genes; ++g) {PPV_genes_mat(step - 1, g) = result.PPV_genes[g];}
+        for (int i = 0; i < N_genes + N_blanks; ++i) {
+          Counts_sorted_sim(step - 1, i) = result.counts_sorted[i];
+          Counts_sorted_obs(step - 1, i) = result.obs_counts_sorted[i];
+        }
+
+        if (step == FR_search) {
+          maintain_gene_identity = true;
+          int lo = std::max(1, FR_sample_start), hi = FR_search;
+          double sum10 = 0.0, sum01 = 0.0; int n_samp = 0;
+          for (int s = lo; s <= hi; ++s) {
+            double v10 = sim_summaries(s - 1, 7), v01 = sim_summaries(s - 1, 9); // flip_rate_10_stip, flip_rate_01_stip
+            if (!std::isnan(v10) && !std::isnan(v01)) {sum10 += v10; sum01 += v01; n_samp++;}
+          }
+          if (n_samp > 0) {rate10_mean = sum10 / n_samp; rate01_mean = sum01 / n_samp;}
+          Rcpp::Rcout << "\n\nFlip-rate search complete, mean flip rates:"
+                      << "\n\t1->0: " << std::round(rate10_mean * 1000.0) / 1000.0
+                      << "\n\t0->1: " << std::round(rate01_mean * 1000.0) / 1000.0 << std::endl;
+          Vdbl FR_reset = draw_random_fr(STdata, fr_priors, fresh_seed());
+          fr_current = pack_fr(FR_reset, N_bits);
+        }
+      }
+
+      bool at_tracker = std::find(progress_tracker.begin(), progress_tracker.end(), step) != progress_tracker.end();
+      if ((at_tracker || step == 10 || step == FR_search) && step != 0 && step != last_message) {
+        double acceptance_rate = static_cast<double>(step - last_step) / static_cast<double>(ctr - last_ctr);
+        last_step = step; last_ctr = ctr;
+        if (acceptance_rate < 0.2) {
+          for (int s = step; s < n_steps; ++s) {temperature_schedule[s] *= 1.1; step_size_schedule[s] *= 0.9;}
+        } else if (acceptance_rate > 0.3) {
+          for (int s = step; s < n_steps; ++s) {temperature_schedule[s] *= 0.9; step_size_schedule[s] *= 1.1;}
+        }
+        Rcpp::Rcout << "\n\nStep " << step << " / " << n_steps << " complete"
+                    << "\n\tCurrent mse: " << std::round(sim_mse_current * 1000.0) / 1000.0
+                    << "\n\tAcceptance rate (this batch): " << std::round(acceptance_rate * 1000.0) / 1000.0
+                    << "\n\tAcceptance rate (overall): " << std::round(static_cast<double>(step) / ctr * 1000.0) / 1000.0
+                    << "\n\tCalls: " << ctr << std::endl;
+        last_message = step;
+      }
+
+    }
+
+    return List::create(
+      _["sim_summaries"]     = sim_summaries,
+      _["PPV"]               = PPV_genes_mat,
+      _["Counts_sorted_sim"] = Counts_sorted_sim,
+      _["Counts_sorted_obs"] = Counts_sorted_obs,
+      _["gene_idx"]          = IntegerVector(STdata.cb.genes.begin(), STdata.cb.genes.end()),
+      _["blank_idx"]         = IntegerVector(STdata.cb.blanks.begin(), STdata.cb.blanks.end())
+    );
   }
