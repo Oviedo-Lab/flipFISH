@@ -15,7 +15,8 @@ misread.qc(
   n_restarts = 1,
   maxHam = NULL,
   fliprate_priors = list(),
-  weights = list(blank = 1, prior = 0, dispersion = 0, erc = 0)
+  weights = list(blank = 1, prior = 0, dispersion = 0, erc = 0, feasibility = 0),
+  max_feasibility_barcodes = 40
 )
 }
 \arguments{

@@ -9,7 +9,7 @@ This package uses code from the following packages, which are distributed under 
 * Updated October 13, 2026, by Claude Sonnet 5; checked by MB.
 * Updated October 16, 2026, by Claude Sonnet 5, to add BH (new LinkingTo dependency), and to add
   parallel and mvtnorm, both already in use (parallel in R/main.R and R/dg_legacy.R; mvtnorm in
-  tests/testthat/) but missing from this file until now.
+  tests/testthat/) but missing from this file until now; checked by MB
 
 <h1> Rcpp </h1>
 

@@ -16,13 +16,12 @@ misread.qc.DG(
   min_step_size_divider = 10,
   max_temperature = 0.2,
   min_temperature_scale = 0.5,
-  max_blank_weight = NULL,
-  min_blank_weight = NULL,
   n_tracker_updates = 100,
   n_forks = 1,
   N_cells = 1000,
   fliprate_priors = list(),
-  weights = list(prior = 0, dispersion = 0, feasibility = 0),
+  weights = list(max_blank = NULL, min_blank = NULL, prior = 0, dispersion = 0,
+    feasibility = 0),
   max_feasibility_barcodes = 40
 )
 }
@@ -49,10 +48,6 @@ misread.qc.DG(
 
 \item{min_temperature_scale}{Temperature is scaled down linearly to \code{max_temperature/(min_step_size_divider/min_temperature_scale)} over burn-in, default 0.5.}
 
-\item{max_blank_weight}{Maximum weight given to blanks (vs. genes) in the fit objective during \code{FR_search}, default \code{N_genes/N_blanks + 1}.}
-
-\item{min_blank_weight}{Minimum (final) weight given to blanks, default 2.}
-
 \item{n_tracker_updates}{Number of progress updates to print over the full walk, default 100.}
 
 \item{n_forks}{Number of process forks to use for simulating spots (i.e., parallel computation), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.}
@@ -61,7 +56,7 @@ misread.qc.DG(
 
 \item{fliprate_priors}{Structured prior on flip rates/bit-flip correlations, same format \code{misread.qc}/\code{build_corr_priors()} use. Default \code{list()} (unstructured). Drives the MCMCSA walk's initial draw, per-pair proposal step-size tiering (via \code{sdcorr_pairs}), and the prior-penalty term (via \code{weights$prior}/\code{weights$dispersion}).}
 
-\item{weights}{List with elements \code{prior}, \code{dispersion}, \code{feasibility} (all default 0, matching \code{misread.qc}'s "0 disables it" convention): \code{prior}/\code{dispersion} are the same Gaussian-prior/dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes corr1/corr0 for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.}
+\item{weights}{List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank}/\code{min_blank} are the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, mirroring \code{misread.qc}'s constant \code{weights$blank} but as a schedule rather than a single scalar, since \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; \code{prior}/\code{dispersion}/\code{feasibility} all default to 0, matching \code{misread.qc}'s "0 disables it" convention: \code{prior}/\code{dispersion} are the same Gaussian-prior/dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes corr1/corr0 for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.}
 
 \item{max_feasibility_barcodes}{Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty per step, for speed on large codebooks. Ignored when \code{weights$feasibility} is 0.}
 }

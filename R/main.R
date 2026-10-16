@@ -284,15 +284,24 @@ misread.qc <- function(
     maxHam            = NULL,
     fliprate_priors   = list(),
     weights           = list(
-      blank      = 1.0, 
-      prior      = 0.0, 
-      dispersion = 0.0, 
-      erc        = 0.0
-    )
+      blank       = 1.0, 
+      prior       = 0.0, 
+      dispersion  = 0.0, 
+      erc         = 0.0,
+      feasibility = 0.0
+    ),
+    max_feasibility_barcodes = 40
   ) {
     cat("\nRunning misread QC with L-BFGS (nlopt)")
     cat("\nMax evaluations:", maxeval)
-    
+
+    # Fill in any weight the caller's list omits with its default, so a partial `weights` list
+    # (e.g. missing `erc`) doesn't silently pass NULL -> numeric(0) through to mQC() below
+    weights <- modifyList(
+      list(blank = 1.0, prior = 0.0, dispersion = 0.0, erc = 0.0, feasibility = 0.0),
+      weights
+    )
+
     # Confirm forking is possible and check number of cores
     n_forks    <- check_forks(n_forks)
     
@@ -327,7 +336,9 @@ misread.qc <- function(
       as.double(weights$dispersion),
       as.double(data_check$obs_erc),
       as.double(weights$erc),
-      as.integer(n_restarts)
+      as.integer(n_restarts),
+      as.double(weights$feasibility),
+      as.integer(max_feasibility_barcodes)
     )
     
     # Annotate result output
@@ -348,7 +359,7 @@ misread.qc <- function(
     cat("\n0>1:", round(rate01_mean, 4))
     
     return(qc)
-
+   
   }
 
 #' Run misread QC analysis using the dichotomized-Gaussian (DG) spot-simulation / MCMCSA method
@@ -391,13 +402,11 @@ misread.qc <- function(
 #' @param min_step_size_divider Step size is scaled down linearly to \code{max_step_size/min_step_size_divider} over burn-in, default 10.
 #' @param max_temperature Simulated-annealing temperature at the start of the walk, default 0.2.
 #' @param min_temperature_scale Temperature is scaled down linearly to \code{max_temperature/(min_step_size_divider/min_temperature_scale)} over burn-in, default 0.5.
-#' @param max_blank_weight Maximum weight given to blanks (vs. genes) in the fit objective during \code{FR_search}, default \code{N_genes/N_blanks + 1}.
-#' @param min_blank_weight Minimum (final) weight given to blanks, default 2.
 #' @param n_tracker_updates Number of progress updates to print over the full walk, default 100.
 #' @param n_forks Number of process forks to use for simulating spots (i.e., parallel computation), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.
 #' @param N_cells Number of cells to simulate at each step, default 1000. Lowering this trades simulation accuracy for speed -- useful for quick/development runs. Caution: too small a value (a few dozen, on a codebook with many bits) can make the MCMCSA walk itself pathologically slow rather than just less accurate -- the per-step simulation becomes so noisy that the acceptance rate can collapse to near zero once the annealing temperature cools, requiring many thousands of proposals to advance. If a run seems stuck (no progress message for a long time), try raising \code{N_cells} before assuming something is wrong.
 #' @param fliprate_priors Structured prior on flip rates/bit-flip correlations, same format \code{misread.qc}/\code{build_corr_priors()} use. Default \code{list()} (unstructured). Drives the MCMCSA walk's initial draw, per-pair proposal step-size tiering (via \code{sdcorr_pairs}), and the prior-penalty term (via \code{weights$prior}/\code{weights$dispersion}).
-#' @param weights List with elements \code{prior}, \code{dispersion}, \code{feasibility} (all default 0, matching \code{misread.qc}'s "0 disables it" convention): \code{prior}/\code{dispersion} are the same Gaussian-prior/dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes corr1/corr0 for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.
+#' @param weights List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank}/\code{min_blank} are the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, mirroring \code{misread.qc}'s constant \code{weights$blank} but as a schedule rather than a single scalar, since \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; \code{prior}/\code{dispersion}/\code{feasibility} all default to 0, matching \code{misread.qc}'s "0 disables it" convention: \code{prior}/\code{dispersion} are the same Gaussian-prior/dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes corr1/corr0 for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.
 #' @param max_feasibility_barcodes Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty per step, for speed on large codebooks. Ignored when \code{weights$feasibility} is 0.
 #' @return A list giving:\itemize{
 #'    \item \code{sim_summaries}: a data frame, one row per accepted MCMCSA step, of simulation-fit summary statistics (CR/PPV slope and MSE, stipulated flip rates/correlations, decoding rates, etc.).
@@ -420,17 +429,27 @@ misread.qc.DG <- function(
     min_step_size_divider    = 10,
     max_temperature          = 0.2,
     min_temperature_scale    = 0.5,
-    max_blank_weight         = NULL,
-    min_blank_weight         = NULL,
     n_tracker_updates        = 100,
     n_forks                  = 1,
     N_cells                  = 1e3,
     fliprate_priors          = list(),
-    weights                  = list(prior = 0.0, dispersion = 0.0, feasibility = 0.0),
+    weights                  = list(
+      max_blank   = NULL,
+      min_blank   = NULL,
+      prior       = 0.0,
+      dispersion  = 0.0,
+      feasibility = 0.0
+    ),
     max_feasibility_barcodes = 40
   ) {
 
     cat("\n\nEstimating FPQC metrics with Markov chain Monte Carlo simulated annealing (DG method)")
+
+    # Fill in any weight the caller's list omits with its default (same rationale as misread.qc())
+    weights <- modifyList(
+      list(max_blank = NULL, min_blank = NULL, prior = 0.0, dispersion = 0.0, feasibility = 0.0),
+      weights
+    )
 
     # Confirm forking is possible and check number of cores (reuses misread.qc()'s own helper)
     n_forks <- check_forks(n_forks)
@@ -458,16 +477,16 @@ misread.qc.DG <- function(
     if (is.null(FR_search)) FR_search <- as.integer(resamples / 2)
     if (is.null(burnin))    burnin    <- as.integer(resamples / 2)
     max_blank_weight_limit <- N_genes / N_blanks + 1
-    if (is.null(max_blank_weight)) {
-      max_blank_weight <- max_blank_weight_limit
-    } else if (max_blank_weight > max_blank_weight_limit) {
+    if (is.null(weights$max_blank)) {
+      weights$max_blank <- max_blank_weight_limit
+    } else if (weights$max_blank > max_blank_weight_limit) {
       cat("\n\nRequested max blank weight too high, resetting to limit:", max_blank_weight_limit)
-      max_blank_weight <- max_blank_weight_limit
+      weights$max_blank <- max_blank_weight_limit
     }
-    if (is.null(min_blank_weight)) {
-      min_blank_weight <- 2
-    } else if (min_blank_weight < 1) {
-      min_blank_weight <- 1
+    if (is.null(weights$min_blank)) {
+      weights$min_blank <- 2
+    } else if (weights$min_blank < 1) {
+      weights$min_blank <- 1
     }
 
     # Run the MCMCSA walk
@@ -482,8 +501,8 @@ misread.qc.DG <- function(
       as.integer(min_step_size_divider),
       as.double(max_temperature),
       as.double(min_temperature_scale),
-      as.double(max_blank_weight),
-      as.double(min_blank_weight),
+      as.double(weights$max_blank),
+      as.double(weights$min_blank),
       as.integer(n_tracker_updates),
       as.integer(n_forks),
       as.integer(N_cells),
@@ -583,7 +602,13 @@ sim.benchmark <- function(
     )
   ) {
     cat("\nBenchmarking misread QC with Bernoulli simulations, using L-BFGS (nlopt)")
-    
+
+    # Fill in any weight the caller's list omits with its default (same rationale as misread.qc())
+    weights <- modifyList(
+      list(blank = 1.0, prior = 0.0, dispersion = 0.0, erc = 0.0),
+      weights
+    )
+
     # Confirm forking is possible and check number of cores
     n_forks    <- check_forks(n_forks)
     
@@ -637,7 +662,7 @@ sim.benchmark <- function(
 
 #' Plot estimated PPV by barcode from \code{misread.qc} results
 #'
-#' This function takes the results from the misread.qc function and makes a plot of the estimated positive predictive value (PPV) for each barcode. Barcodes are sorted by PPV value, in decreasing order, and a dashed red line indicates the minimum PPV cutoff for "good" barcodes. Barcodes above the cutoff are colored blue, while those that are not are colored black. 
+#' This function takes the results from the misread.qc function and makes a plot of the estimated positive predictive value (PPV) for each barcode, along with its 95\% confidence interval (\code{PPV_lower}/\code{PPV_upper} from \code{erctc_plus}) shown as error bars. Barcodes are sorted by PPV value, in decreasing order, and a dashed red line indicates the minimum PPV cutoff for "good" barcodes. Barcodes above the cutoff are colored blue, while those that are not are colored black.
 #'
 #' @name plot.PPV
 #' @rdname plot-PPV
@@ -647,27 +672,33 @@ sim.benchmark <- function(
 #' )
 #' @param qc List, results from misread.qc function.
 #' @param min_PPV Numeric, PPV cutoff for "good" barcodes, defaults to 0.8.
-#' @return ggplot object showing estimated PPV for each barcode with cutoff.
+#' @return ggplot object showing estimated PPV, with its 95\% confidence interval, for each barcode with cutoff.
 #' @export
 plot.PPV <- function(
     qc,
     min_PPV = 0.8
   ) {
-    
+   
     # Grab data
-    PPV <- qc$erctc_plus$PPV
-    
+    PPV       <- qc$erctc_plus$PPV
+    PPV_lower <- qc$erctc_plus$PPV_lower
+    PPV_upper <- qc$erctc_plus$PPV_upper
+   
     # Sort by decreasing values
     above_cutoff <- rep("Bad", length(PPV))
-    above_cutoff[PPV > min_PPV] <- "Good"
+    above_cutoff[PPV_lower > min_PPV] <- "Good"
+    ord <- order(PPV_lower, decreasing = TRUE)
     df <- data.frame(
-      x            = seq_along(PPV), 
-      PPV          = PPV[order(PPV, decreasing = TRUE)], 
-      above_cutoff = above_cutoff
+      x            = seq_along(PPV),
+      PPV          = PPV[ord],
+      PPV_lower    = PPV_lower[ord],
+      PPV_upper    = PPV_upper[ord],
+      above_cutoff = above_cutoff[ord]
       )
-    
+   
     # Plot
     PPV_plot <- ggplot(df, aes(x = x, y = PPV)) +
+      geom_errorbar(aes(ymin = PPV_lower, ymax = PPV_upper, color = above_cutoff), width = 0, alpha = 0.5) +
       geom_point(aes(color = above_cutoff), size = 3) +
       geom_hline(yintercept = min_PPV, linetype = "dashed", color = "red") +
       theme_minimal() +
@@ -681,10 +712,10 @@ plot.PPV <- function(
       labs(
         y     = paste0("Estimated PPV"),
         x     = paste0("Gene barcodes by PPV value"),
-        title = "Estimated Precision (PPV) by Gene Barcode")
-    
+        title = "Estimated Precision (PPV) by Gene Barcode, with 95% CI")
+   
     return(PPV_plot)
-    
+   
   }
 
 #' Plot predicted vs observed counts from \code{misread.qc} results

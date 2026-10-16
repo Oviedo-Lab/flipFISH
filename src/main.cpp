@@ -1772,7 +1772,7 @@ List mQC(
     double        feasibility_weight       = 0.0,      // Strength of the penalty for corr1/corr0 needing a large correction to become a valid per-barcode Gaussian correlation structure (0 disables it; see dg_feasibility_penalty()). Keeps this fit comparable to mQC_DG().
     int           max_feasibility_barcodes = 40        // Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty per evaluation, for speed on large codebooks
   ) {
-
+   
     // Load in data and set up the msle objective (weights, priors, erc term, misread-loss rescaling)
     auto STdata = prepare_STdata_for_mQC(
       bc_counts, codebook, maxHam, n_forks, max_flips,
@@ -1995,7 +1995,7 @@ double mQC_msle_at(
     double                      feasibility_weight       = 0.0,
     int                         max_feasibility_barcodes = 40
   ) {
-
+   
     // Load in data and set up the msle objective, mirroring mQC()'s setup exactly so the result
     // is comparable to mQC()'s "msle"
     auto STdata = prepare_STdata_for_mQC(
@@ -2007,7 +2007,7 @@ double mQC_msle_at(
       feasibility_weight, max_feasibility_barcodes
     );
     STdata.report_freq = std::numeric_limits<int>::max();
-
+   
     // Evaluate the penalized MSLE objective at FR (empty grad vector => mQC_msle() skips gradients)
     Vdbl grad;
     Vdbl FR_(FR.begin(), FR.end());

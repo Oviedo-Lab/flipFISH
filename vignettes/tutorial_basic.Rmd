@@ -64,7 +64,8 @@ data_path_cells <- "/Users/michaelbarkasi/projects_Oviedo_lab/_molecular_mechani
 count_data <- wispack::make_count_data(
   data_path = data_path_cells, 
   remove_L1 = FALSE, 
-  ROI_only = FALSE,
+  ROIname              = "Primary auditory area",
+  ROI_only             = TRUE,
   raw = TRUE,
   drop_blanks = FALSE,
   verbose = TRUE
@@ -104,15 +105,16 @@ summary_stats_from_data <- function(
 mice <- unique(count_data$mouse)
 mice_masks <- lapply(mice, function(m) count_data$mouse == m)
 count_data <- count_data[,13:(ncol(count_data)-6)]
-summary_stats_data <- data.frame(mouse = c(), rates = c(), variance = c(), counts = c())
+summary_stats_data <- data.frame(gene = c(), mouse = c(), rates = c(), variance = c(), counts = c())
 for (i in seq_along(mice_masks)) {
   ss <- summary_stats_from_data(count_data[mice_masks[[i]],])
   ss <- cbind(mouse = i, ss)
+  ss <- cbind(gene = rownames(ss), ss)
   summary_stats_data <- rbind(summary_stats_data, ss)
 }
 write.csv(
   summary_stats_data,
-  file = "/Users/michaelbarkasi/projects_Oviedo_lab/R_packages/flipFISH/inst/extdata/summary_stats_all_mice.csv",
+  file = "/Users/michaelbarkasi/projects_Oviedo_lab/R_packages/flipFISH/inst/extdata/summary_stats_ACx_all_mice.csv",
   row.names = TRUE
 )
 ```

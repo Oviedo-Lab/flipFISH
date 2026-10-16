@@ -15,8 +15,8 @@ plot.PPV(
 \item{min_PPV}{Numeric, PPV cutoff for "good" barcodes, defaults to 0.8.}
 }
 \value{
-ggplot object showing estimated PPV for each barcode with cutoff.
+ggplot object showing estimated PPV, with its 95\% confidence interval, for each barcode with cutoff.
 }
 \description{
-This function takes the results from the misread.qc function and makes a plot of the estimated positive predictive value (PPV) for each barcode. Barcodes are sorted by PPV value, in decreasing order, and a dashed red line indicates the minimum PPV cutoff for "good" barcodes. Barcodes above the cutoff are colored blue, while those that are not are colored black.
+This function takes the results from the misread.qc function and makes a plot of the estimated positive predictive value (PPV) for each barcode, along with its 95\% confidence interval (\code{PPV_lower}/\code{PPV_upper} from \code{erctc_plus}) shown as error bars. Barcodes are sorted by PPV value, in decreasing order, and a dashed red line indicates the minimum PPV cutoff for "good" barcodes. Barcodes above the cutoff are colored blue, while those that are not are colored black.
 }
