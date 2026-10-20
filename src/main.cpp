@@ -65,16 +65,16 @@ struct FlipRates {
 
 // Flip rate priors
 struct FlipRatePriors {
-  double expected10    = 0.01;
-  double expected01    = 0.05;
-  double sd10          = 0.1;
-  double sd01          = 0.2;
-  double expectedcorr  = 0.0;
-  double sdcorr        = 0.2;
+  double expected10    = 0.01; // expected rate at which 1 bits flip to 0s
+  double expected01    = 0.05; // expected rate at which 0 bits flip to 1s
+  double sd10          = 0.1;  // standard deviation of the 1-to-0 flip rate
+  double sd01          = 0.2;  // standard deviation of the 0-to-1 flip rate
+  double expectedcorr  = 0.0;  // expected baseline flip-correlation between bits, before considering channels and rounds
+  double sdcorr        = 0.2;  // standard deviation of flip-correlation between bits, before considering channels and rounds
   Vdbl   sdcorr_pairs;
   Vint   latent_bit_round;
   Vint   latent_bit_channel;
-  double round_corr_sd = 0.2;  // sd fed into each round's own local correlation draw
+  double round_corr_sd = 0.2;  // standard deviation fed into each round's own local correlation draw
   double channel_rho   = 0.0;  // equicorrelation value shared by every pair within a channel, before w_channel scaling (must be >= -1/(m-1) for the smallest channel group of size m)
   double w_round       = 0.0;  // fraction of each bit's variance attributed to round membership (0 disables the round tier)
   double w_channel     = 0.0;  // fraction attributed to channel membership (0 disables the channel tier); w_round + w_channel must be <= 1
@@ -89,7 +89,7 @@ struct FlipRatePriors {
    *    latent_bit_round and latent_bit_channel: Two-level latent-factor structured-truth generative mode, used only 
    *      by draw_random_fr() -- NOT used by the fitting penalty above (that's sdcorr/sdcorr_pairs). Active 
    *      when latent_bit_round and latent_bit_channel are both set (length N_bits each, arbitrary integer group codes;
-   *      see R's build_structured_truth_priors()). Lets sim.benchmark() simulate a "true" correlation structure organized 
+   *      see R's build_structured_corrs()). Lets sim.benchmark() simulate a "true" correlation structure organized
    *      by, e.g., imaging round and color channel, instead of i.i.d. draws across all pairs.
    */
 };
@@ -857,8 +857,8 @@ Vdbl draw_random_fr(
     }
     // ... and random bit-flip correlations, by one of two routes:
     Vdbl corr1_final(corr_free), corr0_final(corr_free);
-    bool use_structured = !fr_prior.latent_bit_round.empty() && !fr_prior.latent_bit_channel.empty();
-    if (use_structured) {
+    bool use_latent_structure = !fr_prior.latent_bit_round.empty() && !fr_prior.latent_bit_channel.empty();
+    if (use_latent_structure) {
       // Structured-truth generative mode (see FlipRatePriors::latent_bit_round and
       // draw_structured_corr() above). Draws corr1/corr0 directly in final, already-valid form --
       // no global Cholesky-normalize step, so no cross-tier leakage.

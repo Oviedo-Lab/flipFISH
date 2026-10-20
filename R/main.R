@@ -55,9 +55,13 @@ check_data <- function(
       codebook[ blank_mask,][blank_rate_order,]
     )
     
+    # Check STdata columns 
+    req_cols <- c("rates", "variance", "counts")
+    if (is.null(colnames(STdata)))                   stop("STdata must have named columns.") 
+    if (!all(req_cols %in% colnames(STdata)))        stop("STdata must have columns 'rates', 'variance', and 'counts'.")
+    
     # Split STdata
     obs_erc <- numeric(0)
-    if (is.null(colnames(STdata)))                   stop("STdata must have named columns.") 
     if ("counts_uncorrected" %in% colnames(STdata)) {
       obs_erc <- STdata[,"counts_uncorrected"]
       STdata  <- STdata[,"counts_uncorrected" != colnames(STdata)]
@@ -102,29 +106,52 @@ check_forks <- function(
     return(n_forks)
   }
 
-#' Build a tiered Gaussian prior on bit-flip correlations from imaging-round/channel structure
+# Merge a bit_org-derived tiered prior and caller-specified fliprate_priors list
+resolve_fliprate_priors <- function(
+    bit_org,
+    fliprate_priors,
+    N_bits
+  ) {
+    if (is.null(dim(bit_org))) return(fliprate_priors)
+    fliprate_priors_bo <- build_corr_priors(
+      N_bits      = N_bits,
+      bit_round   = bit_org$imagingRound,
+      bit_channel = bit_org$color
+    )
+    fliprate_priors_bo[names(fliprate_priors)] <- fliprate_priors
+    fliprate_priors_bo
+  }
+
+#' Build a tiered Gaussian prior on bit-flip correlations from imaging-round plus channel structure
 #'
-#' \code{misread.qc}/\code{sim.benchmark} regularize the (otherwise weakly identified -- see the
-#' package's benchmarking notes) pairwise bit-flip correlation parameters with a single Gaussian
-#' prior shared by all bit pairs (\code{fliprate_priors$expectedcorr}/\code{sdcorr}). This function
-#' instead builds a \emph{tiered} version of that same prior: bit pairs that share an imaging round
-#' get one (wider, i.e. more permissive) prior sd, pairs that only share a color channel get a
-#' second (narrower) sd, and all remaining pairs get a third, tight, near-zero sd. The rationale is
-#' that correlated misreads in a MERFISH/MERSCOPE-style experiment most plausibly arise from
-#' per-round effects (shared hybridization/imaging cycle) or, secondarily, per-channel effects
-#' (shared optical path across rounds); pairs sharing neither have no obvious mechanism to be
-#' correlated and the data cannot usefully constrain them anyway, so they are pulled tightly to
-#' \code{expectedcorr} instead of being estimated as if they were as free as the rest.
+#' \code{misread.qc} and \code{sim.benchmark} regularize the (otherwise weakly identified -- see the
+#' package's benchmarking notes tutorial) pairwise bit-flip correlation parameters with a single Gaussian
+#' prior shared by all bit pairs (\code{fliprate_priors$expectedcorr} and \code{fliprate_priors$sdcorr}). 
+#' This function instead builds a \emph{tiered} version of that same prior: bit pairs that share an imaging 
+#' round get one (wider, i.e. more permissive) prior standard deviation (sd), pairs that only share a color 
+#' channel get a second (narrower) sd, and all remaining pairs get a third, tight, near-zero sd. The rationale 
+#' is that correlated misreads in a MERFISH/MERSCOPE-style experiment most plausibly arise from per-round
+#' effects (shared hybridization/imaging cycle) or, secondarily, per-channel effects (shared optical path across
+#' rounds); pairs sharing neither have no obvious mechanism to be correlated and the data cannot usefully constrain 
+#' them anyway, so they are pulled tightly to \code{expectedcorr} instead of being estimated as if they were as 
+#' free as the rest.
 #'
-#' The returned list is a complete, ready-to-use \code{fliprate_priors} argument for
-#' \code{misread.qc}/\code{sim.benchmark} (it includes the usual \code{expected10}/\code{expected01}/
-#' \code{sd10}/\code{sd01}/\code{expectedcorr}/\code{sdcorr} fields alongside the new
-#' \code{sdcorr_pairs} vector, so nothing else needs to be merged in).
+#' The returned list is a complete, ready-to-use \code{fliprate_priors} argument for \code{misread.qc} and 
+#' \code{sim.benchmark} (it includes the usual \code{expected10}/\code{expected01}/\code{sd10}/\code{sd01}/
+#' \code{expectedcorr}/\code{sdcorr} fields alongside the new \code{sdcorr_pairs} vector, so nothing else needs 
+#' to be merged in).
 #'
+#' The same list can also be passed as \code{sim.benchmark}'s \code{stip_fliprate_priors} argument, to
+#' simulate a "true" correlation structure organized by round/channel instead of i.i.d. noise -- but
+#' there, \code{sdcorr_pairs} is only an \emph{approximation} of that structure: \code{draw_random_fr}
+#' still draws each pair independently and runs the result through its usual global Cholesky
+#' normalization, which leaks some of the round/channel tiers' magnitude into the pairs meant to be
+#' near zero. For an exact, non-leaky version of that organized structure, use \code{build_structured_corrs()} instead.
+#' 
 #' @param N_bits Integer, number of bits in the codebook.
 #' @param bit_round Vector of length \code{N_bits} giving each bit's imaging-round label (any type that supports \code{==}, e.g. the \code{imagingRound} column of a MERSCOPE \code{codebook_organization.csv}, in bit order 1..N_bits).
 #' @param bit_channel Vector of length \code{N_bits} giving each bit's color-channel label (e.g. the \code{color} column of the same file), in bit order 1..N_bits.
-#' @param sd_round Prior sd for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).
+#' @param sd_round Prior standard deviation (sd) for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).
 #' @param sd_channel Prior sd for bit pairs sharing a color channel but not a round (tier 2), default 0.1.
 #' @param sd_other Prior sd for all remaining bit pairs (tier 3, pinned near \code{expectedcorr}), default 0.01.
 #' @param expectedcorr Prior mean for all tiers, default 0.0.
@@ -149,9 +176,11 @@ build_corr_priors <- function(
     sd10         = 0.1,
     sd01         = 0.2
   ) {
+    # Check input lengths
     if (length(bit_round)   != N_bits) stop("bit_round must have length N_bits")
     if (length(bit_channel) != N_bits) stop("bit_channel must have length N_bits")
    
+    # Compute number of free correlation parameters
     corr_free    <- N_bits * (N_bits - 1) / 2
     sdcorr_pairs <- numeric(corr_free)
    
@@ -174,6 +203,7 @@ build_corr_priors <- function(
       }
     }
    
+    # Return parameters
     list(
       expected10   = expected10,
       expected01   = expected01,
@@ -185,13 +215,15 @@ build_corr_priors <- function(
     )
   }
 
-#' Build a structured ground-truth prior for simulating organized bit-flip correlations
+#' Build a structured ground-truth generative recipe for organized bit-flip correlations
 #'
-#' \code{build_corr_priors} builds a tiered \emph{fitting} prior; this function builds a matching
-#' \emph{generative} prior, for use as \code{sim.benchmark}'s \code{stip_fliprate_priors} argument,
-#' so the simulated "true" correlations actually have the organized structure a tiered fitting
-#' prior assumes, instead of being drawn i.i.d. across all bit pairs (see the package's
-#' benchmarking notes on why that distinction matters for an honest test).
+#' \code{build_corr_priors} builds a tiered \emph{fitting prior}; this function builds a matching
+#' \emph{generative} configuration, for use as \code{sim.benchmark}'s \code{stip_fliprate_priors}
+#' argument, so the simulated "true" correlations actually have the organized structure a tiered
+#' fitting prior assumes, instead of being drawn i.i.d. across all bit pairs (see the package's
+#' benchmarking notes tutorial on why that distinction matters for an honest test). Unlike
+#' \code{build_corr_priors}'s output, this is not itself a fitting prior -- \code{draw_random_fr}
+#' uses it only to generate simulated ground-truth correlations, never to penalize a fit.
 #'
 #' Unlike \code{build_corr_priors}'s \code{sdcorr_pairs} (which can be handed to \code{sim.benchmark}'s
 #' \code{stip_fliprate_priors} too, but goes through the same global Cholesky-based construction
@@ -217,7 +249,7 @@ build_corr_priors <- function(
 #' @param sd01 Passed straight through to the returned list, default 0.2 (package default).
 #' @return A named list suitable as \code{sim.benchmark}'s \code{stip_fliprate_priors} argument.
 #' @export
-build_structured_truth_priors <- function(
+build_structured_corrs <- function(
     N_bits,
     bit_round,
     bit_channel,
@@ -252,13 +284,13 @@ build_structured_truth_priors <- function(
 #' Run misread QC analysis on summary stats data from spatial transcriptomics experiment
 #'
 #' This function takes summary statistics from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs L-BFGS (via nlopt) to make a best-fit estimate of the bit-flip rates and correlations. The estimation (i.e., L-BFGS optimization) uses an analytic conditional probability model to compute, for each barcode \emph{b}, values expected based on bit-flip rates and bit-flip correlations, for: \itemize{
-#'   \item \strong{Read Count}: The number of spots (the "count") labelled \emph{b} before error correction.
-#'   \item \strong{Corrected Count}: The number of spots (the "count") labelled \emph{b} after error correction.
-#'   \item \strong{Hit Count}: The number of spots (the "count") labelled \emph{b} after error correction which are in fact \emph{b}, i.e., the number of reads error-corrected to \emph{b} which are correct, aka a "hit". 
+#'   \item \strong{Read Count}: The number of spots labelled \emph{b} before error correction.
+#'   \item \strong{Corrected Count}: The number of spots labelled \emph{b} after error correction.
+#'   \item \strong{Hit Count}: The number of spots labelled \emph{b} after error correction which are in fact \emph{b}, i.e., the number of reads error-corrected to \emph{b} which are correct, aka a "hit". 
 #' }
-#'  The "best fit" is defined as least mean squared log error, mean squared log error being computed by comparing the analytically implied expected corrected counts to the observed corrected counts included in the summary statistics. Additionally, both the expected "confidence ratio" (CR) and expected positive predictive value (PPV) are computed, from these implied values, for each barcode. The CR is a quality control metric proposed by the original developers of MERFISH (e.g., see DOI 10.1016/bs.mie.2016.03.020) defined per barcode as the read count over the corrected count, while PPV is a oft-used metric defined as the hit count over the corrected count. That is, PPV tells us, for each barcode \emph{b}, the expected percentage of spots decoded as \emph{b} which are in fact \emph{b}. 
+#'  The "best fit" is defined as least mean squared log error (msle), msle being computed by comparing the analytically implied expected corrected counts to the observed corrected counts included in the summary statistics (\code{STdata}). If \code{counts_uncorrected} are included in \code{STdata} then the msle is computed for the read count as well and combined with the corrected-count msle accounting the value set by \code{weights$erc}. Counts (corrected and read) for blank barcodes can be upweighted via \code{weights$blank}. Penalty terms based on flip rate priors (expected value for flip rates, expected values and dispersion for bit-flip correlations) and bit-flip correlation feasibility can be added by setting non-zero values for \code{weights$prior}, \code{weights$dispersion}, and \code{weights$feasibility}. The expected "confidence ratio" (CR) and expected positive predictive value (PPV) are computed, from these implied count values, for each barcode. The CR is a quality control metric proposed by the original developers of MERFISH (e.g., see DOI 10.1016/bs.mie.2016.03.020) defined per barcode as the read count over the corrected count, while PPV is a oft-used metric defined as the hit count over the corrected count. That is, PPV tells us, for each barcode \emph{b}, the expected percentage of spots decoded as \emph{b} which are in fact \emph{b}. 
 #'
-#' @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", "counts_uncorrected". Must have barcode names (e.g., gene or protein species) as row names.
+#' @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", and optionally "counts_uncorrected". The "counts" column must provide the corrected count, the "counts_uncorrected" column can be used to optionally provide the read count. The matrix must have barcode names (e.g., gene or protein species) as row names.
 #' @param codebook Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0, depending on whether an mRNA molecule of the species represented by the row is expected to luminescence in the bit represented by the column. All row names from \code{STdata} must be included in the row names for \code{codebook}. 
 #' @param n_forks Number of process forks to use for expected-count computation (i.e., parallel computation), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.
 #' @param max_flips When analytically computing expected corrected counts per barcode, the function will ignore misreads larger than this Hamming distance. The default is 0, which is interpreted as no limit. Using all misreads will likely be prohibitively slow; a value between six and ten is probably advisable. Values of 3 or 4 work well for initial trouble shooting and testing. 
@@ -294,33 +326,22 @@ misread.qc <- function(
   ) {
     cat("\nRunning misread QC with L-BFGS (nlopt)")
     cat("\nMax evaluations:", maxeval)
-
+   
     # Fill in any weight the caller's list omits with its default, so a partial `weights` list
     # (e.g. missing `erc`) doesn't silently pass NULL -> numeric(0) through to mQC() below
     weights <- modifyList(
       list(blank = 1.0, prior = 0.0, dispersion = 0.0, erc = 0.0, feasibility = 0.0),
       weights
     )
-
+   
     # Confirm forking is possible and check number of cores
-    n_forks    <- check_forks(n_forks)
-    
+    n_forks         <- check_forks(n_forks)
     # Check bit size, prep codebook and STdata, and set maxHam
-    data_check <- check_data(STdata, codebook, bit_org, maxHam)
-    
+    data_check      <- check_data(STdata, codebook, bit_org, maxHam)
     # Build flip rate priors from bit_org
-    N_bits <- ncol(codebook)
-    if (!is.null(dim(data_check$bit_org))) {
-      fliprate_priors_bo <- build_corr_priors(
-        N_bits      = N_bits, 
-        bit_round   = data_check$bit_org$imagingRound, 
-        bit_channel = data_check$bit_org$color
-      )
-      # Merge with user-specified flip rates
-      fliprate_priors_bo[names(fliprate_priors)] <- fliprate_priors
-      fliprate_priors <- fliprate_priors_bo
-    }
-    
+    N_bits          <- ncol(codebook)
+    fliprate_priors <- resolve_fliprate_priors(data_check$bit_org, fliprate_priors, N_bits)
+   
     # Run misread QC algorithm with L-BFGS (or MCMCSA)
     qc <- mQC(
       as.matrix(data_check$STdata),
@@ -362,7 +383,7 @@ misread.qc <- function(
    
   }
 
-#' Run misread QC analysis using the dichotomized-Gaussian (DG) spot-simulation / MCMCSA method
+#' Run misread QC analysis using the dichotomized-Gaussian (DG) spot-simulation plus MCMCSA method
 #'
 #' \code{misread.qc.DG} is a thin wrapper around the C++ \code{mQC_DG()} engine -- the same pattern
 #' \code{misread.qc()}/\code{mQC()} use -- implementing literal correlated-Gaussian-noise spot
@@ -459,16 +480,8 @@ misread.qc.DG <- function(
     data_check <- check_data(STdata, codebook, bit_org, maxHam)
 
     # Build flip rate priors from bit_org, same as misread.qc()
-    N_bits <- ncol(data_check$codebook)
-    if (!is.null(dim(data_check$bit_org))) {
-      fliprate_priors_bo <- build_corr_priors(
-        N_bits      = N_bits,
-        bit_round   = data_check$bit_org$imagingRound,
-        bit_channel = data_check$bit_org$color
-      )
-      fliprate_priors_bo[names(fliprate_priors)] <- fliprate_priors
-      fliprate_priors <- fliprate_priors_bo
-    }
+    N_bits          <- ncol(data_check$codebook)
+    fliprate_priors <- resolve_fliprate_priors(data_check$bit_org, fliprate_priors, N_bits)
 
     # Resolve NULL schedule defaults (same logic misread.qc.DG.legacy() uses)
     blank_mask <- grepl("Blank", rownames(data_check$STdata), ignore.case = FALSE)
@@ -616,18 +629,9 @@ sim.benchmark <- function(
     data_check <- check_data(STdata, codebook, bit_org, maxHam)
     
     # Build flip rate priors from bit_org
-    N_bits <- ncol(codebook)
-    if (!is.null(dim(data_check$bit_org))) {
-      fliprate_priors_bo <- build_corr_priors(
-        N_bits      = N_bits, 
-        bit_round   = data_check$bit_org$imagingRound, 
-        bit_channel = data_check$bit_org$color
-      )
-      # Merge with user-specified flip rates
-      fliprate_priors_bo[names(fliprate_priors)] <- fliprate_priors
-      fliprate_priors <- fliprate_priors_bo
-    }
-    
+    N_bits          <- ncol(codebook)
+    fliprate_priors <- resolve_fliprate_priors(data_check$bit_org, fliprate_priors, N_bits)
+
     # Run misread QC algorithm with L-BFGS (or MCMCSA)
     resids <- test_fr_recovery(
       as.matrix(data_check$STdata),

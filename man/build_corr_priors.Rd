@@ -2,7 +2,7 @@
 % Please edit documentation in R/main.R
 \name{build_corr_priors}
 \alias{build_corr_priors}
-\title{Build a tiered Gaussian prior on bit-flip correlations from imaging-round/channel structure}
+\title{Build a tiered Gaussian prior on bit-flip correlations from imaging-round plus channel structure}
 \usage{
 build_corr_priors(
   N_bits,
@@ -26,7 +26,7 @@ build_corr_priors(
 
 \item{bit_channel}{Vector of length \code{N_bits} giving each bit's color-channel label (e.g. the \code{color} column of the same file), in bit order 1..N_bits.}
 
-\item{sd_round}{Prior sd for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).}
+\item{sd_round}{Prior standard deviation (sd) for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).}
 
 \item{sd_channel}{Prior sd for bit pairs sharing a color channel but not a round (tier 2), default 0.1.}
 
@@ -48,21 +48,28 @@ build_corr_priors(
 A named list suitable as \code{misread.qc}/\code{sim.benchmark}'s \code{fliprate_priors} argument, with \code{sdcorr_pairs} added (length \code{N_bits*(N_bits-1)/2}, in the same bit-pair order as \code{fr_stip}/\code{fr__est}'s correlation columns).
 }
 \description{
-\code{misread.qc}/\code{sim.benchmark} regularize the (otherwise weakly identified -- see the
-package's benchmarking notes) pairwise bit-flip correlation parameters with a single Gaussian
-prior shared by all bit pairs (\code{fliprate_priors$expectedcorr}/\code{sdcorr}). This function
-instead builds a \emph{tiered} version of that same prior: bit pairs that share an imaging round
-get one (wider, i.e. more permissive) prior sd, pairs that only share a color channel get a
-second (narrower) sd, and all remaining pairs get a third, tight, near-zero sd. The rationale is
-that correlated misreads in a MERFISH/MERSCOPE-style experiment most plausibly arise from
-per-round effects (shared hybridization/imaging cycle) or, secondarily, per-channel effects
-(shared optical path across rounds); pairs sharing neither have no obvious mechanism to be
-correlated and the data cannot usefully constrain them anyway, so they are pulled tightly to
-\code{expectedcorr} instead of being estimated as if they were as free as the rest.
+\code{misread.qc} and \code{sim.benchmark} regularize the (otherwise weakly identified -- see the
+package's benchmarking notes tutorial) pairwise bit-flip correlation parameters with a single Gaussian
+prior shared by all bit pairs (\code{fliprate_priors$expectedcorr} and \code{fliprate_priors$sdcorr}). 
+This function instead builds a \emph{tiered} version of that same prior: bit pairs that share an imaging 
+round get one (wider, i.e. more permissive) prior standard deviation (sd), pairs that only share a color 
+channel get a second (narrower) sd, and all remaining pairs get a third, tight, near-zero sd. The rationale 
+is that correlated misreads in a MERFISH/MERSCOPE-style experiment most plausibly arise from per-round
+effects (shared hybridization/imaging cycle) or, secondarily, per-channel effects (shared optical path across
+rounds); pairs sharing neither have no obvious mechanism to be correlated and the data cannot usefully constrain 
+them anyway, so they are pulled tightly to \code{expectedcorr} instead of being estimated as if they were as 
+free as the rest.
 }
 \details{
-The returned list is a complete, ready-to-use \code{fliprate_priors} argument for
-\code{misread.qc}/\code{sim.benchmark} (it includes the usual \code{expected10}/\code{expected01}/
-\code{sd10}/\code{sd01}/\code{expectedcorr}/\code{sdcorr} fields alongside the new
-\code{sdcorr_pairs} vector, so nothing else needs to be merged in).
+The returned list is a complete, ready-to-use \code{fliprate_priors} argument for \code{misread.qc} and 
+\code{sim.benchmark} (it includes the usual \code{expected10}/\code{expected01}/\code{sd10}/\code{sd01}/
+\code{expectedcorr}/\code{sdcorr} fields alongside the new \code{sdcorr_pairs} vector, so nothing else needs 
+to be merged in).
+
+The same list can also be passed as \code{sim.benchmark}'s \code{stip_fliprate_priors} argument, to
+simulate a "true" correlation structure organized by round/channel instead of i.i.d. noise -- but
+there, \code{sdcorr_pairs} is only an \emph{approximation} of that structure: \code{draw_random_fr}
+still draws each pair independently and runs the result through its usual global Cholesky
+normalization, which leaks some of the round/channel tiers' magnitude into the pairs meant to be
+near zero. For an exact, non-leaky version of that organized structure, use \code{build_structured_corrs()} instead.
 }

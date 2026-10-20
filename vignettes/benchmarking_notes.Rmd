@@ -231,12 +231,12 @@ search more room, in a couple of sections.
 
 The codebook's bits aren't drawn from nowhere; they're organized into imaging rounds (3 bits
 imaged together per round) and color channels. That's exactly the kind of thing `build_corr_priors()`
-and `build_structured_truth_priors()` were built to express -- a prior (for fitting) and a
+and `build_structured_corrs()` were built to express -- a prior (for fitting) and a
 matching generative structure (for simulating a *realistic*, non-arbitrary truth) organized the
 same way.
 
 ```{r structured_priors}
-structured_truth <- build_structured_truth_priors(
+structured_truth <- build_structured_corrs(
   N_bits = N_bits, bit_round = bit_org$imagingRound, bit_channel = bit_org$color,
   round_corr_sd = 0.2, channel_rho = 0.5, w_round = 0.7, w_channel = 0.1
 )
@@ -406,5 +406,5 @@ room" turned out to be more than every run in this investigation actually got --
 converged on its own terms. And the residual bias this all started from is real, reproducible
 across five independent mice, and only partially closed even under the best conditions we could
 construct. The practical toolkit this produced -- `mQC_msle_at()`, `mQC_ecc_jacobian_at()`,
-`build_corr_priors()`, and `build_structured_truth_priors()` -- is what's left to work with going
+`build_corr_priors()`, and `build_structured_corrs()` -- is what's left to work with going
 forward.
