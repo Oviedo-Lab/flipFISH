@@ -37,129 +37,145 @@ using LUTr = std::unordered_map<int, V64>;
 // Barcode codebook
 // ... Note: Experimental structure (rounds and channels) captured in FlipRatePriors
 struct Codebook {
-  int  N_bits;
-  V64  barcodes; // list of barcodes
-  Vstr species;  // list of species (gene or blank) names, order matches barcodes
-  Vint blanks;   // list of indexes of barcodes and species, giving which are blanks
-  Vint genes;    // same, but giving indexes of genes
-};
+    int  N_bits;
+    V64  barcodes; // list of barcodes
+    Vstr species;  // list of species (gene or blank) names, order matches barcodes
+    Vint blanks;   // list of indexes of barcodes and species, giving which are blanks
+    Vint genes;    // same, but giving indexes of genes
+  };
 
 // Optimizer results tracking
 struct EvalResults {
-  Vdbl msle_hist;   // covering each optimizer step
-  Vdbl ehc;         // expected hit count, for each barcode (best optimizer step)
-  Vdbl ecc;         // expected corrected count, ... 
-  Vdbl erc;         // expected read count, ... 
-  int  n_evals = 0; // length of msle_hist
-};
+    Vdbl msle_hist;   // covering each optimizer step
+    Vdbl ehc;         // expected hit count, for each barcode (best optimizer step)
+    Vdbl ecc;         // expected corrected count, ... 
+    Vdbl erc;         // expected read count, ... 
+    int  n_evals = 0; // length of msle_hist
+  };
 
 // Flip rates
 struct FlipRates {
-  Vdbl rate10;      // P(1 -> 0) for each bit, so length = N_bits
-  Vdbl rate01;      // P(0 -> 1) for each bit, so length = N_bits
-  Vdbl log_rate10;  // Pre-computed log(rate10): log P(1->0) for each bit, used in TR
-  Vdbl log_rate01;  // Pre-computed log(rate01): log P(0->1) for each bit, used in TR
-  Vdbl corr1;       // Strict lower triangle of luminance noise correlations when bit i (i.e., column bit) is 1 
-  Vdbl corr0;       // ... when bit i is 0
-}; 
+    Vdbl rate10;      // P(1 -> 0) for each bit, so length = N_bits
+    Vdbl rate01;      // P(0 -> 1) for each bit, so length = N_bits
+    Vdbl log_rate10;  // Pre-computed log(rate10): log P(1->0) for each bit, used in TR
+    Vdbl log_rate01;  // Pre-computed log(rate01): log P(0->1) for each bit, used in TR
+    Vdbl corr1;       // Strict lower triangle of luminance noise correlations when bit i (i.e., column bit) is 1 
+    Vdbl corr0;       // ... when bit i is 0
+  }; 
 
 // Flip rate priors
 struct FlipRatePriors {
-  double expected10    = 0.01; // expected rate at which 1 bits flip to 0s
-  double expected01    = 0.05; // expected rate at which 0 bits flip to 1s
-  double sd10          = 0.1;  // standard deviation of the 1-to-0 flip rate
-  double sd01          = 0.2;  // standard deviation of the 0-to-1 flip rate
-  double expectedcorr  = 0.0;  // expected baseline flip-correlation between bits, before considering channels and rounds
-  double sdcorr        = 0.2;  // standard deviation of flip-correlation between bits, before considering channels and rounds
-  double round_corr_sd = 0.2;  // standard deviation fed into each round's own local correlation draw
-  double channel_rho   = 0.5;  // equicorrelation value shared by every pair within a channel, before w_channel scaling (must be >= -1/(m-1) for the smallest channel group of size m)
-  double w_round       = 0.7;  // fraction of each bit's variance attributed to round membership (0 disables the round tier)
-  double w_channel     = 0.1;  // fraction attributed to channel membership (0 disables the channel tier); w_round + w_channel must be <= 1
-  bool   use_latent_structure = false;
-  Vdbl   sdcorr_pairs;
-  Vint   latent_bit_round;
-  Vint   latent_bit_channel;
-  /*
-   * Structured priors: 
-   *    sdcorr_pairs: Optional per-pair override of sdcorr (same strict-lower-triangle pair index as corr1/corr0, 
-   *      i.e. pair (i,j), j<i, at index i*(i-1)/2+j). Empty (default) means "not set" and falls back to sdcorr. 
-   *      Lets a caller express a tiered correlation prior (e.g. a wide prior for bit-pairs sharing an imaging round, 
-   *      a narrower one for pairs only sharing a color channel, and a tight near-zero prior for everything else) 
-   *      via R's build_corr_priors(), instead of one global sd for all pairs.
-   *      
-   *    latent_bit_round and latent_bit_channel: Two-level latent-factor structured-truth generative mode, used only 
-   *      by draw_random_fr() -- NOT used by the fitting penalty above (that's sdcorr/sdcorr_pairs). Active 
-   *      when latent_bit_round and latent_bit_channel are both set (length N_bits each, arbitrary integer group codes;
-   *      see R's build_structured_corrs()). Lets sim.benchmark() simulate a "true" correlation structure organized
-   *      by, e.g., imaging round and color channel, instead of i.i.d. draws across all pairs.
-   */
-};
+    double expected10           = 0.01; // expected rate at which 1 bits flip to 0s
+    double expected01           = 0.05; // expected rate at which 0 bits flip to 1s
+    double sd10                 = 0.1;  // standard deviation of the 1-to-0 flip rate
+    double sd01                 = 0.2;  // standard deviation of the 0-to-1 flip rate
+    double expectedcorr         = 0.0;  // expected baseline flip-correlation between bits, before considering channels and rounds
+    double sdcorr               = 0.2;  // standard deviation of flip-correlation between bits, before considering channels and rounds
+    double round_corr_sd        = 0.2;  // standard deviation fed into each round's own local correlation draw
+    double channel_rho          = 0.5;  // equicorrelation value shared by every pair within a channel, before w_channel scaling (must be >= -1/(m-1) for the smallest channel group of size m)
+    double w_round              = 0.7;  // fraction of each bit's variance attributed to round membership (0 disables the round tier)
+    double w_channel            = 0.1;  // fraction attributed to channel membership (0 disables the channel tier); w_round + w_channel must be <= 1
+    bool   use_latent_structure = false;
+    Vdbl   sdcorr_pairs;
+    Vint   latent_bit_round;
+    Vint   latent_bit_channel;
+    /*
+     * Structured priors: 
+     *    sdcorr_pairs: Optional per-pair override of sdcorr (same strict-lower-triangle pair index as corr1/corr0, 
+     *      i.e. pair (i,j), j<i, at index i*(i-1)/2+j). Empty (default) means "not set" and falls back to sdcorr. 
+     *      Lets a caller express a tiered correlation prior (e.g. a wide prior for bit-pairs sharing an imaging round, 
+     *      a narrower one for pairs only sharing a color channel, and a tight near-zero prior for everything else) 
+     *      via R's build_corr_priors(), instead of one global sd for all pairs.
+     *      
+     *    latent_bit_round and latent_bit_channel: Two-level latent-factor structured-truth generative mode, used only 
+     *      by draw_random_fr() -- NOT used by the fitting penalty above (that's sdcorr/sdcorr_pairs). Active 
+     *      when latent_bit_round and latent_bit_channel are both set (length N_bits each, arbitrary integer group codes;
+     *      see R's build_structured_corrs()). Lets sim.benchmark() simulate a "true" correlation structure organized
+     *      by, e.g., imaging round and color channel, instead of i.i.d. draws across all pairs.
+     */
+  };
 
 // Spatial transcriptomics data
 struct ST_data {
-  // ST data, vectors of length N_barcodes
-  Vdbl           bc_rates;            // Expected count, per cell
-  Vdbl           bc_variance;         // Expected variance in count, among cells
-  Vint           bc_counts;           // Total counts for each barcode across all cells
-  // Codebook and look-up tables
-  Codebook       cb;
-  int            maxHam;              // Max correctable Hamming distance
-  LUT            correction_table;
-  LUTr           correction_table_inverted;
-  // Parameter estimation
-  EvalResults    eval_results;
-  Vint           bc_counts_true;      // Expected true counts for each barcode, based on estimated misread loss
-  double         best_msle;
-  int            n_forks;             // For computing expected counts in parallel
-  int            max_flips;           // For approximating expected counts estimate by ignoring highly unlikely misreads
-  int            report_freq;
-  // Regularization
-  Vdbl           msle_weights;
-  FlipRatePriors fr_priors;
-  double         prior_weight       = 0.0;
-  double         dispersion_weight  = 0.0;
-  // Exact-match read counts
-  bool           has_erc_obs        = false;
-  Vint           bc_counts_erc_obs;
-  double         erc_weight         = 0.0;
-  // Feasibility penalty (shared with mQC_DG's MCMCSA objective; see dg_feasibility_penalty())
-  double         feasibility_weight       = 0.0;
-  int            max_feasibility_barcodes = 40;
-  /*
-   * Regularization terms:
-   *
-   *   1. per-barcode weights for the corrected-count MSLE term (used to up-weight blank barcodes,
-   *   whose true hit count is known to be zero and which therefore carry information
-   *   about misassignment/cross-talk that would otherwise be swamped by well-expressed genes).
-   *
-   *   2. a Gaussian prior pulling flip rates/correlations toward plausible values (mainly to regularize
-   *   the otherwise unidentifiable pairwise bit-flip correlation terms).
-   *
-   *   3. dispersion_weight penalizes the empirical variance of corr1 (and, separately, corr0) across
-   *   bit-pairs for deviating from sdcorr^2. Without this, a degenerate solution where all corr1[i] (or
-   *   corr0[i]) collapse to the same value -- including all zero -- incurs no extra cost beyond the
-   *   pointwise term, even though a nonzero sdcorr says we expect heterogeneity across bit-pairs.
-   *
-   *   4. feasibility_weight penalizes corr1/corr0 for requiring a large correction before they could
-   *   be realized as an actual (PSD) per-barcode Gaussian correlation structure -- see
-   *   dg_feasibility_penalty() -- so this fit stays comparable to what the DG method (mQC_DG) could
-   *   actually simulate from the same corr1/corr0.
-   *
-   * Exact-match read counts:
-   *
-   *   Optional joint fit on exact-match (uncorrected) read counts, in addition to the corrected-count fit.
-   *   This gives the optimizer a second, independent observable that constrains how much of each barcode's
-   *   corrected count came from exact matches vs. correction, which is otherwise invisible to a
-   *   corrected-count-only objective.
-   */
-};
+    // ST data, vectors of length N_barcodes
+    Vdbl           bc_rates;            // Expected count, per cell
+    Vdbl           bc_variance;         // Expected variance in count, among cells
+    Vint           bc_counts;           // Total counts for each barcode across all cells
+    // Codebook and look-up tables
+    Codebook       cb;
+    int            maxHam;              // Max correctable Hamming distance
+    LUT            correction_table;
+    LUTr           correction_table_inverted;
+    // Parameter estimation
+    EvalResults    eval_results;
+    Vint           bc_counts_true;      // Expected true counts for each barcode, based on estimated misread loss
+    double         best_msle;
+    int            n_forks;             // For computing expected counts in parallel
+    int            max_flips;           // For approximating expected counts estimate by ignoring highly unlikely misreads
+    int            report_freq;
+    // Regularization
+    Vdbl           msle_weights;
+    FlipRatePriors fr_priors;
+    double         prior_weight             = 0.0;
+    double         dispersion_weight        = 0.0;
+    // Exact-match read counts
+    bool           has_erc_obs              = false;
+    Vint           bc_counts_erc_obs;
+    double         erc_weight               = 0.0;
+    // Feasibility penalty (shared with mQC_DG's MCMCSA objective; see dg_feasibility_penalty())
+    double         feasibility_weight       = 0.0;
+    int            max_feasibility_barcodes = 40;
+    /*
+     * Regularization terms:
+     *
+     *   1. per-barcode weights for the corrected-count MSLE term (used to up-weight blank barcodes,
+     *   whose true hit count is known to be zero and which therefore carry information
+     *   about misassignment/cross-talk that would otherwise be swamped by well-expressed genes).
+     *
+     *   2. a Gaussian prior pulling flip rates/correlations toward plausible values (mainly to regularize
+     *   the otherwise unidentifiable pairwise bit-flip correlation terms).
+     *
+     *   3. dispersion_weight penalizes the empirical variance of corr1 (and, separately, corr0) across
+     *   bit-pairs for deviating from sdcorr^2. Without this, a degenerate solution where all corr1[i] (or
+     *   corr0[i]) collapse to the same value -- including all zero -- incurs no extra cost beyond the
+     *   pointwise term, even though a nonzero sdcorr says we expect heterogeneity across bit-pairs.
+     *
+     *   4. feasibility_weight penalizes corr1/corr0 for requiring a large correction before they could
+     *   be realized as an actual (PSD) per-barcode Gaussian correlation structure -- see
+     *   dg_feasibility_penalty() -- so this fit stays comparable to what the DG method (mQC_DG) could
+     *   actually simulate from the same corr1/corr0.
+     *
+     * Exact-match read counts:
+     *
+     *   Optional joint fit on exact-match (uncorrected) read counts, in addition to the corrected-count fit.
+     *   This gives the optimizer a second, independent observable that constrains how much of each barcode's
+     *   corrected count came from exact matches vs. correction, which is otherwise invisible to a
+     *   corrected-count-only objective.
+     */
+  };
+
+// Weights controlling the fit objective's upweighting/regularization terms
+struct Weights {
+    double blank       = 1.0; // upweight blank barcodes' corrected/read-count MSLE contribution
+    double prior       = 0.0; // Gaussian prior-penalty strength on flip rates/correlations (0 disables)
+    double dispersion  = 0.0; // dispersion-penalty strength matching empirical variance of corr1/corr0 to sdcorr^2 (0 disables)
+    double erc         = 0.0; // joint exact-match (uncorrected) read-count MSLE term strength (0 disables; ignored if obs_erc is empty)
+    double feasibility = 0.0; // feasibility-penalty strength for corr1/corr0 needing a large correction to become realizable (0 disables)
+    double max_blank   = 1.0; // mQC_DG() only: blank weight at the start of the FR_search/burn-in schedule
+    double min_blank   = 2.0; // mQC_DG() only: blank weight by the end of burn-in (the schedule's held value)
+    /*
+     * Note:  max_blank/min_blank are mQC_DG()-only (the blank-weight schedule's start/end); R always resolves 
+     * these from the data before calling, since a sensible value depends on the gene/blank counts, but they still 
+     * need some literal fallback here for a direct C++-side call that omits them.
+     */
+  };
 
 // Spot simulation
 struct SpotSim {
-  Vint read_counts;      // For each barcode, the total number of spots read as that barcode,
-  Vint corrected_counts; // ... corrected to that barcode
-  Vint hit_counts;       // ... and correctly read as that barcode
-};
+    Vint read_counts;      // For each barcode, the total number of spots read as that barcode,
+    Vint corrected_counts; // ... corrected to that barcode
+    Vint hit_counts;       // ... and correctly read as that barcode
+  };
 
 /*
  * *********************************************************************************************************************
@@ -278,21 +294,6 @@ FlipRatePriors pack_fr_priors(
       fr_priors.use_latent_structure = as<bool>(fliprate_priors["use_latent_structure"]);
     return fr_priors;
   }
-
-// Weights controlling the fit objective's upweighting/regularization terms, shared by mQC(),
-// mQC_DG(), and test_fr_recovery() (see pack_weights()). max_blank/min_blank are mQC_DG()-only
-// (the blank-weight schedule's start/end); R always resolves these from the data before calling,
-// since a sensible value depends on the gene/blank counts, but they still need some literal
-// fallback here for a direct C++-side call that omits them.
-struct Weights {
-  double blank       = 1.0; // upweight blank barcodes' corrected/read-count MSLE contribution
-  double prior       = 0.0; // Gaussian prior-penalty strength on flip rates/correlations (0 disables)
-  double dispersion  = 0.0; // dispersion-penalty strength matching empirical variance of corr1/corr0 to sdcorr^2 (0 disables)
-  double erc         = 0.0; // joint exact-match (uncorrected) read-count MSLE term strength (0 disables; ignored if obs_erc is empty)
-  double feasibility = 0.0; // feasibility-penalty strength for corr1/corr0 needing a large correction to become realizable (0 disables)
-  double max_blank   = 1.0; // mQC_DG() only: blank weight at the start of the FR_search/burn-in schedule
-  double min_blank   = 2.0; // mQC_DG() only: blank weight by the end of burn-in (the schedule's held value)
-};
 
 // Extract weights from input (same containsElementNamed pattern as pack_fr_priors())
 Weights pack_weights(
@@ -2012,18 +2013,14 @@ double mQC_msle_at(
     int                         n_forks,
     int                         max_flips,
     List                        fliprate_priors          = List(),
-    double                      blank_weight             = 1.0,
-    double                      prior_weight             = 0.0,
-    double                      dispersion_weight        = 0.0,
+    List                        weights                  = List(), // See Weights/pack_weights(): blank/prior/dispersion/erc/feasibility, all defaulted there
     NumericVector               obs_erc                  = NumericVector(),
-    double                      erc_weight               = 0.0,
-    double                      feasibility_weight       = 0.0,
     int                         max_feasibility_barcodes = 40
   ) {
-   
+
     // Load in data and set up the msle objective, mirroring mQC()'s setup exactly so the result
     // is comparable to mQC()'s "msle"
-    Weights w{blank_weight, prior_weight, dispersion_weight, erc_weight, feasibility_weight};
+    Weights w = pack_weights(weights);
     auto STdata = prepare_STdata_for_mQC(
       bc_counts, codebook, maxHam, n_forks, max_flips,
       false, // Suppress verbose printouts
@@ -2612,8 +2609,8 @@ List test_fr_recovery(
         FR, bc_counts, codebook,
         maxHam, n_forks, max_flips,
         fliprate_priors,
-        w.blank, w.prior, w.dispersion,
-        obs_erc_s, w.erc
+        weights,
+        obs_erc_s
       );
      
     }
@@ -3162,8 +3159,8 @@ List mQC_DG(
     int           n_tracker_updates,
     int           n_forks,
     int           N_cells,
-    List          fliprate_priors         = List(),
-    List          weights                 = List(), // See Weights/pack_weights(): max_blank/min_blank/prior/dispersion/feasibility, all defaulted there
+    List          fliprate_priors          = List(),
+    List          weights                  = List(), // See Weights/pack_weights(): max_blank/min_blank/prior/dispersion/feasibility, all defaulted there
     int           max_feasibility_barcodes = 40
   ) {
 

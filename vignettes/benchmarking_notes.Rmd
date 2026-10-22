@@ -134,9 +134,9 @@ maxflips_sweep <- run_cached("maxflips_sweep", {
   for (k in seq_along(mf_vals)) {
     t0 <- Sys.time()
     sweep$msle_stip[k] <- mQC_msle_at(baseline$fr_stip, bcc_1, as.matrix(cb_sorted), 3L, 8L, mf_vals[k],
-                                       list(), 10, 0.5, 0.5, numeric(), 0)
+                                       list(), list(blank = 10, prior = 0.5, dispersion = 0.5, erc = 0), numeric())
     sweep$msle_est[k]  <- mQC_msle_at(baseline$fr__est[1, ], bcc_1, as.matrix(cb_sorted), 3L, 8L, mf_vals[k],
-                                       list(), 10, 0.5, 0.5, numeric(), 0)
+                                       list(), list(blank = 10, prior = 0.5, dispersion = 0.5, erc = 0), numeric())
     sweep$eval_seconds[k] <- as.numeric(Sys.time() - t0, units = "secs")
   }
   sweep

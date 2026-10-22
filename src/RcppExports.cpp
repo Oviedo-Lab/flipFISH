@@ -83,8 +83,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // mQC_msle_at
-double mQC_msle_at(const std::vector<double>& FR, NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips, List fliprate_priors, double blank_weight, double prior_weight, double dispersion_weight, NumericVector obs_erc, double erc_weight, double feasibility_weight, int max_feasibility_barcodes);
-RcppExport SEXP _flipFISH_mQC_msle_at(SEXP FRSEXP, SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP fliprate_priorsSEXP, SEXP blank_weightSEXP, SEXP prior_weightSEXP, SEXP dispersion_weightSEXP, SEXP obs_ercSEXP, SEXP erc_weightSEXP, SEXP feasibility_weightSEXP, SEXP max_feasibility_barcodesSEXP) {
+double mQC_msle_at(const std::vector<double>& FR, NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips, List fliprate_priors, List weights, NumericVector obs_erc, int max_feasibility_barcodes);
+RcppExport SEXP _flipFISH_mQC_msle_at(SEXP FRSEXP, SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP obs_ercSEXP, SEXP max_feasibility_barcodesSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -95,14 +95,10 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type n_forks(n_forksSEXP);
     Rcpp::traits::input_parameter< int >::type max_flips(max_flipsSEXP);
     Rcpp::traits::input_parameter< List >::type fliprate_priors(fliprate_priorsSEXP);
-    Rcpp::traits::input_parameter< double >::type blank_weight(blank_weightSEXP);
-    Rcpp::traits::input_parameter< double >::type prior_weight(prior_weightSEXP);
-    Rcpp::traits::input_parameter< double >::type dispersion_weight(dispersion_weightSEXP);
+    Rcpp::traits::input_parameter< List >::type weights(weightsSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type obs_erc(obs_ercSEXP);
-    Rcpp::traits::input_parameter< double >::type erc_weight(erc_weightSEXP);
-    Rcpp::traits::input_parameter< double >::type feasibility_weight(feasibility_weightSEXP);
     Rcpp::traits::input_parameter< int >::type max_feasibility_barcodes(max_feasibility_barcodesSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC_msle_at(FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, blank_weight, prior_weight, dispersion_weight, obs_erc, erc_weight, feasibility_weight, max_feasibility_barcodes));
+    rcpp_result_gen = Rcpp::wrap(mQC_msle_at(FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, weights, obs_erc, max_feasibility_barcodes));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -224,7 +220,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_flipFISH_dg_find_sigma_RootBisection_test", (DL_FUNC) &_flipFISH_dg_find_sigma_RootBisection_test, 3},
     {"_flipFISH_unique_Hamming_cb", (DL_FUNC) &_flipFISH_unique_Hamming_cb, 1},
     {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 12},
-    {"_flipFISH_mQC_msle_at", (DL_FUNC) &_flipFISH_mQC_msle_at, 14},
+    {"_flipFISH_mQC_msle_at", (DL_FUNC) &_flipFISH_mQC_msle_at, 10},
     {"_flipFISH_mQC_ecc_jacobian_at", (DL_FUNC) &_flipFISH_mQC_ecc_jacobian_at, 6},
     {"_flipFISH_mQC_counts_at", (DL_FUNC) &_flipFISH_mQC_counts_at, 6},
     {"_flipFISH_mQC_ehc_jacobian_at", (DL_FUNC) &_flipFISH_mQC_ehc_jacobian_at, 6},
