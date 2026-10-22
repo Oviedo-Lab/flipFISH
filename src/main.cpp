@@ -279,6 +279,36 @@ FlipRatePriors pack_fr_priors(
     return fr_priors;
   }
 
+// Weights controlling the fit objective's upweighting/regularization terms, shared by mQC(),
+// mQC_DG(), and test_fr_recovery() (see pack_weights()). max_blank/min_blank are mQC_DG()-only
+// (the blank-weight schedule's start/end); R always resolves these from the data before calling,
+// since a sensible value depends on the gene/blank counts, but they still need some literal
+// fallback here for a direct C++-side call that omits them.
+struct Weights {
+  double blank       = 1.0; // upweight blank barcodes' corrected/read-count MSLE contribution
+  double prior       = 0.0; // Gaussian prior-penalty strength on flip rates/correlations (0 disables)
+  double dispersion  = 0.0; // dispersion-penalty strength matching empirical variance of corr1/corr0 to sdcorr^2 (0 disables)
+  double erc         = 0.0; // joint exact-match (uncorrected) read-count MSLE term strength (0 disables; ignored if obs_erc is empty)
+  double feasibility = 0.0; // feasibility-penalty strength for corr1/corr0 needing a large correction to become realizable (0 disables)
+  double max_blank   = 1.0; // mQC_DG() only: blank weight at the start of the FR_search/burn-in schedule
+  double min_blank   = 2.0; // mQC_DG() only: blank weight by the end of burn-in (the schedule's held value)
+};
+
+// Extract weights from input (same containsElementNamed pattern as pack_fr_priors())
+Weights pack_weights(
+    const List& weights
+  ) {
+    Weights w; // Initializes with all defaults
+    if (weights.containsElementNamed("blank"))       w.blank       = as<double>(weights["blank"]);
+    if (weights.containsElementNamed("prior"))       w.prior       = as<double>(weights["prior"]);
+    if (weights.containsElementNamed("dispersion"))  w.dispersion  = as<double>(weights["dispersion"]);
+    if (weights.containsElementNamed("erc"))         w.erc         = as<double>(weights["erc"]);
+    if (weights.containsElementNamed("feasibility")) w.feasibility = as<double>(weights["feasibility"]);
+    if (weights.containsElementNamed("max_blank"))   w.max_blank   = as<double>(weights["max_blank"]);
+    if (weights.containsElementNamed("min_blank"))   w.min_blank   = as<double>(weights["min_blank"]);
+    return w;
+  }
+
 // Invert lookup table
 LUTr invert_lookup_table(
     const LUT& lut
@@ -1480,13 +1510,9 @@ static ST_data prepare_STdata_for_mQC(
     int           max_flips,
     bool          verbose,
     const List&   fliprate_priors,
-    double        blank_weight,
-    double        prior_weight,
-    double        dispersion_weight,
+    const Weights& weights,
     NumericVector obs_erc,
-    double        erc_weight,
     bool          warn_on_erc_mismatch,
-    double        feasibility_weight       = 0.0,
     int           max_feasibility_barcodes = 40
   ) {
 
@@ -1496,18 +1522,18 @@ static ST_data prepare_STdata_for_mQC(
     // Set up MSLE weights and the flip-rate/correlation prior.
     STdata.msle_weights.assign(STdata.cb.barcodes.size(), 1.0);
     for (int idx : STdata.cb.blanks) {
-      STdata.msle_weights[idx] = blank_weight;
+      STdata.msle_weights[idx] = weights.blank;
     }
     STdata.fr_priors               = pack_fr_priors(fliprate_priors);
-    STdata.prior_weight            = prior_weight;
-    STdata.dispersion_weight       = dispersion_weight;
-    STdata.feasibility_weight      = feasibility_weight;
+    STdata.prior_weight            = weights.prior;
+    STdata.dispersion_weight       = weights.dispersion;
+    STdata.feasibility_weight      = weights.feasibility;
     STdata.max_feasibility_barcodes = max_feasibility_barcodes;
 
     // Set up the optional joint erc-fit term
-    if (obs_erc.size() == (int)STdata.cb.barcodes.size() && erc_weight > 0.0) {
+    if (obs_erc.size() == (int)STdata.cb.barcodes.size() && weights.erc > 0.0) {
       STdata.has_erc_obs = true;
-      STdata.erc_weight  = erc_weight;
+      STdata.erc_weight  = weights.erc;
       STdata.bc_counts_erc_obs.assign(STdata.cb.barcodes.size(), 0);
       for (int i = 0; i < obs_erc.size(); ++i) {
         STdata.bc_counts_erc_obs[i] = static_cast<int>(std::round(obs_erc[i]));
@@ -1756,33 +1782,30 @@ static double mQC_msle(
 
 // Main misread quality control function
 // [[Rcpp::export]]
-List mQC( 
+List mQC(
     NumericMatrix bc_counts,
     IntegerMatrix codebook,
     int           maxHam,
     int           n_forks,
-    int           max_flips, 
+    int           max_flips,
     int           report_freq       = 1,
     int           maxeval           = 1000,
     List          fliprate_priors   = List(),
-    double        blank_weight      = 1.0,             // Up-weight blank barcodes in the corrected-count MSLE (their true hit count is known to be 0)
-    double        prior_weight      = 0.0,             // Strength of the Gaussian prior penalty on flip rates/correlations (0 disables it, matching prior behavior)
-    double        dispersion_weight = 0.0,             // Strength of the dispersion penalty matching empirical variance of corr1/corr0 to sdcorr^2 (0 disables it, matching prior behavior)
+    List          weights           = List(),          // See Weights/pack_weights(): blank/prior/dispersion/erc/feasibility, all defaulted there
     NumericVector obs_erc           = NumericVector(), // Optional: observed exact-match (uncorrected) read counts per barcode, same row order as bc_counts. Empty (default) disables the erc loss term.
-    double        erc_weight        = 0.0,             // Strength of the joint erc-fit loss term (0 disables it, matching prior behavior; ignored if obs_erc is empty)
     int           n_restarts        = 1,               // Number of L-BFGS restarts; restart 0 uses the standard init, restarts > 0 randomize the correlation block (1 matches prior behavior)
-    double        feasibility_weight       = 0.0,      // Strength of the penalty for corr1/corr0 needing a large correction to become a valid per-barcode Gaussian correlation structure (0 disables it; see dg_feasibility_penalty()). Keeps this fit comparable to mQC_DG().
     int           max_feasibility_barcodes = 40        // Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty per evaluation, for speed on large codebooks
   ) {
-   
+
     // Load in data and set up the msle objective (weights, priors, erc term, misread-loss rescaling)
-    auto STdata = prepare_STdata_for_mQC(
+    Weights w       = pack_weights(weights);
+    auto     STdata = prepare_STdata_for_mQC(
       bc_counts, codebook, maxHam, n_forks, max_flips,
       true, // Make verbose printouts
-      fliprate_priors, blank_weight, prior_weight, dispersion_weight,
-      obs_erc, erc_weight,
+      fliprate_priors, w,
+      obs_erc,
       true, // warn on mismatched obs_erc length
-      feasibility_weight, max_feasibility_barcodes
+      max_feasibility_barcodes
     );
     STdata.report_freq = report_freq;
    
@@ -2000,13 +2023,14 @@ double mQC_msle_at(
    
     // Load in data and set up the msle objective, mirroring mQC()'s setup exactly so the result
     // is comparable to mQC()'s "msle"
+    Weights w{blank_weight, prior_weight, dispersion_weight, erc_weight, feasibility_weight};
     auto STdata = prepare_STdata_for_mQC(
       bc_counts, codebook, maxHam, n_forks, max_flips,
       false, // Suppress verbose printouts
-      fliprate_priors, blank_weight, prior_weight, dispersion_weight,
-      obs_erc, erc_weight,
+      fliprate_priors, w,
+      obs_erc,
       false, // mirror mQC()'s prior (silent) behavior here -- no mismatch warning
-      feasibility_weight, max_feasibility_barcodes
+      max_feasibility_barcodes
     );
     STdata.report_freq = std::numeric_limits<int>::max();
    
@@ -2440,13 +2464,11 @@ List test_fr_recovery(
     int           maxeval,
     List          fliprate_priors = List(),
     List          stip_fliprate_priors = List(),
-    double        blank_weight      = 1.0,
-    double        prior_weight      = 0.0,
-    double        dispersion_weight = 0.0,
-    double        erc_weight        = 0.0,
-    int           n_restarts        = 1
+    List          weights         = List(),
+    int           n_restarts      = 1
   ) {
-    
+    Weights w = pack_weights(weights);
+
     // Load in data
     auto STdata = load_STdata(
       bc_counts, 
@@ -2556,18 +2578,21 @@ List test_fr_recovery(
       }
       
       // Run mQC to recover flip rates
-      Rcpp::Rcout << "\nRunning misread QC with L-BFGS (nlopt) to recover flip rates...\n" << std::endl; 
-      NumericVector obs_erc_s = erc_weight > 0.0
+      Rcpp::Rcout << "\nRunning misread QC with L-BFGS (nlopt) to recover flip rates...\n" << std::endl;
+      NumericVector obs_erc_s = w.erc > 0.0
         ? NumericVector(sim.read_counts.begin(), sim.read_counts.end())
         : NumericVector();
+      // Forward the raw weights list as-is: mQC()'s own pack_weights() unpacks blank/prior/
+      // dispersion/erc from it directly, and (since this List never carries a "feasibility" key --
+      // sim.benchmark() doesn't expose one) falls back to its own default there, same as before.
       List res = mQC(
         bc_counts, codebook,
         maxHam,
-        n_forks, max_flips, 
+        n_forks, max_flips,
         report_freq, maxeval,
         fliprate_priors,
-        blank_weight, prior_weight, dispersion_weight,
-        obs_erc_s, erc_weight,
+        weights,
+        obs_erc_s,
         n_restarts
       );
       NumericMatrix erchc_plus = res["erctc_plus"];
@@ -2587,8 +2612,8 @@ List test_fr_recovery(
         FR, bc_counts, codebook,
         maxHam, n_forks, max_flips,
         fliprate_priors,
-        blank_weight, prior_weight, dispersion_weight,
-        obs_erc_s, erc_weight
+        w.blank, w.prior, w.dispersion,
+        obs_erc_s, w.erc
       );
      
     }
@@ -3119,9 +3144,9 @@ Vint dg_sample_without_replacement(int n, int k) {
 // enforcement), operating on FlipRates (rate10/rate01/corr1/corr0) and FlipRatePriors instead of
 // dg_legacy.R's flat flip-rate/single-correlation vectors. See misread.qc.DG()'s own documentation
 // (R/main.R) for the full argument/return contract; this function expects burnin/FR_search/
-// max_blank_weight/min_blank_weight already resolved (no NULL defaults at this level), and is not
-// itself documented via roxygen (no man page), matching mQC()'s own convention of leaving the
-// internal C++-exported engine undocumented at the Rd level.
+// weights$max_blank/weights$min_blank already resolved (no NULL defaults at this level -- see
+// pack_weights()), and is not itself documented via roxygen (no man page), matching mQC()'s own
+// convention of leaving the internal C++-exported engine undocumented at the Rd level.
 // [[Rcpp::export]]
 List mQC_DG(
     NumericMatrix bc_counts,
@@ -3134,21 +3159,18 @@ List mQC_DG(
     int           min_step_size_divider,
     double        max_temperature,
     double        min_temperature_scale,
-    double        max_blank_weight,
-    double        min_blank_weight,
     int           n_tracker_updates,
     int           n_forks,
     int           N_cells,
     List          fliprate_priors         = List(),
-    double        prior_weight            = 0.0,
-    double        dispersion_weight       = 0.0,
-    double        feasibility_weight      = 0.0,
+    List          weights                 = List(), // See Weights/pack_weights(): max_blank/min_blank/prior/dispersion/feasibility, all defaulted there
     int           max_feasibility_barcodes = 40
   ) {
 
     ST_data STdata = load_STdata(bc_counts, codebook, codebook.ncol(), maxHam, true);
     STdata.n_forks = n_forks;
     FlipRatePriors fr_priors = pack_fr_priors(fliprate_priors);
+    Weights        w         = pack_weights(weights);
 
     int N_bits     = STdata.cb.N_bits;
     int N_genes    = STdata.cb.genes.size();
@@ -3179,13 +3201,13 @@ List mQC_DG(
 
     Vdbl step_size_schedule   = lin_seq(max_step_size, min_step_size, FR_search);
     Vdbl temperature_schedule = lin_seq(max_temperature, min_temperature, FR_search);
-    Vdbl blank_weight_schedule = lin_seq(max_blank_weight, min_blank_weight, FR_search);
+    Vdbl blank_weight_schedule = lin_seq(w.max_blank, w.min_blank, FR_search);
     Vint n_retained_bits       = lin_seq_int(N_bits - 1, 0, FR_search);
     Vint n_retained_corrs      = lin_seq_int(corr_free - 1, 0, FR_search);
     {
       Vdbl s2 = lin_seq(max_step_size, min_step_size, burnin);
       Vdbl t2 = lin_seq(max_temperature, min_temperature, burnin);
-      Vdbl b2 = lin_seq(max_blank_weight, min_blank_weight, burnin);
+      Vdbl b2 = lin_seq(w.max_blank, w.min_blank, burnin);
       Vint rb2 = lin_seq_int(N_bits - 1, 0, burnin);
       Vint rc2 = lin_seq_int(corr_free - 1, 0, burnin);
       step_size_schedule.insert(step_size_schedule.end(), s2.begin(), s2.end());
@@ -3196,7 +3218,7 @@ List mQC_DG(
     }
     step_size_schedule.insert(step_size_schedule.end(), resamples, min_step_size);
     temperature_schedule.insert(temperature_schedule.end(), resamples, min_temperature);
-    blank_weight_schedule.insert(blank_weight_schedule.end(), resamples, min_blank_weight);
+    blank_weight_schedule.insert(blank_weight_schedule.end(), resamples, w.min_blank);
     n_retained_bits.insert(n_retained_bits.end(), resamples, 0);
     n_retained_corrs.insert(n_retained_corrs.end(), resamples, 0);
 
@@ -3219,13 +3241,13 @@ List mQC_DG(
     FlipRates fr_current = pack_fr(FR_current, N_bits);
 
     Rcpp::Rcout << "\n\nRunning initial simulation with structured-prior-drawn flip rates and correlations" << std::endl;
-    DGStepResult init_result = dg_simulation_step(STdata, fr_current, N_cells, max_blank_weight, false, (int)fresh_seed(), n_forks);
+    DGStepResult init_result = dg_simulation_step(STdata, fr_current, N_cells, w.max_blank, false, (int)fresh_seed(), n_forks);
     double sim_mse_current = init_result.sim_summary[2];
-    if (prior_weight > 0.0 || dispersion_weight > 0.0) {
-      sim_mse_current += fr_prior_penalty(fr_current, fr_priors, prior_weight, dispersion_weight, false, nullptr);
+    if (w.prior > 0.0 || w.dispersion > 0.0) {
+      sim_mse_current += fr_prior_penalty(fr_current, fr_priors, w.prior, w.dispersion, false, nullptr);
     }
-    if (feasibility_weight > 0.0) {
-      sim_mse_current += feasibility_weight * dg_feasibility_penalty(fr_current, STdata.cb, max_feasibility_barcodes);
+    if (w.feasibility > 0.0) {
+      sim_mse_current += w.feasibility * dg_feasibility_penalty(fr_current, STdata.cb, max_feasibility_barcodes);
     }
     Rcpp::Rcout << "\nInitial mse: " << std::round(sim_mse_current * 1000.0) / 1000.0 << std::endl;
 
@@ -3299,11 +3321,11 @@ List mQC_DG(
         STdata, fr_next, N_cells, blank_weight_schedule[step], maintain_gene_identity, (int)fresh_seed(), n_forks
       );
       double sim_mse_next = result.sim_summary[2];
-      if (prior_weight > 0.0 || dispersion_weight > 0.0) {
-        sim_mse_next += fr_prior_penalty(fr_next, fr_priors, prior_weight, dispersion_weight, false, nullptr);
+      if (w.prior > 0.0 || w.dispersion > 0.0) {
+        sim_mse_next += fr_prior_penalty(fr_next, fr_priors, w.prior, w.dispersion, false, nullptr);
       }
-      if (feasibility_weight > 0.0) {
-        sim_mse_next += feasibility_weight * dg_feasibility_penalty(fr_next, STdata.cb, max_feasibility_barcodes);
+      if (w.feasibility > 0.0) {
+        sim_mse_next += w.feasibility * dg_feasibility_penalty(fr_next, STdata.cb, max_feasibility_barcodes);
       }
 
       double acceptance_prob = std::min(1.0, std::exp(-(sim_mse_next - sim_mse_current) / temperature_schedule[step]));

@@ -268,25 +268,12 @@ misread.qc <- function(
     n_restarts        = 1,
     maxHam            = NULL,
     fliprate_priors   = list(),
-    weights           = list(
-      blank       = 1.0, 
-      prior       = 0.0, 
-      dispersion  = 0.0, 
-      erc         = 0.0,
-      feasibility = 0.0
-    ),
+    weights           = list(),
     max_feasibility_barcodes = 40
   ) {
     cat("\nRunning misread QC with L-BFGS (nlopt)")
     cat("\nMax evaluations:", maxeval)
-   
-    # Fill in any weight the caller's list omits with its default, so a partial `weights` list
-    # (e.g. missing `erc`) doesn't silently pass NULL -> numeric(0) through to mQC() below
-    weights <- modifyList(
-      list(blank = 1.0, prior = 0.0, dispersion = 0.0, erc = 0.0, feasibility = 0.0),
-      weights
-    )
-   
+
     # Confirm forking is possible and check number of cores
     n_forks         <- check_forks(n_forks)
     # Check bit size, prep codebook and STdata, and set maxHam
@@ -309,13 +296,9 @@ misread.qc <- function(
       as.integer(report_freq),
       as.integer(maxeval),
       as.list(fliprate_priors),
-      as.double(weights$blank),
-      as.double(weights$prior),
-      as.double(weights$dispersion),
+      as.list(weights),
       as.double(data_check$obs_erc),
-      as.double(weights$erc),
       as.integer(n_restarts),
-      as.double(weights$feasibility),
       as.integer(max_feasibility_barcodes)
     )
     
@@ -411,24 +394,12 @@ misread.qc.DG <- function(
     n_forks                  = 1,
     N_cells                  = 1e3,
     fliprate_priors          = list(),
-    weights                  = list(
-      max_blank   = NULL,
-      min_blank   = NULL,
-      prior       = 0.0,
-      dispersion  = 0.0,
-      feasibility = 0.0
-    ),
+    weights                  = list(),
     max_feasibility_barcodes = 40
   ) {
-   
+
     cat("\n\nEstimating FPQC metrics with Markov chain Monte Carlo simulated annealing (DG method)")
-   
-    # Fill in any weight the caller's list omits with its default (same rationale as misread.qc())
-    weights <- modifyList(
-      list(max_blank = NULL, min_blank = NULL, prior = 0.0, dispersion = 0.0, feasibility = 0.0),
-      weights
-    )
-   
+
     # Confirm forking is possible and check number of cores (reuses misread.qc()'s own helper)
     n_forks <- check_forks(n_forks)
    
@@ -473,15 +444,11 @@ misread.qc.DG <- function(
       as.integer(min_step_size_divider),
       as.double(max_temperature),
       as.double(min_temperature_scale),
-      as.double(weights$max_blank),
-      as.double(weights$min_blank),
       as.integer(n_tracker_updates),
       as.integer(n_forks),
       as.integer(N_cells),
       as.list(fliprate_priors),
-      as.double(weights$prior),
-      as.double(weights$dispersion),
-      as.double(weights$feasibility),
+      as.list(weights),
       as.integer(max_feasibility_barcodes)
     )
    
@@ -565,22 +532,11 @@ sim.benchmark <- function(
     n_restarts           = 1,
     maxHam               = NULL,
     fliprate_priors      = list(),
-    stip_fliprate_priors = list(), 
-    weights              = list(
-      blank      = 1.0, 
-      prior      = 0.0, 
-      dispersion = 0.0, 
-      erc        = 0.0
-    )
+    stip_fliprate_priors = list(),
+    weights              = list()
   ) {
     cat("\nBenchmarking misread QC with Bernoulli simulations, using L-BFGS (nlopt)")
-   
-    # Fill in any weight the caller's list omits with its default (same rationale as misread.qc())
-    weights <- modifyList(
-      list(blank = 1.0, prior = 0.0, dispersion = 0.0, erc = 0.0),
-      weights
-    )
-   
+
     # Confirm forking is possible and check number of cores
     n_forks    <- check_forks(n_forks)
     
@@ -607,10 +563,7 @@ sim.benchmark <- function(
       as.integer(maxeval),
       as.list(fliprate_priors),
       as.list(stip_fliprate_priors),
-      as.double(weights$blank),
-      as.double(weights$prior),
-      as.double(weights$dispersion),
-      as.double(weights$erc),
+      as.list(weights),
       as.integer(n_restarts)
     )
    
