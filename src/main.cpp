@@ -71,13 +71,14 @@ struct FlipRatePriors {
   double sd01          = 0.2;  // standard deviation of the 0-to-1 flip rate
   double expectedcorr  = 0.0;  // expected baseline flip-correlation between bits, before considering channels and rounds
   double sdcorr        = 0.2;  // standard deviation of flip-correlation between bits, before considering channels and rounds
+  double round_corr_sd = 0.2;  // standard deviation fed into each round's own local correlation draw
+  double channel_rho   = 0.5;  // equicorrelation value shared by every pair within a channel, before w_channel scaling (must be >= -1/(m-1) for the smallest channel group of size m)
+  double w_round       = 0.7;  // fraction of each bit's variance attributed to round membership (0 disables the round tier)
+  double w_channel     = 0.1;  // fraction attributed to channel membership (0 disables the channel tier); w_round + w_channel must be <= 1
+  bool   use_latent_structure = false;
   Vdbl   sdcorr_pairs;
   Vint   latent_bit_round;
   Vint   latent_bit_channel;
-  double round_corr_sd = 0.2;  // standard deviation fed into each round's own local correlation draw
-  double channel_rho   = 0.0;  // equicorrelation value shared by every pair within a channel, before w_channel scaling (must be >= -1/(m-1) for the smallest channel group of size m)
-  double w_round       = 0.0;  // fraction of each bit's variance attributed to round membership (0 disables the round tier)
-  double w_channel     = 0.0;  // fraction attributed to channel membership (0 disables the channel tier); w_round + w_channel must be <= 1
   /*
    * Structured priors: 
    *    sdcorr_pairs: Optional per-pair override of sdcorr (same strict-lower-triangle pair index as corr1/corr0, 
@@ -240,39 +241,41 @@ FlipRatePriors pack_fr_priors(
   ) {
     FlipRatePriors fr_priors; // Initializes with all defaults
     if (fliprate_priors.containsElementNamed("expected10"))
-      fr_priors.expected10         = as<double>(fliprate_priors["expected10"]);
+      fr_priors.expected10           = as<double>(fliprate_priors["expected10"]);
     if (fliprate_priors.containsElementNamed("expected01"))
-      fr_priors.expected01         = as<double>(fliprate_priors["expected01"]);
+      fr_priors.expected01           = as<double>(fliprate_priors["expected01"]);
     if (fliprate_priors.containsElementNamed("sd10"))
-      fr_priors.sd10               = as<double>(fliprate_priors["sd10"]);
+      fr_priors.sd10                 = as<double>(fliprate_priors["sd10"]);
     if (fliprate_priors.containsElementNamed("sd01"))
-      fr_priors.sd01               = as<double>(fliprate_priors["sd01"]);
+      fr_priors.sd01                 = as<double>(fliprate_priors["sd01"]);
     if (fliprate_priors.containsElementNamed("expectedcorr"))
-      fr_priors.expectedcorr       = as<double>(fliprate_priors["expectedcorr"]);
+      fr_priors.expectedcorr         = as<double>(fliprate_priors["expectedcorr"]);
     if (fliprate_priors.containsElementNamed("sdcorr"))
-      fr_priors.sdcorr             = as<double>(fliprate_priors["sdcorr"]);
+      fr_priors.sdcorr               = as<double>(fliprate_priors["sdcorr"]);
     // Optional tiered prior: per-pair sdcorr override (see FlipRatePriors::sdcorr_pairs)
     if (fliprate_priors.containsElementNamed("sdcorr_pairs")) {
-      NumericVector sp             = as<NumericVector>(fliprate_priors["sdcorr_pairs"]);
-      fr_priors.sdcorr_pairs       = Vdbl(sp.begin(), sp.end());
+      NumericVector sp               = as<NumericVector>(fliprate_priors["sdcorr_pairs"]);
+      fr_priors.sdcorr_pairs         = Vdbl(sp.begin(), sp.end());
     }
     // Optional structured-truth generative mode (see FlipRatePriors::latent_bit_round etc.)
     if (fliprate_priors.containsElementNamed("latent_bit_round")) {
-      IntegerVector lr             = as<IntegerVector>(fliprate_priors["latent_bit_round"]);
-      fr_priors.latent_bit_round   = Vint(lr.begin(), lr.end());
+      IntegerVector lr               = as<IntegerVector>(fliprate_priors["latent_bit_round"]);
+      fr_priors.latent_bit_round     = Vint(lr.begin(), lr.end());
     }
     if (fliprate_priors.containsElementNamed("latent_bit_channel")) {
-      IntegerVector lc             = as<IntegerVector>(fliprate_priors["latent_bit_channel"]);
-      fr_priors.latent_bit_channel = Vint(lc.begin(), lc.end());
+      IntegerVector lc               = as<IntegerVector>(fliprate_priors["latent_bit_channel"]);
+      fr_priors.latent_bit_channel   = Vint(lc.begin(), lc.end());
     }
     if (fliprate_priors.containsElementNamed("round_corr_sd"))
-      fr_priors.round_corr_sd      = as<double>(fliprate_priors["round_corr_sd"]);
+      fr_priors.round_corr_sd        = as<double>(fliprate_priors["round_corr_sd"]);
     if (fliprate_priors.containsElementNamed("channel_rho"))
-      fr_priors.channel_rho        = as<double>(fliprate_priors["channel_rho"]);
+      fr_priors.channel_rho          = as<double>(fliprate_priors["channel_rho"]);
     if (fliprate_priors.containsElementNamed("w_round"))
-      fr_priors.w_round            = as<double>(fliprate_priors["w_round"]);
+      fr_priors.w_round              = as<double>(fliprate_priors["w_round"]);
     if (fliprate_priors.containsElementNamed("w_channel"))
-      fr_priors.w_channel          = as<double>(fliprate_priors["w_channel"]);
+      fr_priors.w_channel            = as<double>(fliprate_priors["w_channel"]);
+    if (fliprate_priors.containsElementNamed("use_latent_structure"))
+      fr_priors.use_latent_structure = as<bool>(fliprate_priors["use_latent_structure"]);
     return fr_priors;
   }
 
@@ -857,8 +860,7 @@ Vdbl draw_random_fr(
     }
     // ... and random bit-flip correlations, by one of two routes:
     Vdbl corr1_final(corr_free), corr0_final(corr_free);
-    bool use_latent_structure = !fr_prior.latent_bit_round.empty() && !fr_prior.latent_bit_channel.empty();
-    if (use_latent_structure) {
+    if (fr_prior.use_latent_structure) {
       // Structured-truth generative mode (see FlipRatePriors::latent_bit_round and
       // draw_structured_corr() above). Draws corr1/corr0 directly in final, already-valid form --
       // no global Cholesky-normalize step, so no cross-tier leakage.

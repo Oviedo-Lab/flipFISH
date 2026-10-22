@@ -2,7 +2,7 @@
 % Please edit documentation in R/main.R
 \name{misread.qc.DG}
 \alias{misread.qc.DG}
-\title{Run misread QC analysis using the dichotomized-Gaussian (DG) spot-simulation / MCMCSA method}
+\title{Run misread QC analysis using the dichotomized-Gaussian (DG) spot-simulation plus MCMCSA method}
 \usage{
 misread.qc.DG(
   STdata,
@@ -30,7 +30,7 @@ misread.qc.DG(
 
 \item{codebook}{Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0. All row names from \code{STdata} must be included in the row names for \code{codebook}.}
 
-\item{bit_org}{Optional data frame/matrix with one row per bit (columns \code{imagingRound}/\code{color}) giving the imaging-round/color-channel structure of the codebook, used to build a tiered \code{fliprate_priors} via \code{build_corr_priors()} -- same as \code{misread.qc}'s \code{bit_org} argument. Default \code{NULL} skips this (unstructured prior, unless \code{fliprate_priors} is supplied directly).}
+\item{bit_org}{Optional data frame/matrix with one row per bit (columns \code{imagingRound}/\code{color}) giving the imaging-round/color-channel structure of the codebook, used to build a tiered \code{fliprate_priors} via \code{build_corr_priors()} -- same as \code{misread.qc}'s \code{bit_org} argument, including the ability to tune the tiering itself by also putting \code{build_corr_priors()}'s \code{sd_round}/\code{sd_channel}/\code{sd_other} in \code{fliprate_priors}. Default \code{NULL} skips this (unstructured prior, unless \code{fliprate_priors} is supplied directly).}
 
 \item{maxHam}{Maximum correctable Hamming distance used for error correction, default \code{NULL} sets it to one less than the minimum Hamming distance between codebook entries.}
 
@@ -54,7 +54,7 @@ misread.qc.DG(
 
 \item{N_cells}{Number of cells to simulate at each step, default 1000. Lowering this trades simulation accuracy for speed -- useful for quick/development runs. Caution: too small a value (a few dozen, on a codebook with many bits) can make the MCMCSA walk itself pathologically slow rather than just less accurate -- the per-step simulation becomes so noisy that the acceptance rate can collapse to near zero once the annealing temperature cools, requiring many thousands of proposals to advance. If a run seems stuck (no progress message for a long time), try raising \code{N_cells} before assuming something is wrong.}
 
-\item{fliprate_priors}{Structured prior on flip rates/bit-flip correlations, same format \code{misread.qc}/\code{build_corr_priors()} use. Default \code{list()} (unstructured). Drives the MCMCSA walk's initial draw, per-pair proposal step-size tiering (via \code{sdcorr_pairs}), and the prior-penalty term (via \code{weights$prior}/\code{weights$dispersion}).}
+\item{fliprate_priors}{Structured prior on flip rates/bit-flip correlations, same format \code{misread.qc}/\code{build_corr_priors()} use (see \code{misread.qc}'s \code{fliprate_priors} argument for the full element list). Default \code{list()} (unstructured). Drives the MCMCSA walk's initial draw, per-pair proposal step-size tiering (via \code{sdcorr_pairs}), and the prior-penalty term (via \code{weights$prior}/\code{weights$dispersion}).}
 
 \item{weights}{List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank}/\code{min_blank} are the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, mirroring \code{misread.qc}'s constant \code{weights$blank} but as a schedule rather than a single scalar, since \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; \code{prior}/\code{dispersion}/\code{feasibility} all default to 0, matching \code{misread.qc}'s "0 disables it" convention: \code{prior}/\code{dispersion} are the same Gaussian-prior/dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes corr1/corr0 for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.}
 
