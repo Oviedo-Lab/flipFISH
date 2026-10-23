@@ -14,9 +14,9 @@ misread.qc(
   maxeval = 500,
   n_restarts = 1,
   maxHam = NULL,
+  max_fs_bc = 40,
   fliprate_priors = list(),
-  weights = list(blank = 1, prior = 0, dispersion = 0, erc = 0, feasibility = 0),
-  max_feasibility_barcodes = 40
+  weights = list()
 )
 }
 \arguments{
@@ -24,9 +24,9 @@ misread.qc(
 
 \item{codebook}{Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0, depending on whether an mRNA molecule of the species represented by the row is expected to luminescence in the bit represented by the column. All row names from \code{STdata} must be included in the row names for \code{codebook}.}
 
-\item{bit_org}{Optional data frame/matrix with one row per bit (columns \code{imagingRound} and \code{color}) giving the imaging-round plus color-channel structure of the codebook, used to build a tiered \code{fliprate_priors} via \code{build_corr_priors()}. Default \code{NULL} skips this (unstructured prior, unless \code{fliprate_priors} is supplied directly). When \code{bit_org} is supplied, \code{fliprate_priors} may additionally include \code{build_corr_priors()}'s own \code{sd_round}/\code{sd_channel}/\code{sd_other} to tune the tiering itself (see \code{fliprate_priors} below); these are forwarded into the \code{build_corr_priors()} call, not just overlaid on its result.}
+\item{bit_org}{Optional data frame/matrix with one row per bit (columns \code{imagingRound} and \code{color}) giving the imaging-round plus color-channel structure of the codebook, used to build a tiered \code{fliprate_priors} via \code{build_corr_priors()}. Default \code{NULL} skips this (unstructured prior, unless \code{fliprate_priors} is supplied directly). When \code{bit_org} is supplied, \code{fliprate_priors} may additionally include \code{build_corr_priors()}'s own \code{sd_round}/\code{sd_channel}/\code{sd_other} to tune the tiering itself (see the "Flip-rate priors" section below); these are forwarded into the \code{build_corr_priors()} call, not just overlaid on its result.}
 
-\item{n_forks}{Number of process forks to use for expected-count computation (i.e., parallel computation), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.}
+\item{n_forks}{Number of process forks to use for parallelizable computation (expected-count computation under this, the L-BFGS method; spot simulation under the DG/MCMCSA method, \code{misread.qc.DG}), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.}
 
 \item{max_flips}{When analytically computing expected counts per barcode, the function will ignore misreads larger than this Hamming distance. The default is 0, which is interpreted as no limit. Using all misreads will likely be prohibitively slow; a value between six and ten is probably advisable. Values of 3 or 4 work well for initial trouble shooting and testing.}
 
@@ -38,24 +38,16 @@ misread.qc(
 
 \item{maxHam}{Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries. This value may or may not be too aggressive. There is a trade-off between missing spots of barcode \emph{b} misread as not \emph{b} (low \code{maxHam}) and correcting spots not of barcode \emph{b} as \emph{b} (high \code{maxHam}). Also, lower \code{maxHam} will run faster and use less memory than higher \code{maxHam}.}
 
-\item{fliprate_priors}{Structured prior list on flip rates and bit-flip correlations (mirrors the C++ \code{FlipRatePriors} struct), with elements:\itemize{
-   \item \code{expected10}: Expected rate at which 1 bits flip to 0s, default 0.01.
-   \item \code{expected01}: Expected rate at which 0 bits flip to 1s, default 0.05.
-   \item \code{sd10}: Standard deviation of the 1-to-0 flip rate, default 0.1.
-   \item \code{sd01}: Standard deviation of the 0-to-1 flip rate, default 0.2.
-   \item \code{expectedcorr}: Expected baseline flip-correlation between bits, before considering channels and rounds, default 0.0.
-   \item \code{sdcorr}: Standard deviation of flip-correlation between bits, before considering channels and rounds, default 0.2.
-   \item \code{sdcorr_pairs}: Optional per-pair override of \code{sdcorr} (same strict-lower-triangle pair index as \code{corr1}/\code{corr0}, i.e. pair \code{(i,j)}, \code{j<i}, at index \code{i*(i-1)/2+j}). Empty (the default) means "not set" and falls back to \code{sdcorr}. Lets a caller express a tiered correlation prior (e.g. a wide prior for bit-pairs sharing an imaging round, a narrower one for pairs only sharing a color channel, and a tight near-zero prior for everything else) via \code{build_corr_priors()}, instead of one global sd for all pairs.
-} Any element omitted from the supplied list falls back to its default (so \code{list()}, the function default, is equivalent to the defaults above with no tiering). These values are used as the Gaussian prior-penalty term (when \code{weights$prior}/\code{weights$dispersion} are non-zero) and to draw every restart's initial point (see \code{n_restarts}). When \code{bit_org} is also supplied, \code{fliprate_priors} may instead/additionally include \code{build_corr_priors()}'s \code{sd_round}/\code{sd_channel}/\code{sd_other} (rather than a hand-built \code{sdcorr_pairs}) to tune the per-tier sds that \code{build_corr_priors()} uses to construct \code{sdcorr_pairs} automatically; any such elements are forwarded into the \code{build_corr_priors()} call rather than overlaid on its output.}
+\item{max_fs_bc}{Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty each time it's evaluated (per L-BFGS objective evaluation under this method; per MCMCSA step under the DG method, \code{misread.qc.DG}), for speed on large codebooks. Ignored when \code{weights$feasibility} is 0. Default 40.}
+
+\item{fliprate_priors}{Structured prior list on flip rates and bit-flip correlations (mirrors the C++ \code{FlipRatePriors} struct, plus possibly additional terms to construct \code{sdcorr_pairs} from \code{bit_org}); see the "Flip-rate priors" section below for the full element list.}
 
 \item{weights}{List with elements \code{blank}, \code{prior}, \code{dispersion}, \code{erc}, \code{feasibility} (defaults 1.0, 0.0, 0.0, 0.0, 0.0): \code{blank} upweights blank barcodes' counts in the fit objective; \code{prior}/\code{dispersion} scale the Gaussian-prior/dispersion penalty on flip rates/bit-flip correlations from \code{fliprate_priors} (0 disables); \code{erc} weights the read-count (uncorrected) msle term combined with the corrected-count msle when \code{STdata} includes \code{counts_uncorrected} (0 disables, so only the corrected-count msle is used); \code{feasibility} penalizes bit-flip correlations for requiring a large correction before they could be realized as an actual (PSD) per-barcode correlation structure (0 disables). Any element omitted from the supplied list falls back to its default.}
-
-\item{max_feasibility_barcodes}{Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty per objective evaluation, for speed on large codebooks. Ignored when \code{weights$feasibility} is 0. Default 40.}
 }
 \value{
 A list giving:\itemize{
    \item \code{STdata}: a dataframe giving the summary data from the ST run used in the estimation.
-   \item \code{fliprates}: a labeled vector giving the estimated (i.e., best fit) flip rates and bit-flip correlations from the optimization. 
+   \item \code{fliprates}: a labeled vector giving the estimated (i.e., best fit) flip rates and bit-flip correlations from the optimization.
    \item \code{erctc_plus}: a data frame giving, for each barcode, the read, corrected, and hit counts as well as \code{CR} and \code{PPV} values implied by the analytic conditional probability model, given the values in \code{fliprates}, plus a 95\% confidence interval on \code{PPV} (\code{PPV_lower}/\code{PPV_upper}) from a delta-method (Laplace) approximation -- this propagates uncertainty in the fitted flip-rate/correlation parameters through to PPV, via a Gauss-Newton information matrix truncated to its well-conditioned directions, rather than treating PPV as a simple binomial proportion (a naive Wald interval on PPV alone understates its true uncertainty by roughly an order of magnitude, since it ignores parameter uncertainty entirely -- see \code{old_vs_new_ppv_comparison/} at the package root). Column names are: "erc", "ecc", "ehc", "CR", "PPV", "PPV_lower", "PPV_upper".
    \item \code{msle}: A numeric value giving the minimal mean squared log error found by the L-BFGS optimization of the flip rates and bit-flip correlations.
 }
@@ -68,3 +60,30 @@ This function takes summary statistics (\code{STdata}) from a FISH-based spatial
 }
  The "best fit" is defined as least mean squared log error (msle) computed by comparing the analytically implied expected corrected counts to the observed corrected counts included in \code{STdata}. If \code{counts_uncorrected} are included in \code{STdata} and \code{weights$erc} > 0, then the msle is computed for the read count as well and combined with the corrected-count msle accounting the value set by \code{weights$erc}. Counts (corrected and read) for blank barcodes can be upweighted via \code{weights$blank}. Penalty terms based on flip rate priors (expected value for flip rates, expected values and dispersion for bit-flip correlations) and bit-flip correlation feasibility can be added by setting non-zero values for \code{weights$prior}, \code{weights$dispersion}, and \code{weights$feasibility}. For each barcode, the expected "confidence ratio" (CR) and expected positive predictive value (PPV) are computed, from these implied count values. The CR is a quality control metric proposed by the original developers of MERFISH (e.g., see DOI 10.1016/bs.mie.2016.03.020) defined per barcode as the read count over the corrected count, while PPV is defined as the hit count over the corrected count. That is, PPV tells us, for each barcode \emph{b}, the expected percentage of spots decoded as \emph{b} which are in fact \emph{b}.
 }
+\section{Flip-rate priors}{
+
+\code{fliprate_priors} (and, where applicable, \code{stip_fliprate_priors}) is a structured prior
+list on flip rates and bit-flip correlations (mirrors the C++ \code{FlipRatePriors} struct, plus
+possibly additional terms to construct \code{sdcorr_pairs} from \code{bit_org}), with
+elements:\itemize{
+   \item \code{expected10}: Expected rate at which 1 bits flip to 0s, default 0.01.
+   \item \code{expected01}: Expected rate at which 0 bits flip to 1s, default 0.05.
+   \item \code{sd10}: Standard deviation (sd) of the 1-to-0 flip rate, default 0.1.
+   \item \code{sd01}: sd of the 0-to-1 flip rate, default 0.2.
+   \item \code{expectedcorr}: Expected baseline flip-correlation between bits, before considering channels and rounds, default 0.0.
+   \item \code{sdcorr}: sd of flip-correlation between bits, before considering channels and rounds, default 0.2.
+   \item \code{round_corr_sd}: sd fed into each round's own local correlation draw, default 0.2.
+   \item \code{channel_rho}: Equicorrelation value shared by every pair within a channel, before w_channel scaling (must be >= -1/(m-1) for the smallest channel group of size m), default 0.5.
+   \item \code{w_round}: Fraction of each bit's variance attributed to round membership (0 disables the round tier), default 0.7.
+   \item \code{w_channel}: Fraction attributed to channel membership (0 disables the channel tier); w_round + w_channel must be <= 1, default 0.1.
+   \item \code{sd_round}: For use with bit_org; Prior sd for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).
+   \item \code{sd_channel}: For use with bit_org; Prior sd for bit pairs sharing a color channel but not a round (tier 2), default 0.1.
+   \item \code{sd_other}: For use with bit_org; Prior sd for all remaining bit pairs (tier 3, pinned near \code{expectedcorr}), default 0.01.
+} Any element omitted from the supplied list falls back to its default. These values are used as
+the Gaussian prior-penalty term (when \code{weights$prior} or \code{weights$dispersion} are
+non-zero) and to draw the initial parameter point(s) before fitting begins. When \code{bit_org} is
+also supplied, \code{latent_bit_round} and \code{latent_bit_channel} will be extracted
+automatically and \code{sdcorr_pairs} will be automatically built from these two factors plus the
+values for \code{sd_round}, \code{sd_channel}, and \code{sd_other} (see \code{build_corr_priors()}).
+}
+

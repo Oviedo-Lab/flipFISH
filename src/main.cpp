@@ -116,15 +116,15 @@ struct ST_data {
     // Regularization
     Vdbl           msle_weights;
     FlipRatePriors fr_priors;
-    double         prior_weight             = 0.0;
-    double         dispersion_weight        = 0.0;
+    double         prior_weight       = 0.0;
+    double         dispersion_weight  = 0.0;
     // Exact-match read counts
-    bool           has_erc_obs              = false;
+    bool           has_erc_obs        = false;
     Vint           bc_counts_erc_obs;
-    double         erc_weight               = 0.0;
+    double         erc_weight         = 0.0;
     // Feasibility penalty (shared with mQC_DG's MCMCSA objective; see dg_feasibility_penalty())
-    double         feasibility_weight       = 0.0;
-    int            max_feasibility_barcodes = 40;
+    double         feasibility_weight = 0.0;
+    int            max_fs_bc          = 40;
     /*
      * Regularization terms:
      *
@@ -1537,7 +1537,7 @@ static ST_data prepare_STdata_for_mQC(
     bool          verbose,
     const List&   fliprate_priors,
     const Weights& weights,
-    int           max_feasibility_barcodes = 40
+    int           max_fs_bc = 40
   ) {
 
     auto STdata = load_STdata(bc_counts, codebook, max_flips, maxHam, verbose);
@@ -1552,7 +1552,7 @@ static ST_data prepare_STdata_for_mQC(
     STdata.prior_weight            = weights.prior;
     STdata.dispersion_weight       = weights.dispersion;
     STdata.feasibility_weight      = weights.feasibility;
-    STdata.max_feasibility_barcodes = max_feasibility_barcodes;
+    STdata.max_fs_bc = max_fs_bc;
 
     // Set up the optional joint erc-fit term: load_STdata() already parsed bc_counts' optional
     // "counts_uncorrected" column into has_erc_obs/bc_counts_erc_obs, if present; just gate it on
@@ -1761,7 +1761,7 @@ static double mQC_msle(
     if (d->feasibility_weight > 0.0) {
       Vdbl feas_grad;
       if (do_grad) {feas_grad.assign(n_params, 0.0);}
-      double pen = dg_feasibility_penalty(fr, d->cb, d->max_feasibility_barcodes, do_grad, do_grad ? &feas_grad : nullptr);
+      double pen = dg_feasibility_penalty(fr, d->cb, d->max_fs_bc, do_grad, do_grad ? &feas_grad : nullptr);
       msle += d->feasibility_weight * pen;
       if (do_grad) {
         for (int k = 2*N_bits; k < n_params; ++k) {grad[k] += d->feasibility_weight * feas_grad[k];}
@@ -1802,7 +1802,7 @@ List mQC(
     List          fliprate_priors   = List(),
     List          weights           = List(),          // See Weights/pack_weights(): blank/prior/dispersion/erc/feasibility, all defaulted there
     int           n_restarts        = 1,               // Number of L-BFGS restarts; restart 0 uses the standard init, restarts > 0 randomize the correlation block (1 matches prior behavior)
-    int           max_feasibility_barcodes = 40        // Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty per evaluation, for speed on large codebooks
+    int           max_fs_bc = 40        // Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty per evaluation, for speed on large codebooks
   ) {
 
     // Load in data and set up the msle objective (weights, priors, erc term, misread-loss rescaling)
@@ -1811,7 +1811,7 @@ List mQC(
       bc_counts, codebook, maxHam, n_forks, max_flips,
       true, // Make verbose printouts
       fliprate_priors, w,
-      max_feasibility_barcodes
+      max_fs_bc
     );
     STdata.report_freq = report_freq;
    
@@ -2019,7 +2019,7 @@ double mQC_msle_at(
     int                         max_flips,
     List                        fliprate_priors          = List(),
     List                        weights                  = List(), // See Weights/pack_weights(): blank/prior/dispersion/erc/feasibility, all defaulted there
-    int                         max_feasibility_barcodes = 40
+    int                         max_fs_bc = 40
   ) {
 
     // Load in data and set up the msle objective, mirroring mQC()'s setup exactly so the result
@@ -2029,7 +2029,7 @@ double mQC_msle_at(
       bc_counts, codebook, maxHam, n_forks, max_flips,
       false, // Suppress verbose printouts
       fliprate_priors, w,
-      max_feasibility_barcodes
+      max_fs_bc
     );
     STdata.report_freq = std::numeric_limits<int>::max();
    
@@ -3186,7 +3186,7 @@ List mQC_DG(
     int           N_cells,
     List          fliprate_priors          = List(),
     List          weights                  = List(), // See Weights/pack_weights(): max_blank/min_blank/prior/dispersion/feasibility, all defaulted there
-    int           max_feasibility_barcodes = 40
+    int           max_fs_bc = 40
   ) {
 
     ST_data STdata = load_STdata(bc_counts, codebook, codebook.ncol(), maxHam, true);
@@ -3269,7 +3269,7 @@ List mQC_DG(
       sim_mse_current += fr_prior_penalty(fr_current, fr_priors, w.prior, w.dispersion, false, nullptr);
     }
     if (w.feasibility > 0.0) {
-      sim_mse_current += w.feasibility * dg_feasibility_penalty(fr_current, STdata.cb, max_feasibility_barcodes);
+      sim_mse_current += w.feasibility * dg_feasibility_penalty(fr_current, STdata.cb, max_fs_bc);
     }
     Rcpp::Rcout << "\nInitial mse: " << std::round(sim_mse_current * 1000.0) / 1000.0 << std::endl;
 
@@ -3347,7 +3347,7 @@ List mQC_DG(
         sim_mse_next += fr_prior_penalty(fr_next, fr_priors, w.prior, w.dispersion, false, nullptr);
       }
       if (w.feasibility > 0.0) {
-        sim_mse_next += w.feasibility * dg_feasibility_penalty(fr_next, STdata.cb, max_feasibility_barcodes);
+        sim_mse_next += w.feasibility * dg_feasibility_penalty(fr_next, STdata.cb, max_fs_bc);
       }
 
       double acceptance_prob = std::min(1.0, std::exp(-(sim_mse_next - sim_mse_current) / temperature_schedule[step]));

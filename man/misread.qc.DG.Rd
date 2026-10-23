@@ -20,19 +20,18 @@ misread.qc.DG(
   n_forks = 1,
   N_cells = 1000,
   fliprate_priors = list(),
-  weights = list(max_blank = NULL, min_blank = NULL, prior = 0, dispersion = 0,
-    feasibility = 0),
-  max_feasibility_barcodes = 40
+  weights = list(),
+  max_fs_bc = 40
 )
 }
 \arguments{
-\item{STdata}{Numeric matrix or data frame with rows as barcodes, columns labeled "rates", "variance", "counts". Must have barcode names (e.g., gene or protein species) as row names, with blank species having "Blank" in their name.}
+\item{STdata}{Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", and optionally "counts_uncorrected". The "counts" column must provide the corrected count, the "counts_uncorrected" column can be used to optionally provide the read count. The column "rates" is assumed to hold the per-cell rates for counts, i.e., corrected count over the number of cells. The "variance" column is assumed to hold the variance of the corrected count across cells. The matrix must have barcode names (e.g., gene or protein species) as row names, with blank species having "Blank" in their name.}
 
-\item{codebook}{Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0. All row names from \code{STdata} must be included in the row names for \code{codebook}.}
+\item{codebook}{Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0, depending on whether an mRNA molecule of the species represented by the row is expected to luminescence in the bit represented by the column. All row names from \code{STdata} must be included in the row names for \code{codebook}.}
 
-\item{bit_org}{Optional data frame/matrix with one row per bit (columns \code{imagingRound}/\code{color}) giving the imaging-round/color-channel structure of the codebook, used to build a tiered \code{fliprate_priors} via \code{build_corr_priors()} -- same as \code{misread.qc}'s \code{bit_org} argument, including the ability to tune the tiering itself by also putting \code{build_corr_priors()}'s \code{sd_round}/\code{sd_channel}/\code{sd_other} in \code{fliprate_priors}. Default \code{NULL} skips this (unstructured prior, unless \code{fliprate_priors} is supplied directly).}
+\item{bit_org}{Optional data frame/matrix with one row per bit (columns \code{imagingRound} and \code{color}) giving the imaging-round plus color-channel structure of the codebook, used to build a tiered \code{fliprate_priors} via \code{build_corr_priors()}. Default \code{NULL} skips this (unstructured prior, unless \code{fliprate_priors} is supplied directly). When \code{bit_org} is supplied, \code{fliprate_priors} may additionally include \code{build_corr_priors()}'s own \code{sd_round}/\code{sd_channel}/\code{sd_other} to tune the tiering itself (see the "Flip-rate priors" section below); these are forwarded into the \code{build_corr_priors()} call, not just overlaid on its result.}
 
-\item{maxHam}{Maximum correctable Hamming distance used for error correction, default \code{NULL} sets it to one less than the minimum Hamming distance between codebook entries.}
+\item{maxHam}{Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries. This value may or may not be too aggressive. There is a trade-off between missing spots of barcode \emph{b} misread as not \emph{b} (low \code{maxHam}) and correcting spots not of barcode \emph{b} as \emph{b} (high \code{maxHam}). Also, lower \code{maxHam} will run faster and use less memory than higher \code{maxHam}.}
 
 \item{resamples}{Number of steps to take in the post-burn-in random walk (these are the steps summarized in the returned results).}
 
@@ -50,15 +49,15 @@ misread.qc.DG(
 
 \item{n_tracker_updates}{Number of progress updates to print over the full walk, default 100.}
 
-\item{n_forks}{Number of process forks to use for simulating spots (i.e., parallel computation), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.}
+\item{n_forks}{Number of process forks to use for parallelizable computation (expected-count computation under this, the L-BFGS method; spot simulation under the DG/MCMCSA method, \code{misread.qc.DG}), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.}
 
 \item{N_cells}{Number of cells to simulate at each step, default 1000. Lowering this trades simulation accuracy for speed -- useful for quick/development runs. Caution: too small a value (a few dozen, on a codebook with many bits) can make the MCMCSA walk itself pathologically slow rather than just less accurate -- the per-step simulation becomes so noisy that the acceptance rate can collapse to near zero once the annealing temperature cools, requiring many thousands of proposals to advance. If a run seems stuck (no progress message for a long time), try raising \code{N_cells} before assuming something is wrong.}
 
-\item{fliprate_priors}{Structured prior on flip rates/bit-flip correlations, same format \code{misread.qc}/\code{build_corr_priors()} use (see \code{misread.qc}'s \code{fliprate_priors} argument for the full element list). Default \code{list()} (unstructured). Drives the MCMCSA walk's initial draw, per-pair proposal step-size tiering (via \code{sdcorr_pairs}), and the prior-penalty term (via \code{weights$prior}/\code{weights$dispersion}).}
+\item{fliprate_priors}{Structured prior list on flip rates and bit-flip correlations (mirrors the C++ \code{FlipRatePriors} struct, plus possibly additional terms to construct \code{sdcorr_pairs} from \code{bit_org}); see the "Flip-rate priors" section below for the full element list.}
 
 \item{weights}{List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank}/\code{min_blank} are the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, mirroring \code{misread.qc}'s constant \code{weights$blank} but as a schedule rather than a single scalar, since \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; \code{prior}/\code{dispersion}/\code{feasibility} all default to 0, matching \code{misread.qc}'s "0 disables it" convention: \code{prior}/\code{dispersion} are the same Gaussian-prior/dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes corr1/corr0 for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.}
 
-\item{max_feasibility_barcodes}{Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty per step, for speed on large codebooks. Ignored when \code{weights$feasibility} is 0.}
+\item{max_fs_bc}{Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty each time it's evaluated (per L-BFGS objective evaluation under this method; per MCMCSA step under the DG method, \code{misread.qc.DG}), for speed on large codebooks. Ignored when \code{weights$feasibility} is 0. Default 40.}
 }
 \value{
 A list giving:\itemize{
@@ -99,3 +98,30 @@ closely in expectation; this avoids porting that secondary diagnostic machinery.
 variant) are always \code{NA} here, same as \code{misread.qc.DG.legacy} already is except near its
 own \code{FR_search} boundary.
 }
+\section{Flip-rate priors}{
+
+\code{fliprate_priors} (and, where applicable, \code{stip_fliprate_priors}) is a structured prior
+list on flip rates and bit-flip correlations (mirrors the C++ \code{FlipRatePriors} struct, plus
+possibly additional terms to construct \code{sdcorr_pairs} from \code{bit_org}), with
+elements:\itemize{
+   \item \code{expected10}: Expected rate at which 1 bits flip to 0s, default 0.01.
+   \item \code{expected01}: Expected rate at which 0 bits flip to 1s, default 0.05.
+   \item \code{sd10}: Standard deviation (sd) of the 1-to-0 flip rate, default 0.1.
+   \item \code{sd01}: sd of the 0-to-1 flip rate, default 0.2.
+   \item \code{expectedcorr}: Expected baseline flip-correlation between bits, before considering channels and rounds, default 0.0.
+   \item \code{sdcorr}: sd of flip-correlation between bits, before considering channels and rounds, default 0.2.
+   \item \code{round_corr_sd}: sd fed into each round's own local correlation draw, default 0.2.
+   \item \code{channel_rho}: Equicorrelation value shared by every pair within a channel, before w_channel scaling (must be >= -1/(m-1) for the smallest channel group of size m), default 0.5.
+   \item \code{w_round}: Fraction of each bit's variance attributed to round membership (0 disables the round tier), default 0.7.
+   \item \code{w_channel}: Fraction attributed to channel membership (0 disables the channel tier); w_round + w_channel must be <= 1, default 0.1.
+   \item \code{sd_round}: For use with bit_org; Prior sd for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).
+   \item \code{sd_channel}: For use with bit_org; Prior sd for bit pairs sharing a color channel but not a round (tier 2), default 0.1.
+   \item \code{sd_other}: For use with bit_org; Prior sd for all remaining bit pairs (tier 3, pinned near \code{expectedcorr}), default 0.01.
+} Any element omitted from the supplied list falls back to its default. These values are used as
+the Gaussian prior-penalty term (when \code{weights$prior} or \code{weights$dispersion} are
+non-zero) and to draw the initial parameter point(s) before fitting begins. When \code{bit_org} is
+also supplied, \code{latent_bit_round} and \code{latent_bit_channel} will be extracted
+automatically and \code{sdcorr_pairs} will be automatically built from these two factors plus the
+values for \code{sd_round}, \code{sd_channel}, and \code{sd_other} (see \code{build_corr_priors()}).
+}
+

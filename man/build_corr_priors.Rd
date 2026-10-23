@@ -2,74 +2,45 @@
 % Please edit documentation in R/main.R
 \name{build_corr_priors}
 \alias{build_corr_priors}
-\title{Build a tiered Gaussian prior on bit-flip correlations from imaging-round plus channel structure}
+\title{Helper function to build a tiered Gaussian prior on bit-flip correlations from imaging-round plus channel structure}
 \usage{
-build_corr_priors(
-  N_bits,
-  bit_round,
-  bit_channel,
-  sd_round = 0.2,
-  sd_channel = 0.1,
-  sd_other = 0.01,
-  expectedcorr = 0,
-  sdcorr = 0.2,
-  expected10 = 0.01,
-  expected01 = 0.05,
-  sd10 = 0.1,
-  sd01 = 0.2
-)
+build_corr_priors(bit_org = NULL, fliprate_priors = list())
 }
 \arguments{
-\item{N_bits}{Integer, number of bits in the codebook.}
+\item{bit_org}{Optional data frame/matrix with one row per bit (columns \code{imagingRound} and \code{color}) giving the imaging-round plus color-channel structure of the codebook, used to build a tiered \code{fliprate_priors} via \code{build_corr_priors()}. Default \code{NULL} skips this (unstructured prior, unless \code{fliprate_priors} is supplied directly). When \code{bit_org} is supplied, \code{fliprate_priors} may additionally include \code{build_corr_priors()}'s own \code{sd_round}/\code{sd_channel}/\code{sd_other} to tune the tiering itself (see the "Flip-rate priors" section below); these are forwarded into the \code{build_corr_priors()} call, not just overlaid on its result.}
 
-\item{bit_round}{Vector of length \code{N_bits} giving each bit's imaging-round label (any type that supports \code{==}, e.g. the \code{imagingRound} column of a MERSCOPE \code{codebook_organization.csv}, in bit order 1..N_bits).}
-
-\item{bit_channel}{Vector of length \code{N_bits} giving each bit's color-channel label (e.g. the \code{color} column of the same file), in bit order 1..N_bits.}
-
-\item{sd_round}{Prior standard deviation (sd) for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).}
-
-\item{sd_channel}{Prior sd for bit pairs sharing a color channel but not a round (tier 2), default 0.1.}
-
-\item{sd_other}{Prior sd for all remaining bit pairs (tier 3, pinned near \code{expectedcorr}), default 0.01.}
-
-\item{expectedcorr}{Prior mean for all tiers, default 0.0.}
-
-\item{sdcorr}{Fallback scalar sd, carried through unchanged for use anywhere \code{sdcorr_pairs} isn't consulted (e.g. \code{draw_random_fr}'s initial sampling); does not affect the tiered penalty itself. Default 0.2.}
-
-\item{expected10}{Passed straight through to the returned list, default 0.01 (package default).}
-
-\item{expected01}{Passed straight through to the returned list, default 0.05 (package default).}
-
-\item{sd10}{Passed straight through to the returned list, default 0.1 (package default).}
-
-\item{sd01}{Passed straight through to the returned list, default 0.2 (package default).}
+\item{fliprate_priors}{A \code{fliprate_priors} list (see the "Flip-rate priors" section below for the full element list). If it does not contain \code{sd_round}, \code{sd_channel}, or \code{sd_other}, default values (of 0.2, 0.1, and 0.01, respectively) are provided.}
 }
 \value{
-A named list suitable as \code{misread.qc}/\code{sim.benchmark}'s \code{fliprate_priors} argument, with \code{sdcorr_pairs} added (length \code{N_bits*(N_bits-1)/2}, in the same bit-pair order as \code{fr_stip}/\code{fr__est}'s correlation columns).
+The original input \code{fliprate_priors}, minus \code{sd_round}, \code{sd_channel}, and \code{sd_other} (if provided), and enriched with \code{latent_bit_round}, \code{latent_bit_channel}, and \code{sdcorr_pairs} (if \code{bit_org} supplied).
 }
 \description{
-\code{misread.qc} and \code{sim.benchmark} regularize the (otherwise weakly identified -- see the
-package's benchmarking notes tutorial) pairwise bit-flip correlation parameters with a single Gaussian
-prior shared by all bit pairs (\code{fliprate_priors$expectedcorr} and \code{fliprate_priors$sdcorr}). 
-This function instead builds a \emph{tiered} version of that same prior: bit pairs that share an imaging 
-round get one (wider, i.e. more permissive) prior standard deviation (sd), pairs that only share a color 
-channel get a second (narrower) sd, and all remaining pairs get a third, tight, near-zero sd. The rationale 
-is that correlated misreads in a MERFISH/MERSCOPE-style experiment most plausibly arise from per-round
-effects (shared hybridization/imaging cycle) or, secondarily, per-channel effects (shared optical path across
-rounds); pairs sharing neither have no obvious mechanism to be correlated and the data cannot usefully constrain 
-them anyway, so they are pulled tightly to \code{expectedcorr} instead of being estimated as if they were as 
-free as the rest.
+Helper function to build a tiered Gaussian prior on bit-flip correlations from imaging-round plus channel structure
 }
-\details{
-The returned list is a complete, ready-to-use \code{fliprate_priors} argument for \code{misread.qc} and 
-\code{sim.benchmark} (it includes the usual \code{expected10}/\code{expected01}/\code{sd10}/\code{sd01}/
-\code{expectedcorr}/\code{sdcorr} fields alongside the new \code{sdcorr_pairs} vector, so nothing else needs 
-to be merged in).
+\section{Flip-rate priors}{
 
-The same list can also be passed as \code{sim.benchmark}'s \code{stip_fliprate_priors} argument, to
-simulate a "true" correlation structure organized by round/channel instead of i.i.d. noise -- but
-there, \code{sdcorr_pairs} is only an \emph{approximation} of that structure: \code{draw_random_fr}
-still draws each pair independently and runs the result through its usual global Cholesky
-normalization, which leaks some of the round/channel tiers' magnitude into the pairs meant to be
-near zero. For an exact, non-leaky version of that organized structure, use \code{build_structured_corrs()} instead.
+\code{fliprate_priors} (and, where applicable, \code{stip_fliprate_priors}) is a structured prior
+list on flip rates and bit-flip correlations (mirrors the C++ \code{FlipRatePriors} struct, plus
+possibly additional terms to construct \code{sdcorr_pairs} from \code{bit_org}), with
+elements:\itemize{
+   \item \code{expected10}: Expected rate at which 1 bits flip to 0s, default 0.01.
+   \item \code{expected01}: Expected rate at which 0 bits flip to 1s, default 0.05.
+   \item \code{sd10}: Standard deviation (sd) of the 1-to-0 flip rate, default 0.1.
+   \item \code{sd01}: sd of the 0-to-1 flip rate, default 0.2.
+   \item \code{expectedcorr}: Expected baseline flip-correlation between bits, before considering channels and rounds, default 0.0.
+   \item \code{sdcorr}: sd of flip-correlation between bits, before considering channels and rounds, default 0.2.
+   \item \code{round_corr_sd}: sd fed into each round's own local correlation draw, default 0.2.
+   \item \code{channel_rho}: Equicorrelation value shared by every pair within a channel, before w_channel scaling (must be >= -1/(m-1) for the smallest channel group of size m), default 0.5.
+   \item \code{w_round}: Fraction of each bit's variance attributed to round membership (0 disables the round tier), default 0.7.
+   \item \code{w_channel}: Fraction attributed to channel membership (0 disables the channel tier); w_round + w_channel must be <= 1, default 0.1.
+   \item \code{sd_round}: For use with bit_org; Prior sd for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).
+   \item \code{sd_channel}: For use with bit_org; Prior sd for bit pairs sharing a color channel but not a round (tier 2), default 0.1.
+   \item \code{sd_other}: For use with bit_org; Prior sd for all remaining bit pairs (tier 3, pinned near \code{expectedcorr}), default 0.01.
+} Any element omitted from the supplied list falls back to its default. These values are used as
+the Gaussian prior-penalty term (when \code{weights$prior} or \code{weights$dispersion} are
+non-zero) and to draw the initial parameter point(s) before fitting begins. When \code{bit_org} is
+also supplied, \code{latent_bit_round} and \code{latent_bit_channel} will be extracted
+automatically and \code{sdcorr_pairs} will be automatically built from these two factors plus the
+values for \code{sd_round}, \code{sd_channel}, and \code{sd_other} (see \code{build_corr_priors()}).
 }
+

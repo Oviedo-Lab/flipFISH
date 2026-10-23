@@ -17,12 +17,12 @@ unique_Hamming_cb <- function(codebook) {
     .Call(`_flipFISH_unique_Hamming_cb`, codebook)
 }
 
-mQC <- function(bc_counts, codebook, maxHam, n_forks, max_flips, report_freq = 1L, maxeval = 1000L, fliprate_priors, weights, n_restarts = 1L, max_feasibility_barcodes = 40L) {
-    .Call(`_flipFISH_mQC`, bc_counts, codebook, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, weights, n_restarts, max_feasibility_barcodes)
+mQC <- function(bc_counts, codebook, maxHam, n_forks, max_flips, report_freq = 1L, maxeval = 1000L, fliprate_priors, weights, n_restarts = 1L, max_fs_bc = 40L) {
+    .Call(`_flipFISH_mQC`, bc_counts, codebook, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, weights, n_restarts, max_fs_bc)
 }
 
-mQC_msle_at <- function(FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, weights, max_feasibility_barcodes = 40L) {
-    .Call(`_flipFISH_mQC_msle_at`, FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, weights, max_feasibility_barcodes)
+mQC_msle_at <- function(FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, weights, max_fs_bc = 40L) {
+    .Call(`_flipFISH_mQC_msle_at`, FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, weights, max_fs_bc)
 }
 
 mQC_ecc_jacobian_at <- function(FR, bc_counts, codebook, maxHam, n_forks, max_flips) {
@@ -45,7 +45,7 @@ tr_sum_check <- function(bc, rate10, rate01, corr1, corr0) {
     .Call(`_flipFISH_tr_sum_check`, bc, rate10, rate01, corr1, corr0)
 }
 
-mQC_DG <- function(bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_feasibility_barcodes = 40L) {
-    .Call(`_flipFISH_mQC_DG`, bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_feasibility_barcodes)
+mQC_DG <- function(bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc = 40L) {
+    .Call(`_flipFISH_mQC_DG`, bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc)
 }
 

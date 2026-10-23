@@ -61,8 +61,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // mQC
-List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, List weights, int n_restarts, int max_feasibility_barcodes);
-RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP n_restartsSEXP, SEXP max_feasibility_barcodesSEXP) {
+List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, List weights, int n_restarts, int max_fs_bc);
+RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP n_restartsSEXP, SEXP max_fs_bcSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -76,14 +76,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< List >::type fliprate_priors(fliprate_priorsSEXP);
     Rcpp::traits::input_parameter< List >::type weights(weightsSEXP);
     Rcpp::traits::input_parameter< int >::type n_restarts(n_restartsSEXP);
-    Rcpp::traits::input_parameter< int >::type max_feasibility_barcodes(max_feasibility_barcodesSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, weights, n_restarts, max_feasibility_barcodes));
+    Rcpp::traits::input_parameter< int >::type max_fs_bc(max_fs_bcSEXP);
+    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, weights, n_restarts, max_fs_bc));
     return rcpp_result_gen;
 END_RCPP
 }
 // mQC_msle_at
-double mQC_msle_at(const std::vector<double>& FR, NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips, List fliprate_priors, List weights, int max_feasibility_barcodes);
-RcppExport SEXP _flipFISH_mQC_msle_at(SEXP FRSEXP, SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP max_feasibility_barcodesSEXP) {
+double mQC_msle_at(const std::vector<double>& FR, NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips, List fliprate_priors, List weights, int max_fs_bc);
+RcppExport SEXP _flipFISH_mQC_msle_at(SEXP FRSEXP, SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP max_fs_bcSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -95,8 +95,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type max_flips(max_flipsSEXP);
     Rcpp::traits::input_parameter< List >::type fliprate_priors(fliprate_priorsSEXP);
     Rcpp::traits::input_parameter< List >::type weights(weightsSEXP);
-    Rcpp::traits::input_parameter< int >::type max_feasibility_barcodes(max_feasibility_barcodesSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC_msle_at(FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, weights, max_feasibility_barcodes));
+    Rcpp::traits::input_parameter< int >::type max_fs_bc(max_fs_bcSEXP);
+    rcpp_result_gen = Rcpp::wrap(mQC_msle_at(FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, weights, max_fs_bc));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -186,8 +186,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // mQC_DG
-List mQC_DG(NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int resamples, int burnin, int FR_search, double max_step_size, int min_step_size_divider, double max_temperature, double min_temperature_scale, int n_tracker_updates, int n_forks, int N_cells, List fliprate_priors, List weights, int max_feasibility_barcodes);
-RcppExport SEXP _flipFISH_mQC_DG(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP resamplesSEXP, SEXP burninSEXP, SEXP FR_searchSEXP, SEXP max_step_sizeSEXP, SEXP min_step_size_dividerSEXP, SEXP max_temperatureSEXP, SEXP min_temperature_scaleSEXP, SEXP n_tracker_updatesSEXP, SEXP n_forksSEXP, SEXP N_cellsSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP max_feasibility_barcodesSEXP) {
+List mQC_DG(NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int resamples, int burnin, int FR_search, double max_step_size, int min_step_size_divider, double max_temperature, double min_temperature_scale, int n_tracker_updates, int n_forks, int N_cells, List fliprate_priors, List weights, int max_fs_bc);
+RcppExport SEXP _flipFISH_mQC_DG(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP resamplesSEXP, SEXP burninSEXP, SEXP FR_searchSEXP, SEXP max_step_sizeSEXP, SEXP min_step_size_dividerSEXP, SEXP max_temperatureSEXP, SEXP min_temperature_scaleSEXP, SEXP n_tracker_updatesSEXP, SEXP n_forksSEXP, SEXP N_cellsSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP max_fs_bcSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -206,8 +206,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type N_cells(N_cellsSEXP);
     Rcpp::traits::input_parameter< List >::type fliprate_priors(fliprate_priorsSEXP);
     Rcpp::traits::input_parameter< List >::type weights(weightsSEXP);
-    Rcpp::traits::input_parameter< int >::type max_feasibility_barcodes(max_feasibility_barcodesSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC_DG(bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_feasibility_barcodes));
+    Rcpp::traits::input_parameter< int >::type max_fs_bc(max_fs_bcSEXP);
+    rcpp_result_gen = Rcpp::wrap(mQC_DG(bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc));
     return rcpp_result_gen;
 END_RCPP
 }
