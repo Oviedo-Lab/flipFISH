@@ -61,8 +61,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // mQC
-List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, List weights, NumericVector obs_erc, int n_restarts, int max_feasibility_barcodes);
-RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP obs_ercSEXP, SEXP n_restartsSEXP, SEXP max_feasibility_barcodesSEXP) {
+List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, List weights, int n_restarts, int max_feasibility_barcodes);
+RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP n_restartsSEXP, SEXP max_feasibility_barcodesSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -75,16 +75,15 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type maxeval(maxevalSEXP);
     Rcpp::traits::input_parameter< List >::type fliprate_priors(fliprate_priorsSEXP);
     Rcpp::traits::input_parameter< List >::type weights(weightsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type obs_erc(obs_ercSEXP);
     Rcpp::traits::input_parameter< int >::type n_restarts(n_restartsSEXP);
     Rcpp::traits::input_parameter< int >::type max_feasibility_barcodes(max_feasibility_barcodesSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, weights, obs_erc, n_restarts, max_feasibility_barcodes));
+    rcpp_result_gen = Rcpp::wrap(mQC(bc_counts, codebook, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, weights, n_restarts, max_feasibility_barcodes));
     return rcpp_result_gen;
 END_RCPP
 }
 // mQC_msle_at
-double mQC_msle_at(const std::vector<double>& FR, NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips, List fliprate_priors, List weights, NumericVector obs_erc, int max_feasibility_barcodes);
-RcppExport SEXP _flipFISH_mQC_msle_at(SEXP FRSEXP, SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP obs_ercSEXP, SEXP max_feasibility_barcodesSEXP) {
+double mQC_msle_at(const std::vector<double>& FR, NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips, List fliprate_priors, List weights, int max_feasibility_barcodes);
+RcppExport SEXP _flipFISH_mQC_msle_at(SEXP FRSEXP, SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP max_feasibility_barcodesSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -96,9 +95,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type max_flips(max_flipsSEXP);
     Rcpp::traits::input_parameter< List >::type fliprate_priors(fliprate_priorsSEXP);
     Rcpp::traits::input_parameter< List >::type weights(weightsSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type obs_erc(obs_ercSEXP);
     Rcpp::traits::input_parameter< int >::type max_feasibility_barcodes(max_feasibility_barcodesSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC_msle_at(FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, weights, obs_erc, max_feasibility_barcodes));
+    rcpp_result_gen = Rcpp::wrap(mQC_msle_at(FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, weights, max_feasibility_barcodes));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -219,8 +217,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_flipFISH_bvn_cdf_uppertail_test", (DL_FUNC) &_flipFISH_bvn_cdf_uppertail_test, 3},
     {"_flipFISH_dg_find_sigma_RootBisection_test", (DL_FUNC) &_flipFISH_dg_find_sigma_RootBisection_test, 3},
     {"_flipFISH_unique_Hamming_cb", (DL_FUNC) &_flipFISH_unique_Hamming_cb, 1},
-    {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 12},
-    {"_flipFISH_mQC_msle_at", (DL_FUNC) &_flipFISH_mQC_msle_at, 10},
+    {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 11},
+    {"_flipFISH_mQC_msle_at", (DL_FUNC) &_flipFISH_mQC_msle_at, 9},
     {"_flipFISH_mQC_ecc_jacobian_at", (DL_FUNC) &_flipFISH_mQC_ecc_jacobian_at, 6},
     {"_flipFISH_mQC_counts_at", (DL_FUNC) &_flipFISH_mQC_counts_at, 6},
     {"_flipFISH_mQC_ehc_jacobian_at", (DL_FUNC) &_flipFISH_mQC_ehc_jacobian_at, 6},

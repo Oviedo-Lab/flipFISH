@@ -33,8 +33,8 @@ check_data <- function(
     species_names <- rownames(STdata)
     if (is.null(species_names))                      stop("STdata must have row names as barcode species names")
     # ... align rows of codebook to STdata
-    if (is.null(rownames(codebook)))                 stop("codebook must have row names as species names")
-    if (!all(species_names %in% rownames(codebook))) stop("All species in STdata must be present in codebook")
+    if (is.null(rownames(codebook)))                 stop("codebook must have row names as barcode species names")
+    if (!all(species_names %in% rownames(codebook))) stop("All barcode species in STdata must be present in codebook")
     codebook      <- codebook[species_names,]
     # ... make blank mask
     blank_mask    <- grepl("Blank", species_names, ignore.case = FALSE)
@@ -53,18 +53,11 @@ check_data <- function(
       codebook[ blank_mask,][blank_rate_order,]
     )
     
-    # Check STdata columns 
+    # Check STdata columns
     req_cols <- c("rates", "variance", "counts")
-    if (is.null(colnames(STdata)))                   stop("STdata must have named columns.") 
+    if (is.null(colnames(STdata)))                   stop("STdata must have named columns.")
     if (!all(req_cols %in% colnames(STdata)))        stop("STdata must have columns 'rates', 'variance', and 'counts'.")
-    
-    # Split STdata
-    obs_erc <- numeric(0)
-    if ("counts_uncorrected" %in% colnames(STdata)) {
-      obs_erc <- STdata[,"counts_uncorrected"]
-      STdata  <- STdata[,"counts_uncorrected" != colnames(STdata)]
-    }
-    
+
     # Check and set maxHam (max correctable Hamming distance)
     codebook_distances <- unique_Hamming_cb(as.matrix(codebook))
     if (is.null(maxHam)) {
@@ -80,7 +73,6 @@ check_data <- function(
         STdata   = STdata,
         codebook = codebook,
         bit_org  = bit_org,
-        obs_erc  = obs_erc,
         maxHam   = maxHam
       )
     )
@@ -297,7 +289,6 @@ misread.qc <- function(
       as.integer(maxeval),
       as.list(fliprate_priors),
       as.list(weights),
-      as.double(data_check$obs_erc),
       as.integer(n_restarts),
       as.integer(max_feasibility_barcodes)
     )
@@ -404,7 +395,8 @@ misread.qc.DG <- function(
     n_forks <- check_forks(n_forks)
    
     # Check bit size, prep codebook and STdata, and set maxHam (reuses misread.qc()'s own helper;
-    # strips an optional counts_uncorrected column, which mQC_DG() has no use for)
+    # an optional counts_uncorrected column, if present, just rides along unused -- mQC_DG() has no
+    # use for it)
     data_check <- check_data(STdata, codebook, bit_org, maxHam)
     
     # Build flip rate priors from bit_org, same as misread.qc() -- including stripping

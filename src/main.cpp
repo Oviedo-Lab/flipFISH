@@ -159,7 +159,7 @@ struct Weights {
     double blank       = 1.0; // upweight blank barcodes' corrected/read-count MSLE contribution
     double prior       = 0.0; // Gaussian prior-penalty strength on flip rates/correlations (0 disables)
     double dispersion  = 0.0; // dispersion-penalty strength matching empirical variance of corr1/corr0 to sdcorr^2 (0 disables)
-    double erc         = 0.0; // joint exact-match (uncorrected) read-count MSLE term strength (0 disables; ignored if obs_erc is empty)
+    double erc         = 0.0; // joint exact-match (uncorrected) read-count MSLE term strength (0 disables; ignored if bc_counts has no "counts_uncorrected" column)
     double feasibility = 0.0; // feasibility-penalty strength for corr1/corr0 needing a large correction to become realizable (0 disables)
     double max_blank   = 1.0; // mQC_DG() only: blank weight at the start of the FR_search/burn-in schedule
     double min_blank   = 2.0; // mQC_DG() only: blank weight by the end of burn-in (the schedule's held value)
@@ -969,21 +969,23 @@ ST_data load_STdata(
     // Check max_flips value 
     if (max_flips < 1) {max_flips = cb.N_bits;}
     
-    // Get info from bc_count_data 
+    // Get info from bc_count_data
     int             N_barcodes    = bc_count_data.nrow();
     int             rate_col      = -1;
-    int             variance_col  = -1; 
+    int             variance_col  = -1;
     int             count_col     = -1;
+    int             erc_col       = -1; // optional: observed exact-match (uncorrected) read counts
     CharacterVector data_colnames = colnames(bc_count_data);
     for (int i = 0; i < bc_count_data.ncol(); ++i) {
-      if (data_colnames[i] == "rates") {rate_col = i;} 
-      else if (data_colnames[i] == "variance") {variance_col = i;} 
-      else if (data_colnames[i] == "counts") {count_col = i;} 
+      if (data_colnames[i] == "rates") {rate_col = i;}
+      else if (data_colnames[i] == "variance") {variance_col = i;}
+      else if (data_colnames[i] == "counts") {count_col = i;}
+      else if (data_colnames[i] == "counts_uncorrected") {erc_col = i;}
     }
     if (rate_col == -1 || variance_col == -1 || count_col == -1) {
       Rcpp::stop("bc_count_data must have columns named 'rates', 'variance', and 'counts'.");
     }
-    
+
     // Extract rate, variance, and count data into vectors
     Vdbl bc_rates(N_barcodes);
     Vdbl bc_variance(N_barcodes);
@@ -993,31 +995,44 @@ ST_data load_STdata(
       bc_variance[i] = static_cast<double>(bc_count_data(i, variance_col));
       bc_counts[i]   = static_cast<int>(bc_count_data(i, count_col));
     }
-    
-    // Build correction table 
+
+    // Build correction table
     LUT correction_table = build_correction_table(cb, maxHam);
     if (verbose) {
       Rcpp::Rcout << "Correction table built with max-correctable Hamming distance " << maxHam << "." << std::endl;
       Rcpp::Rcout << "Correction table size: " << correction_table.size() << " correctable barcodes." << std::endl;
     }
-    
+
     // Invert correction table
     LUTr correction_table_inverted = invert_lookup_table(correction_table);
     if (verbose) {
       Rcpp::Rcout << "Correction table inverted." << std::endl;
     }
-    
-    // Return parsed ST data
-    return {
+
+    // Assemble parsed ST data
+    ST_data STdata = {
       bc_rates, bc_variance, bc_counts,
-      cb, 
+      cb,
       maxHam,
       correction_table, correction_table_inverted,
       EvalResults(), Vint(N_barcodes, 0),           // placeholders
-      std::numeric_limits<double>::infinity(), 
+      std::numeric_limits<double>::infinity(),
       1, max_flips, 10                              // n_forks, max_flips, report_freq
     };
-    
+
+    // Optional exact-match (uncorrected) read counts for the erc fit term, carried as a column of
+    // bc_count_data (rather than a separate argument) so they can never be a different length than
+    // the other columns. prepare_STdata_for_mQC() additionally gates has_erc_obs on weights.erc > 0.
+    if (erc_col != -1) {
+      STdata.has_erc_obs = true;
+      STdata.bc_counts_erc_obs.assign(N_barcodes, 0);
+      for (int i = 0; i < N_barcodes; ++i) {
+        STdata.bc_counts_erc_obs[i] = static_cast<int>(std::round(bc_count_data(i, erc_col)));
+      }
+    }
+
+    return STdata;
+
   }
 
 // Transformation rate: The probability that transform_flips occurs for a spot with true barcode bc, given fr.
@@ -1463,6 +1478,23 @@ double estimate_misread_loss(
     return static_cast<double>(total_spots_gt) / static_cast<double>(total_spots_ecc);
   }
 
+// Estimate the misread-loss scaler and apply it to bc_counts_true (zeroing blanks), in place.
+// Shared by prepare_STdata_at() (called with an empty fliprate_priors, matching its pre-existing
+// behavior) and prepare_STdata_for_mQC() (called with the caller's real fliprate_priors).
+static void apply_misread_loss_rescaling(
+    ST_data&    STdata,
+    const List& fliprate_priors
+  ) {
+    double misread_loss_scaler = estimate_misread_loss(STdata, STdata.max_flips, fliprate_priors);
+    int    N_barcodes          = STdata.cb.barcodes.size();
+    for (int i = 0; i < N_barcodes; ++i) {
+      STdata.bc_counts_true[i] = static_cast<int>(std::round(static_cast<double>(STdata.bc_counts[i]) * misread_loss_scaler));
+    }
+    for (int idx : STdata.cb.blanks) {
+      STdata.bc_counts_true[idx] = 0;
+    }
+  }
+
 // Shared setup for the single-point diagnostic exports
 static std::pair<ST_data, FlipRates> prepare_STdata_at(
     const std::vector<double>& FR,
@@ -1472,19 +1504,12 @@ static std::pair<ST_data, FlipRates> prepare_STdata_at(
     int                         n_forks,
     int                         max_flips
   ) {
-    
+
     auto STdata = load_STdata(bc_counts, codebook, max_flips, maxHam, false);
     STdata.n_forks = n_forks;
-   
-    double misread_loss_scaler = estimate_misread_loss(STdata, STdata.max_flips, List());
-    int    N_barcodes          = STdata.cb.barcodes.size();
-    for (int i = 0; i < N_barcodes; ++i) {
-      STdata.bc_counts_true[i] = static_cast<int>(std::round(static_cast<double>(STdata.bc_counts[i]) * misread_loss_scaler));
-    }
-    for (int idx : STdata.cb.blanks) {
-      STdata.bc_counts_true[idx] = 0;
-    }
-   
+
+    apply_misread_loss_rescaling(STdata, List());
+
     FlipRates fr = pack_fr(Vdbl(FR.begin(), FR.end()), STdata.cb.N_bits);
     return {STdata, fr};
    
@@ -1512,8 +1537,6 @@ static ST_data prepare_STdata_for_mQC(
     bool          verbose,
     const List&   fliprate_priors,
     const Weights& weights,
-    NumericVector obs_erc,
-    bool          warn_on_erc_mismatch,
     int           max_feasibility_barcodes = 40
   ) {
 
@@ -1531,44 +1554,29 @@ static ST_data prepare_STdata_for_mQC(
     STdata.feasibility_weight      = weights.feasibility;
     STdata.max_feasibility_barcodes = max_feasibility_barcodes;
 
-    // Set up the optional joint erc-fit term
-    if (obs_erc.size() == (int)STdata.cb.barcodes.size() && weights.erc > 0.0) {
-      STdata.has_erc_obs = true;
-      STdata.erc_weight  = weights.erc;
-      STdata.bc_counts_erc_obs.assign(STdata.cb.barcodes.size(), 0);
-      for (int i = 0; i < obs_erc.size(); ++i) {
-        STdata.bc_counts_erc_obs[i] = static_cast<int>(std::round(obs_erc[i]));
-      }
-    } else {
-      STdata.has_erc_obs = false;
-      STdata.erc_weight  = 0.0;
-      if (warn_on_erc_mismatch && obs_erc.size() > 0 && obs_erc.size() != (int)STdata.cb.barcodes.size()) {
-        Rcpp::warning("obs_erc length does not match number of barcodes; ignoring erc loss term.");
-      }
-    }
-   
+    // Set up the optional joint erc-fit term: load_STdata() already parsed bc_counts' optional
+    // "counts_uncorrected" column into has_erc_obs/bc_counts_erc_obs, if present; just gate it on
+    // the fit weight here.
+    STdata.erc_weight  = weights.erc;
+    STdata.has_erc_obs = STdata.has_erc_obs && weights.erc > 0.0;
+
     // Estimate misread loss scaler and rescale observed counts
-    double misread_loss_scaler = estimate_misread_loss(STdata, STdata.max_flips, fliprate_priors);
-    int    N_barcodes          = STdata.cb.barcodes.size();
-    for (int i = 0; i < N_barcodes; ++i) {
-      STdata.bc_counts_true[i] = static_cast<int>(std::round(static_cast<double>(STdata.bc_counts[i]) * misread_loss_scaler));
-    }
-    for (int idx : STdata.cb.blanks) {
-      STdata.bc_counts_true[idx] = 0;
-    }
-   
+    apply_misread_loss_rescaling(STdata, fliprate_priors);
+
     return STdata;
-   
+
     /*
      * Function description:
      *
      * Shared setup for mQC() and mQC_msle_at(): load ST_data and configure everything the penalized MSLE
      * objective (mQC_msle(), via its ST_data* argument) depends on -- msle_weights/fr_priors/prior_weight/
      * dispersion_weight, the optional joint erc-fit term, and the misread-loss rescaling of bc_counts_true.
-     * Callers set n_forks/report_freq themselves (report_freq isn't shared, and n_forks must be set before
-     * this runs since estimate_misread_loss() uses it). warn_on_erc_mismatch mirrors mQC()'s own warning
-     * for a mismatched obs_erc length; mQC_msle_at() passes false to preserve its prior (silent) behavior.
-     * 
+     * The erc term's observed counts come from bc_counts' optional "counts_uncorrected" column (parsed
+     * by load_STdata() into has_erc_obs/bc_counts_erc_obs); here that's just gated on weights.erc > 0, so
+     * it can no longer go out of sync with bc_counts the way a separate obs_erc argument could. Callers
+     * set n_forks/report_freq themselves (report_freq isn't shared, and n_forks must be set before this
+     * runs since estimate_misread_loss() uses it).
+     *
      * Initial draft of this function written by Claude Sonnet 5.
      */
   }
@@ -1784,7 +1792,7 @@ static double mQC_msle(
 // Main misread quality control function
 // [[Rcpp::export]]
 List mQC(
-    NumericMatrix bc_counts,
+    NumericMatrix bc_counts,                            // Optionally include a "counts_uncorrected" column (observed exact-match/uncorrected read counts, same row order as the other columns) to enable the erc loss term; see weights$erc.
     IntegerMatrix codebook,
     int           maxHam,
     int           n_forks,
@@ -1793,7 +1801,6 @@ List mQC(
     int           maxeval           = 1000,
     List          fliprate_priors   = List(),
     List          weights           = List(),          // See Weights/pack_weights(): blank/prior/dispersion/erc/feasibility, all defaulted there
-    NumericVector obs_erc           = NumericVector(), // Optional: observed exact-match (uncorrected) read counts per barcode, same row order as bc_counts. Empty (default) disables the erc loss term.
     int           n_restarts        = 1,               // Number of L-BFGS restarts; restart 0 uses the standard init, restarts > 0 randomize the correlation block (1 matches prior behavior)
     int           max_feasibility_barcodes = 40        // Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty per evaluation, for speed on large codebooks
   ) {
@@ -1804,8 +1811,6 @@ List mQC(
       bc_counts, codebook, maxHam, n_forks, max_flips,
       true, // Make verbose printouts
       fliprate_priors, w,
-      obs_erc,
-      true, // warn on mismatched obs_erc length
       max_feasibility_barcodes
     );
     STdata.report_freq = report_freq;
@@ -2007,14 +2012,13 @@ List mQC(
 // [[Rcpp::export]]
 double mQC_msle_at(
     const std::vector<double>& FR,
-    NumericMatrix               bc_counts,
+    NumericMatrix               bc_counts,               // Optionally include a "counts_uncorrected" column; see mQC()'s bc_counts.
     IntegerMatrix               codebook,
     int                         maxHam,
     int                         n_forks,
     int                         max_flips,
     List                        fliprate_priors          = List(),
     List                        weights                  = List(), // See Weights/pack_weights(): blank/prior/dispersion/erc/feasibility, all defaulted there
-    NumericVector               obs_erc                  = NumericVector(),
     int                         max_feasibility_barcodes = 40
   ) {
 
@@ -2025,8 +2029,6 @@ double mQC_msle_at(
       bc_counts, codebook, maxHam, n_forks, max_flips,
       false, // Suppress verbose printouts
       fliprate_priors, w,
-      obs_erc,
-      false, // mirror mQC()'s prior (silent) behavior here -- no mismatch warning
       max_feasibility_barcodes
     );
     STdata.report_freq = std::numeric_limits<int>::max();
@@ -2477,19 +2479,45 @@ List test_fr_recovery(
     STdata.n_forks     = n_forks;
     STdata.report_freq = report_freq;
     
-    // Find bc_counts columns 
+    // Find bc_counts columns
     int             rate_col      = -1;
-    int             variance_col  = -1; 
+    int             variance_col  = -1;
     int             count_col     = -1;
+    int             erc_col_in    = -1; // pre-existing "counts_uncorrected" column, if bc_counts already has one
     CharacterVector data_colnames = colnames(bc_counts);
     for (int i = 0; i < bc_counts.ncol(); ++i) {
-      if (     data_colnames[i] == "rates")    {rate_col     = i;} 
-      else if (data_colnames[i] == "variance") {variance_col = i;} 
-      else if (data_colnames[i] == "counts")   {count_col    = i;} 
+      if (     data_colnames[i] == "rates")              {rate_col     = i;}
+      else if (data_colnames[i] == "variance")            {variance_col = i;}
+      else if (data_colnames[i] == "counts")              {count_col    = i;}
+      else if (data_colnames[i] == "counts_uncorrected")  {erc_col_in   = i;}
     }
-    // ... save original count column 
-    NumericVector bc_counts_original(bc_counts(_, count_col)); 
-    
+    // ... save original count column
+    NumericVector bc_counts_original(bc_counts(_, count_col));
+
+    // When the erc term is enabled, work off a copy of bc_counts carrying a "counts_uncorrected"
+    // column (filled with each replicate's simulated read counts below) -- reusing one bc_counts
+    // already has, or appending one otherwise -- so it can be threaded into mQC()/mQC_msle_at() as a
+    // bc_counts column rather than a separate obs_erc argument. Built once here, outside the
+    // simulation loop, since rate_col/count_col are progressively rewritten in place across
+    // replicates and must stay on the same matrix object. When disabled, bc_counts_fit just aliases
+    // bc_counts (no column appended).
+    int           erc_col       = -1;
+    NumericMatrix bc_counts_fit = bc_counts;
+    if (w.erc > 0.0 && erc_col_in != -1) {
+      erc_col = erc_col_in; // reuse the existing column; bc_counts_fit already aliases bc_counts
+    } else if (w.erc > 0.0) {
+      int ncol_orig = bc_counts.ncol();
+      erc_col       = ncol_orig;
+      bc_counts_fit = NumericMatrix(bc_counts.nrow(), ncol_orig + 1);
+      for (int i = 0; i < bc_counts.nrow(); ++i) {
+        for (int j = 0; j < ncol_orig; ++j) {bc_counts_fit(i, j) = bc_counts(i, j);}
+      }
+      CharacterVector colnames_fit(ncol_orig + 1);
+      for (int j = 0; j < ncol_orig; ++j) {colnames_fit[j] = data_colnames[j];}
+      colnames_fit[ncol_orig] = "counts_uncorrected";
+      colnames(bc_counts_fit) = colnames_fit;
+    }
+
     // Use observed corrected counts as ground-truth counts for simulation
     Vint BCcounts = STdata.bc_counts;
     // ... with blanks set to zero. 
@@ -2563,33 +2591,31 @@ List test_fr_recovery(
         n_forks
       );
       
-      // Use simulation results to rewrite bc_counts
+      // Use simulation results to rewrite bc_counts_fit (which aliases bc_counts when the erc term
+      // is disabled, since no extra column was appended above)
       for (int i = 0; i < N_barcodes; ++i) {
-        orc_sim(s, i)           = sim.read_counts[i];
-        occ_sim(s, i)           = sim.corrected_counts[i];
-        ohc_sim(s, i)           = sim.hit_counts[i];
-        CR__sim(s, i)           = static_cast<double>(sim.read_counts[i]) / static_cast<double>(sim.corrected_counts[i]);
-        PPV_sim(s, i)           = static_cast<double>(sim.hit_counts[i]) / static_cast<double>(sim.corrected_counts[i]);
-        bc_counts(i, rate_col) /= bc_counts_original(i) / static_cast<double>(std::max(1, sim.corrected_counts[i]));
-        bc_counts(i, count_col) = static_cast<double>(sim.corrected_counts[i]);
+        orc_sim(s, i)                = sim.read_counts[i];
+        occ_sim(s, i)                = sim.corrected_counts[i];
+        ohc_sim(s, i)                = sim.hit_counts[i];
+        CR__sim(s, i)                = static_cast<double>(sim.read_counts[i]) / static_cast<double>(sim.corrected_counts[i]);
+        PPV_sim(s, i)                = static_cast<double>(sim.hit_counts[i]) / static_cast<double>(sim.corrected_counts[i]);
+        bc_counts_fit(i, rate_col)  /= bc_counts_original(i) / static_cast<double>(std::max(1, sim.corrected_counts[i]));
+        bc_counts_fit(i, count_col) = static_cast<double>(sim.corrected_counts[i]);
+        if (erc_col != -1) {bc_counts_fit(i, erc_col) = static_cast<double>(sim.read_counts[i]);}
       }
-      
+
       // Run mQC to recover flip rates
       Rcpp::Rcout << "\nRunning misread QC with L-BFGS (nlopt) to recover flip rates...\n" << std::endl;
-      NumericVector obs_erc_s = w.erc > 0.0
-        ? NumericVector(sim.read_counts.begin(), sim.read_counts.end())
-        : NumericVector();
       // Forward the raw weights list as-is: mQC()'s own pack_weights() unpacks blank/prior/
       // dispersion/erc from it directly, and (since this List never carries a "feasibility" key --
       // sim.benchmark() doesn't expose one) falls back to its own default there, same as before.
       List res = mQC(
-        bc_counts, codebook,
+        bc_counts_fit, codebook,
         maxHam,
         n_forks, max_flips,
         report_freq, maxeval,
         fliprate_priors,
         weights,
-        obs_erc_s,
         n_restarts
       );
       NumericMatrix erchc_plus = res["erctc_plus"];
@@ -2606,11 +2632,10 @@ List test_fr_recovery(
       // Evaluate the same penalized objective at the true/stipulated FR, against this replicate's
       // own simulated bc_counts (the exact matrix just handed to mQC() above)
       msle_stip[s] = mQC_msle_at(
-        FR, bc_counts, codebook,
+        FR, bc_counts_fit, codebook,
         maxHam, n_forks, max_flips,
         fliprate_priors,
-        weights,
-        obs_erc_s
+        weights
       );
      
     }

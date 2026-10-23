@@ -17,12 +17,12 @@ unique_Hamming_cb <- function(codebook) {
     .Call(`_flipFISH_unique_Hamming_cb`, codebook)
 }
 
-mQC <- function(bc_counts, codebook, maxHam, n_forks, max_flips, report_freq = 1L, maxeval = 1000L, fliprate_priors, weights, obs_erc = numeric(), n_restarts = 1L, max_feasibility_barcodes = 40L) {
-    .Call(`_flipFISH_mQC`, bc_counts, codebook, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, weights, obs_erc, n_restarts, max_feasibility_barcodes)
+mQC <- function(bc_counts, codebook, maxHam, n_forks, max_flips, report_freq = 1L, maxeval = 1000L, fliprate_priors, weights, n_restarts = 1L, max_feasibility_barcodes = 40L) {
+    .Call(`_flipFISH_mQC`, bc_counts, codebook, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, weights, n_restarts, max_feasibility_barcodes)
 }
 
-mQC_msle_at <- function(FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, weights, obs_erc = numeric(), max_feasibility_barcodes = 40L) {
-    .Call(`_flipFISH_mQC_msle_at`, FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, weights, obs_erc, max_feasibility_barcodes)
+mQC_msle_at <- function(FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, weights, max_feasibility_barcodes = 40L) {
+    .Call(`_flipFISH_mQC_msle_at`, FR, bc_counts, codebook, maxHam, n_forks, max_flips, fliprate_priors, weights, max_feasibility_barcodes)
 }
 
 mQC_ecc_jacobian_at <- function(FR, bc_counts, codebook, maxHam, n_forks, max_flips) {
