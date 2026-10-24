@@ -181,7 +181,7 @@ build_corr_priors <- function(
 #'   \item \strong{Corrected Count}: The number of spots labelled \emph{b} after error correction.
 #'   \item \strong{Hit Count}: The number of spots labelled \emph{b} after error correction which are in fact \emph{b}, i.e., the number of reads error-corrected to \emph{b} which are correct, aka a "hit". 
 #' }
-#'  The "best fit" is defined as least mean squared log error (msle) computed by comparing the analytically implied expected corrected counts to the observed corrected counts included in \code{STdata}. If \code{counts_uncorrected} are included in \code{STdata} and \code{weights$erc} > 0, then the msle is computed for the read count as well and combined with the corrected-count msle, weighted by \code{weights$erc}. Counts (corrected and read) for blank barcodes can be upweighted via \code{weights$blank}. Penalty terms based on flip rate priors (expected value for flip rates, expected values and dispersion for bit-flip correlations) and bit-flip correlation feasibility can be added by setting non-zero values for \code{weights$prior}, \code{weights$dispersion}, and \code{weights$feasibility}. For each barcode, the expected "confidence ratio" (CR) and expected positive predictive value (PPV) are computed, from these implied count values. The CR is a quality control metric proposed by the original developers of MERFISH (e.g., see DOI 10.1016/bs.mie.2016.03.020) defined per barcode as the read count over the corrected count, while PPV is defined as the hit count over the corrected count. That is, PPV tells us, for each barcode \emph{b}, the expected percentage of spots decoded as \emph{b} which are in fact \emph{b}. 
+#' The "best fit" is defined as least mean squared log error (msle) computed by comparing the analytically implied expected corrected counts to the observed corrected counts included in \code{STdata}. If \code{counts_uncorrected} are included in \code{STdata} and \code{weights$erc} > 0, then the msle is computed for the read count as well and combined with the corrected-count msle, weighted by \code{weights$erc}. Counts (corrected and read) for blank barcodes can be upweighted via \code{weights$blank}. Penalty terms based on flip rate priors (expected value for flip rates, expected values and dispersion for bit-flip correlations) and bit-flip correlation feasibility can be added by setting non-zero values for \code{weights$prior}, \code{weights$dispersion}, and \code{weights$feasibility}. For each barcode, the expected "confidence ratio" (CR) and expected positive predictive value (PPV) are computed, from these implied count values. The CR is a quality control metric proposed by the original developers of MERFISH (e.g., see DOI 10.1016/bs.mie.2016.03.020) defined per barcode as the read count over the corrected count, while PPV is defined as the hit count over the corrected count. That is, PPV tells us, for each barcode \emph{b}, the expected percentage of spots decoded as \emph{b} which are in fact \emph{b}. 
 #'
 #' @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", and optionally "counts_uncorrected". The "counts" column must provide the corrected count, the "counts_uncorrected" column can be used optionally to provide the read count. The column "rates" is assumed to hold the per-cell rates for counts, empirically estimated as corrected count over the number of cells. The "variance" column is assumed to hold the variance of the corrected count across cells. The matrix must have barcode names (e.g., gene or protein species) as row names, with blank species having "Blank" in their name.
 #' @param codebook Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0, depending on whether an mRNA molecule of the species represented by the row is expected to luminescence in the bit represented by the column. All row names from \code{STdata} must be included in the row names for \code{codebook}.
@@ -202,10 +202,7 @@ build_corr_priors <- function(
 #'    \item \code{msle}: a single numeric value, the minimal mean squared log error found by the L-BFGS optimization of the flip rates and bit-flip correlations.
 #' }
 #' @section Flip-rate priors:
-#' \code{fliprate_priors} (and, where applicable, \code{stip_fliprate_priors}) is a structured prior
-#' list on flip rates and bit-flip correlations (mirrors the C++ \code{FlipRatePriors} struct, plus
-#' possibly additional terms to construct \code{sdcorr_pairs} from \code{bit_org}), with
-#' elements:\itemize{
+#' \code{fliprate_priors} (and, where applicable, \code{stip_fliprate_priors}) is a structured prior list on flip rates and bit-flip correlations (mirrors the C++ \code{FlipRatePriors} struct, plus possibly additional terms to construct \code{sdcorr_pairs} from \code{bit_org}), with elements: \itemize{
 #'    \item \code{expected10}: Expected rate at which 1 bits flip to 0s, default 0.01.
 #'    \item \code{expected01}: Expected rate at which 0 bits flip to 1s, default 0.05.
 #'    \item \code{sd10}: Standard deviation (sd) of the 1-to-0 flip rate, default 0.1.
@@ -219,12 +216,8 @@ build_corr_priors <- function(
 #'    \item \code{sd_round}: For use with bit_org; Prior sd for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).
 #'    \item \code{sd_channel}: For use with bit_org; Prior sd for bit pairs sharing a color channel but not a round (tier 2), default 0.1.
 #'    \item \code{sd_other}: For use with bit_org; Prior sd for all remaining bit pairs (tier 3, pinned near \code{expectedcorr}), default 0.01.
-#' } Any element omitted from the supplied list falls back to its default. These values are used as
-#' the Gaussian prior-penalty term (when \code{weights$prior} or \code{weights$dispersion} are
-#' non-zero) and to draw the initial parameter point(s) before fitting begins. When \code{bit_org} is
-#' also supplied, \code{latent_bit_round} and \code{latent_bit_channel} will be extracted
-#' automatically and \code{sdcorr_pairs} will be automatically built from these two factors plus the
-#' values for \code{sd_round}, \code{sd_channel}, and \code{sd_other} (see \code{build_corr_priors()}).
+#' } 
+#' Any element omitted from the supplied list falls back to its default. These values are used as the Gaussian prior-penalty term (when \code{weights$prior} or \code{weights$dispersion} are non-zero) and to draw the initial parameter point(s) before fitting begins. When \code{bit_org} is also supplied, \code{latent_bit_round} and \code{latent_bit_channel} will be extracted automatically and \code{sdcorr_pairs} will be automatically built from these two factors plus the values for \code{sd_round}, \code{sd_channel}, and \code{sd_other} (see \code{build_corr_priors()}).
 #' @export
 misread.qc <- function(
     STdata,
@@ -280,11 +273,7 @@ misread.qc <- function(
 
 #' Run misread QC analysis using the dichotomized-Gaussian (DG) spot-simulation plus MCMCSA method
 #'
-#' \code{misread.qc.DG()} implements literal correlated-Gaussian-noise spot
-#' simulations, decoded and compared against \code{STdata}'s observed barcode counts via a Markov
-#' Chain Monte Carlo with Simulated Annealing (MCMCSA) search over bit-flip rates and bit-flip
-#' correlations. The random-walk and annealing schedules use a two-phase FR_search-then-burn-in design, 
-#' stochastic bit/pair pruning, and burn-in mean-rate enforcement.
+#' \code{misread.qc.DG()} implements correlated-Gaussian-noise spot simulations ("dichotomized Gaussians"), decoded and compared against \code{STdata}'s observed barcode counts via a Markov Chain Monte Carlo with Simulated Annealing (MCMCSA) search over bit-flip rates and bit-flip correlations. The random-walk and annealing schedules use a two-phase FR_search-then-burn-in design, stochastic bit/pair pruning, and burn-in mean-rate enforcement.
 #'
 #' @inheritParams misread.qc
 #' @param resamples Number of steps to take in the post-burn-in random walk (these are the steps summarized in the returned results).
@@ -297,10 +286,11 @@ misread.qc <- function(
 #' @param n_tracker_updates Number of progress updates to print over the full walk, default 100.
 #' @param N_cells Number of cells to simulate at each step, default 1000. Lowering this trades simulation accuracy for speed -- useful for quick/development runs. Caution: too small a value (a few dozen, on a codebook with many bits) can make the MCMCSA walk itself pathologically slow rather than just less accurate -- the per-step simulation becomes so noisy that the acceptance rate can collapse to near zero once the annealing temperature cools, requiring many thousands of proposals to advance. If a run seems stuck (no progress message for a long time), try raising \code{N_cells} before assuming something is wrong.
 #' @param weights List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank} and \code{min_blank} specify the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, as \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; The weights \code{prior}, \code{dispersion}, and \code{feasibility} all default to 0. The weights \code{prior} and \code{dispersion} are the same Gaussian-prior and dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes the matrices \code{corr1} and \code{corr2} for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.
-#' @return A list giving:\itemize{
-#'    \item \code{STdata}: a dataframe giving the summary data used in the simulation, one row per barcode (genes and blanks) -- here the literal input \code{STdata} (after \code{check_data()}'s gene-then-blank reordering), with its own \code{rates}/\code{variance}/\code{counts} columns and species as row names, rather than \code{misread.qc()}'s re-derived \code{barcode}/\code{species}/\code{barcode_rate}/\code{barcode_variance}/\code{count_observed} columns.
+#' @param max_calls_per_step Cap on proposal attempts within a single step before it is force-accepted regardless of the simulated-annealing acceptance rule, bounding how long any one step (and so the whole walk) can run. Default 0 (unlimited, i.e. no change from prior behavior) -- see \code{N_cells}'s own note on acceptance-rate collapse for why a step can otherwise need many proposals to advance. Intended as a safety valve for development/test use (small codebooks, small \code{N_cells}) rather than for routine production fits, where an unbounded search is normally preferable to a silently truncated one.
+#' @return A list giving: \itemize{
+#'    \item \code{STdata}: a dataframe giving the summary data used in the simulation, one row per barcode (genes and blanks) -- here the literal input \code{STdata} (after \code{check_data()}'s gene-then-blank reordering), with its own \code{rates}, \code{variance}, and \code{counts} columns and species as row names, rather than \code{misread.qc()}'s re-derived \code{barcode}, \code{species}, \code{barcode_rate}, \code{barcode_variance}, and \code{count_observed} columns.
 #'    \item \code{fliprates}: a labeled vector matching \code{misread.qc()}'s own \code{fliprates} layout and names (one \code{rate10_bit}\emph{i}/\code{rate01_bit}\emph{i} entry per bit, one \code{corr_}\emph{k} entry per bit pair) -- but here each entry is the posterior median of that parameter over the post-burn-in \code{resamples} window, rather than an L-BFGS optimum.
-#'    \item \code{erctc_plus}: a data frame, one row per barcode (genes and blanks), with the same seven columns as \code{misread.qc()}'s own \code{erctc_plus} ("erc", "ecc", "ehc", "CR", "PPV", "PPV_lower", "PPV_upper") -- but \code{erc}/\code{ecc}/\code{ehc} are the median simulated read/corrected/hit count over the post-burn-in \code{resamples} window (not an analytic expectation), \code{CR}/\code{PPV} are derived from those medians, and \code{PPV_lower}/\code{PPV_upper} are that window's own 2.5\%/97.5\% empirical quantiles of the per-step PPV ratio -- an empirical substitute for \code{misread.qc()}'s delta-method CI, taken directly from the chain's sampling distribution rather than a local Gaussian approximation. Blanks get a real \code{erc}/\code{ecc}/\code{CR} (other barcodes misread into them), but \code{ehc}/\code{PPV} for blanks will be ~0 by construction, matching \code{misread.qc()}'s own analytic model: neither method ever assigns blanks any true signal to "hit".
+#'    \item \code{erctc_plus}: a data frame, one row per barcode (genes and blanks), with the same seven columns as \code{misread.qc()}'s own \code{erctc_plus} ("erc", "ecc", "ehc", "CR", "PPV", "PPV_lower", "PPV_upper") -- but \code{erc}, \code{ecc}, and \code{ehc} are the median simulated read/corrected/hit count over the post-burn-in \code{resamples} window (not an analytic expectation), \code{CR} and \code{PPV} are derived from those medians, and \code{PPV_lower} and \code{PPV_upper} are that window's own 2.5\%/97.5\% empirical quantiles of the per-step PPV ratio -- an empirical substitute for \code{misread.qc()}'s delta-method CI, taken directly from the chain's sampling distribution rather than a local Gaussian approximation. Blanks get real \code{erc}, \code{ecc}, and \code{CR} values (other barcodes misread into them), but \code{ehc} and \code{PPV} for blanks will be zero by construction, matching \code{misread.qc()}'s own analytic model: neither method ever assigns blanks any true signal to "hit".
 #'    \item \code{msle}: a numeric vector, one value per accepted MCMCSA step, of that step's simulated-fit mean squared log error (the same quantity the MCMCSA acceptance rule minimizes) -- \code{misread.qc.DG()}'s analogue of \code{misread.qc()}'s single \code{msle}, but across the whole walk rather than only at convergence.
 #'    \item \code{PPV_by_step}: a data frame, one row per accepted MCMCSA step and one column per gene barcode, of the simulated PPV for that barcode at that step -- \code{misread.qc.DG()}-specific; \code{misread.qc()} fits a single point and has no chain of steps to trace.
 #' }
@@ -323,7 +313,8 @@ misread.qc.DG <- function(
     n_tracker_updates        = 100,
     N_cells                  = 1e3,
     fliprate_priors          = list(),
-    weights                  = list()
+    weights                  = list(),
+    max_calls_per_step       = 0
   ) {
     cat("\n\nEstimating FPQC metrics with Markov chain Monte Carlo simulated annealing (DG method)")
    
@@ -369,7 +360,8 @@ misread.qc.DG <- function(
       as.integer(N_cells),
       as.list(fliprate_priors),
       as.list(weights),
-      as.integer(max_fs_bc)
+      as.integer(max_fs_bc),
+      as.integer(max_calls_per_step)
     )
    
     # Annotate results

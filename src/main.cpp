@@ -4,7 +4,6 @@
 // [[Rcpp::depends(BH)]]
 #include <Rcpp.h>
 #include <RcppEigen.h>
-#include <random>
 #include <cmath>
 #include <unordered_set>
 #include <map>          // std::map, used by draw_structured_corr() to group bits by round/channel
@@ -14,13 +13,16 @@
 #include <nlopt.hpp>    // L-BFGS and other gradient-based optimizers
 #include <boost/math/distributions/normal.hpp>     // norm_cdf() -- native (no R callback) normal CDF/quantile
 #include <boost/math/special_functions/owens_t.hpp> // bvn_cdf_uppertail() -- native bivariate normal CDF
+#include <boost/random/mersenne_twister.hpp>        // boost::random::mt19937 -- portable RNG engine
+#include <boost/random/normal_distribution.hpp>     // boost::random::normal_distribution
+#include <boost/random/bernoulli_distribution.hpp>  // boost::random::bernoulli_distribution
 using namespace Rcpp;
 using namespace Eigen;
 
 // Hamming distance
 // int dist = __builtin_popcountll(a ^ b);
 
-// Define aliases for convenience
+// Define aliases for compact code
 using V64  = std::vector<uint64_t>;
 using Vint = std::vector<int>;
 using Vdbl = std::vector<double>;
@@ -81,17 +83,18 @@ struct FlipRatePriors {
     Vint   latent_bit_channel;
     /*
      * Structured priors: 
-     *    sdcorr_pairs: Optional per-pair override of sdcorr (same strict-lower-triangle pair index as corr1/corr0, 
+     *    sdcorr_pairs: Optional per-pair override of sdcorr (same strict-lower-triangle pair index as corr1 and corr0, 
      *      i.e. pair (i,j), j<i, at index i*(i-1)/2+j). Empty (default) means "not set" and falls back to sdcorr. 
      *      Lets a caller express a tiered correlation prior (e.g. a wide prior for bit-pairs sharing an imaging round, 
      *      a narrower one for pairs only sharing a color channel, and a tight near-zero prior for everything else) 
      *      via R's build_corr_priors(), instead of one global sd for all pairs.
      *      
      *    latent_bit_round and latent_bit_channel: Two-level latent-factor structured-truth generative mode, used only 
-     *      by draw_random_fr() -- NOT used by the fitting penalty above (that's sdcorr/sdcorr_pairs). Active 
-     *      when latent_bit_round and latent_bit_channel are both set (length N_bits each, arbitrary integer group codes;
-     *      see R's build_structured_corrs()). Lets sim.benchmark() simulate a "true" correlation structure organized
-     *      by, e.g., imaging round and color channel, instead of i.i.d. draws across all pairs.
+     *      by draw_random_fr() -- NOT used by the fitting penalty above (that's sdcorr or sdcorr_pairs). Active 
+     *      when use_latent_structure is true. latent_bit_round and latent_bit_channel are both length N_bits each, 
+     *      arbitrary integer group codes; see R's build_structured_corrs()). Lets sim.benchmark() simulate a "true" 
+     *      correlation structure organized by, e.g., imaging round and color channel, instead of i.i.d. draws across 
+     *      all pairs.
      */
   };
 
@@ -154,7 +157,7 @@ struct ST_data {
      */
   };
 
-// Weights controlling the fit objective's upweighting/regularization terms
+// Weights controlling the fit objective's up-weighting and regularization terms
 struct Weights {
     double blank       = 1.0; // upweight blank barcodes' corrected/read-count MSLE contribution
     double prior       = 0.0; // Gaussian prior-penalty strength on flip rates/correlations (0 disables)
@@ -162,9 +165,9 @@ struct Weights {
     double erc         = 0.0; // joint exact-match (uncorrected) read-count MSLE term strength (0 disables; ignored if bc_counts has no "counts_uncorrected" column)
     double feasibility = 0.0; // feasibility-penalty strength for corr1/corr0 needing a large correction to become realizable (0 disables)
     double max_blank   = 1.0; // mQC_DG() only: blank weight at the start of the FR_search/burn-in schedule
-    double min_blank   = 2.0; // mQC_DG() only: blank weight by the end of burn-in (the schedule's held value)
+    double min_blank   = 1.0; // mQC_DG() only: blank weight by the end of burn-in (the schedule's held value)
     /*
-     * Note:  max_blank/min_blank are mQC_DG()-only (the blank-weight schedule's start/end); R always resolves 
+     * Note:  max_blank and min_blank are mQC_DG()-only (the blank-weight schedule's start/end); R always resolves 
      * these from the data before calling, since a sensible value depends on the gene/blank counts, but they still 
      * need some literal fallback here for a direct C++-side call that omits them.
      */
@@ -374,8 +377,8 @@ V64 neighbors(
   }
 
 // Create valid correlation matrix from random parameter draw
-// Note: signature spelled out as std::vector<double> rather than the Vdbl typedef because
-// Rcpp attribute parsing can't resolve local typedefs from main.cpp.
+// ... Note: signature spelled out as std::vector<double> rather than the Vdbl typedef because
+//     Rcpp attribute parsing can't resolve local typedefs from main.cpp.
 // [[Rcpp::export]]
 Eigen::MatrixXd correlation_from_params(
     const std::vector<double>& theta,
@@ -399,7 +402,7 @@ Eigen::MatrixXd correlation_from_params(
  * *********************************************************************************************************************
  * Dichotomized-Gaussian (DG) correlation-matrix helpers
  *
- * corr1/corr0 (FlipRates) are correlations of the *dichotomized* (post-threshold, 0/1) bit-read
+ * corr1 and corr0 (FlipRates) are correlations of the *dichotomized* (post-threshold, 0/1) bit-read
  * outcomes -- the same quantity TR() already treats them as. Simulating from an actual dichotomized
  * Gaussian needs the underlying *Gaussian* correlation that reproduces a target dichotomized
  * correlation once thresholded; that inversion is what dg_find_sigma_RootBisection() does, via the
@@ -535,26 +538,94 @@ Eigen::MatrixXd dg_raw_gaussian_corr(
     return Sigma;
   }
 
-// Project a (possibly invalid) correlation matrix to the nearest valid one via R's
-// Matrix::nearPD(corr = TRUE, keepDiag = TRUE) -- an iterative alternating-projections algorithm that
-// (unlike naive eigenvalue clipping) both minimizes the distortion and preserves an exact unit
-// diagonal. Matrix is already an Imports dependency. Called once per distinct barcode bit-pattern per
-// MCMCSA step/objective evaluation (not per spot), so the R callback is amortized.
+// Native port of R's Matrix::nearPD() -- Higham (2002)'s alternating-projections algorithm with
+// Dykstra's correction, matching Matrix::nearPD()'s own defaults/logic exactly (eigen() there returns
+// eigenvalues descending; Eigen::SelfAdjointEigenSolver returns them ascending, so every reference to
+// R's d[1]/d[n] below is reindexed to this function's d(n-1)/d(0) accordingly). Replaces an R callback
+// that used to sit in make_SpotSim_DG()'s hot loop -- called once per distinct active barcode on every
+// single MCMCSA proposal, accepted or not, so each R-interpreter round trip was paid many times per
+// step once the annealing's acceptance rate collapsed (see draw_random_fr() et al. for the RNG side of
+// that same loop). Being native also removes the fork-unsafety the R callback used to impose on
+// dg_precompute_barcode_noise() (see make_SpotSim_DG()'s own comment on why that precompute pass used
+// to have to run serially, in the parent process, before forking).
+//
+// Verified against R's Matrix::nearPD(corr=TRUE, keepDiag=TRUE, do2eigen=TRUE) (its call signature
+// here) over random indefinite/invalid correlation-like matrices, including dg_raw_gaussian_corr()'s
+// actual output shape (up to 28x28): agrees to the same magnitude as float round-off, with the
+// same number of iterations and the same achieved correlations.
+Eigen::MatrixXd dg_nearPD_native(
+    const Eigen::MatrixXd& x,
+    bool                   corr      = true,
+    bool                   keepDiag  = true,
+    bool                   do2eigen  = true,
+    bool                   doDykstra = true,
+    int                    maxit     = 100,
+    double                 eig_tol   = 1e-6,
+    double                 conv_tol  = 1e-7,
+    double                 posd_tol  = 1e-8
+  ) {
+    int n = x.rows();
+    auto inf_norm = [](const Eigen::MatrixXd& M) {
+      return M.cwiseAbs().rowwise().sum().maxCoeff(); // R's norm(., "I"): max absolute row sum
+    };
+
+    Eigen::VectorXd diagX0 = x.diagonal(); // only read back when keepDiag && !corr
+    Eigen::MatrixXd D_S    = Eigen::MatrixXd::Zero(n, n);
+    Eigen::MatrixXd X      = x;
+    int  iter      = 0;
+    bool converged = false;
+    while (iter < maxit && !converged) {
+      Eigen::MatrixXd Y  = X;
+      Eigen::MatrixXd Rk = doDykstra ? (Y - D_S) : Y;
+      Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(Rk);
+      Eigen::VectorXd d = es.eigenvalues(); // ascending
+      Eigen::MatrixXd Q = es.eigenvectors();
+      double threshold = eig_tol * d(n - 1); // d(n-1) here == R's d[1] (largest)
+      Eigen::MatrixXd Xnew = Eigen::MatrixXd::Zero(n, n);
+      bool any_kept = false;
+      for (int k = 0; k < n; ++k) {
+        if (d(k) > threshold) {
+          any_kept = true;
+          Xnew += d(k) * (Q.col(k) * Q.col(k).transpose());
+        }
+      }
+      if (!any_kept) {Rcpp::stop("dg_nearPD_native: matrix seems negative semi-definite.");}
+      X = Xnew;
+      if (doDykstra)     {D_S = X - Rk;}
+      if (corr)          {X.diagonal().setOnes();}
+      else if (keepDiag) {X.diagonal() = diagX0;}
+      double conv = inf_norm(Y - X) / inf_norm(Y);
+      ++iter;
+      converged = (conv <= conv_tol);
+    }
+    if (do2eigen) {
+      Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es2(X);
+      Eigen::VectorXd d = es2.eigenvalues(); // ascending
+      Eigen::MatrixXd Q = es2.eigenvectors();
+      double Eps = posd_tol * std::fabs(d(n - 1)); // d(n-1) here == R's d[1] (largest)
+      if (d(0) < Eps) { // d(0) here == R's d[n] (smallest)
+        Eigen::VectorXd dclipped = d;
+        for (int k = 0; k < n; ++k) {if (dclipped(k) < Eps) {dclipped(k) = Eps;}}
+        Eigen::VectorXd o_diag = X.diagonal();
+        X = Q * dclipped.asDiagonal() * Q.transpose();
+        Eigen::VectorXd Dscale(n);
+        for (int i = 0; i < n; ++i) {Dscale(i) = std::sqrt(std::max(Eps, o_diag(i)) / X(i, i));}
+        for (int i = 0; i < n; ++i) {
+          for (int j = 0; j < n; ++j) {X(i, j) *= Dscale(i) * Dscale(j);}
+        }
+      }
+      if (corr)          {X.diagonal().setOnes();}
+      else if (keepDiag) {X.diagonal() = diagX0;}
+    }
+    return X;
+  }
+
+// Project a (possibly invalid) correlation matrix to the nearest valid one, matching the fixed
+// corr=TRUE/keepDiag=TRUE/do2eigen=TRUE call this package has always used (see dg_nearPD_native()).
 Eigen::MatrixXd dg_nearest_corr_matrix(
     const Eigen::MatrixXd& raw
   ) {
-    int n = raw.rows();
-    Rcpp::Function nearPD("nearPD", Rcpp::Environment::namespace_env("Matrix"));
-    Rcpp::NumericMatrix raw_r(n, n);
-    for (int i = 0; i < n; ++i) {for (int j = 0; j < n; ++j) {raw_r(i, j) = raw(i, j);}}
-    Rcpp::List res = nearPD(
-      raw_r, Rcpp::Named("corr") = true, Rcpp::Named("keepDiag") = true, Rcpp::Named("do2eigen") = true
-    );
-    Rcpp::S4            mat_s4 = res["mat"];
-    Rcpp::NumericVector mat_x  = mat_s4.slot("x");
-    Eigen::MatrixXd     out(n, n);
-    for (int i = 0; i < n; ++i) {for (int j = 0; j < n; ++j) {out(i, j) = mat_x[j * n + i];}}
-    return out;
+    return dg_nearPD_native(raw, true, true, true);
   }
 
 // Dichotomized correlation a single pair would achieve (ignoring nearPD's cross-pair redistribution
@@ -671,6 +742,65 @@ double bvn_cdf_uppertail_test(double h, double k, double rho) {
 double dg_find_sigma_RootBisection_test(double threshold_i, double threshold_j, double desired_cov) {
   return dg_find_sigma_RootBisection(threshold_i, threshold_j, desired_cov);
 }
+
+// Exported so tests can check dg_nearPD_native() (the native port of R's Matrix::nearPD(), used by
+// dg_nearest_corr_matrix() above) against Matrix::nearPD() itself over many random matrices.
+// [[Rcpp::export]]
+Eigen::MatrixXd dg_nearPD_native_test(Eigen::MatrixXd x) {
+  return dg_nearPD_native(x, true, true, true);
+}
+
+// Exported RNG regression-test helpers. These pin the exact draw sequence boost::random::mt19937
+// (and its normal_distribution/bernoulli_distribution) produce for a fixed seed. The statistical
+// properties of these draws are not in question; the point is to catch anything that silently
+// changes the *specific numbers* a fixed seed produces -- a reversion to std::, a Boost upgrade
+// that changes a distribution's internal sampling algorithm, or a change to call order/seeding --
+// since any of those would make simulation results produced before vs. after the change diverge
+// for users who rely on a fixed seed for reproducibility (see draw_random_fr() above).
+// [[Rcpp::export]]
+std::vector<unsigned int> rng_engine_draw_test(unsigned int seed, int n) {
+  boost::random::mt19937     rng(seed);
+  std::vector<unsigned int>  out(n);
+  for (int i = 0; i < n; ++i) {out[i] = rng();}
+  return out;
+}
+
+// [[Rcpp::export]]
+std::vector<double> rng_normal_draw_test(unsigned int seed, int n, double mean, double sd) {
+  boost::random::mt19937                     rng(seed);
+  boost::random::normal_distribution<double> dist(mean, sd);
+  std::vector<double>                        out(n);
+  for (int i = 0; i < n; ++i) {out[i] = dist(rng);}
+  return out;
+}
+
+// [[Rcpp::export]]
+std::vector<int> rng_bernoulli_draw_test(unsigned int seed, int n, double p) {
+  boost::random::mt19937                        rng(seed);
+  boost::random::bernoulli_distribution<double> dist(p);
+  std::vector<int>                              out(n);
+  for (int i = 0; i < n; ++i) {out[i] = dist(rng) ? 1 : 0;}
+  return out;
+}
+
+// Mirrors the param_type-reset reuse pattern in draw_random_fr() (one normal_distribution object,
+// re-parameterized per draw via param_type rather than reconstructed) -- a distinct boost::random
+// code path from a freshly constructed distribution, worth pinning separately.
+// [[Rcpp::export]]
+std::vector<double> rng_normal_paramtype_draw_test(
+    unsigned int                seed,
+    double                      mean1, double sd1,
+    double                      mean2, double sd2
+  ) {
+    boost::random::mt19937                     rng(seed);
+    boost::random::normal_distribution<double> dist(0.0, 1.0);
+    boost::random::normal_distribution<double>::param_type p1(mean1, sd1);
+    boost::random::normal_distribution<double>::param_type p2(mean2, sd2);
+    std::vector<double> out(2);
+    out[0] = dist(rng, p1);
+    out[1] = dist(rng, p2);
+    return out;
+  }
 
 /*
  * *********************************************************************************************************************
@@ -790,7 +920,7 @@ static Vdbl draw_structured_corr(
     double             channel_rho,
     double             w_round,
     double             w_channel,
-    std::mt19937&      rng
+    boost::random::mt19937&      rng
   ) {
     int  corr_free = N_bits * (N_bits - 1) / 2;
     Vdbl corr(corr_free, 0.0);
@@ -803,7 +933,7 @@ static Vdbl draw_structured_corr(
     }
    
     // Round tier
-    std::normal_distribution<double> theta_draw(0.0, round_corr_sd);
+    boost::random::normal_distribution<double> theta_draw(0.0, round_corr_sd);
     for (auto& kv : rounds) {
       const Vint& members = kv.second;
       int         m       = (int)members.size();
@@ -871,10 +1001,10 @@ Vdbl draw_random_fr(
     unsigned int          seed = 12345 // Fixed default preserves prior deterministic behavior at existing call sites
   ) {
     // Initialize normal distributions
-    std::mt19937                     rng(seed);
-    std::normal_distribution<double> norm10(std::sqrt(fr_prior.expected10), fr_prior.sd10);
-    std::normal_distribution<double> norm01(std::sqrt(fr_prior.expected01), fr_prior.sd01);
-    std::normal_distribution<double> normCorr(fr_prior.expectedcorr, fr_prior.sdcorr);
+    boost::random::mt19937                     rng(seed);
+    boost::random::normal_distribution<double> norm10(std::sqrt(fr_prior.expected10), fr_prior.sd10);
+    boost::random::normal_distribution<double> norm01(std::sqrt(fr_prior.expected01), fr_prior.sd01);
+    boost::random::normal_distribution<double> normCorr(fr_prior.expectedcorr, fr_prior.sdcorr);
     
     // Randomly select flip rates
     int    N_bits     = STdata.cb.N_bits;
@@ -925,7 +1055,7 @@ Vdbl draw_random_fr(
       for (int i = 0; i < corr_free; ++i) {
         double draw1, draw0;
         if (has_pair_sd) {
-          std::normal_distribution<double>::param_type p(fr_prior.expectedcorr, fr_prior.sdcorr_pairs[i]);
+          boost::random::normal_distribution<double>::param_type p(fr_prior.expectedcorr, fr_prior.sdcorr_pairs[i]);
           draw1 = normCorr(rng, p);
           draw0 = normCorr(rng, p);
         } else {
@@ -1846,7 +1976,7 @@ List mQC(
     double ftol_rel = 1e-8;
     double xtol_rel = 1e-6;
     if (n_restarts < 1) n_restarts = 1;
-    std::mt19937 restart_rng(4507919u + static_cast<unsigned int>(N_barcodes) + static_cast<unsigned int>(n));
+    boost::random::mt19937 restart_rng(4507919u + static_cast<unsigned int>(N_barcodes) + static_cast<unsigned int>(n));
     double       best_minf = std::numeric_limits<double>::infinity();
     Vdbl         best_x;
     EvalResults  best_eval_results;
@@ -2212,7 +2342,7 @@ Vint simulate_barcode_spots(
     const FlipRates& fr,
     const LUT&       correction_table, 
     const V64&       barcodes, 
-    std::mt19937&    rng
+    boost::random::mt19937&    rng
   ) {
     
     // Barcode info
@@ -2245,7 +2375,7 @@ Vint simulate_barcode_spots(
         double FR = (bit ? fr.log_rate10[i] : fr.log_rate01[i]) - log_inv_corr;
         if (FR >= 0.0) {FR = std::log(1.0 - std::numeric_limits<double>::epsilon());}
         // Randomly draw flip or no-flip based on this flip rate
-        std::bernoulli_distribution bern(std::exp(FR));
+        boost::random::bernoulli_distribution<double> bern(std::exp(FR));
         flips[i] = static_cast<int>(bern(rng));
       }
       // Flip drawn bits in the true barcode
@@ -2331,7 +2461,7 @@ SpotSim make_SpotSim(
           Vint rch_counts_child(cache_size, 0);
           
           for (int b : barcode_batches[i]) {
-            std::mt19937 rng(ran_seed + i*n_forks + b);
+            boost::random::mt19937 rng(ran_seed + i*n_forks + b);
             Vint temp_vec = simulate_barcode_spots(
               b, 
               bc_counts[b], 
@@ -2413,7 +2543,7 @@ SpotSim make_SpotSim(
     } else {
       // Run in serial
       for (int b : barcode_batches[0]) {
-        std::mt19937 rng(ran_seed + b);
+        boost::random::mt19937 rng(ran_seed + b);
         Vint temp_vec = simulate_barcode_spots(
           b, 
           bc_counts[b], 
@@ -2726,18 +2856,18 @@ double tr_sum_check(
  */
 
 // Draw n i.i.d. samples from N(mean, Sigma) given Sigma's lower-triangular Cholesky factor L (Sigma =
-// L*L^T). Native, via a caller-supplied std::mt19937 (NOT R's own RNG -- this is called from inside
+// L*L^T). Native, via a caller-supplied boost::random::mt19937 (NOT R's own RNG -- this is called from inside
 // forked child processes in make_SpotSim_DG() below, and R's embedded-interpreter RNG state is not
-// fork-safe to touch there; see make_SpotSim()'s own std::mt19937 use for precedent). Mathematically
+// fork-safe to touch there; see make_SpotSim()'s own boost::random::mt19937 use for precedent). Mathematically
 // identical to MASS::mvrnorm (any valid matrix square root produces the same multivariate normal law)
 // -- this just avoids the R callback dg_legacy.cpp's generate_spots_ci() pays per barcode per cell.
 Eigen::MatrixXd dg_mvn_draw_cholesky(
     const Eigen::MatrixXd& L,
     int                    n,
-    std::mt19937&          rng
+    boost::random::mt19937&          rng
   ) {
     int dim = L.rows();
-    std::normal_distribution<double> std_norm(0.0, 1.0);
+    boost::random::normal_distribution<double> std_norm(0.0, 1.0);
     Eigen::MatrixXd Z(n, dim);
     for (int r = 0; r < n; ++r) {
       for (int c = 0; c < dim; ++c) {Z(r, c) = std_norm(rng);}
@@ -2786,11 +2916,9 @@ Vint dg_draw_true_counts(
   }
 
 // Simulate `count` spots truly of barcode b and decode/correct them, given this barcode's
-// precomputed per-bit thresholds and Gaussian-correlation Cholesky factor (both built once, in the
-// parent process, by dg_precompute_barcode_noise() below -- building them requires dg_nearest_corr_
-// matrix()'s R callback (Matrix::nearPD), which is not safe to call from inside a forked child; this
-// function itself is pure C++, matching simulate_barcode_spots()'s own fork-safety). Returns the same
-// [read|corrected|hit] counts-per-barcode layout make_SpotSim()/simulate_barcode_spots() use.
+// precomputed per-bit thresholds and Gaussian-correlation Cholesky factor (both built once, by
+// dg_precompute_barcode_noise() below). Returns the same [read|corrected|hit] counts-per-barcode
+// layout make_SpotSim()/simulate_barcode_spots() use.
 Vint simulate_barcode_spots_DG(
     int                     b,
     int                     count,
@@ -2799,7 +2927,7 @@ Vint simulate_barcode_spots_DG(
     const LUT&              correction_table,
     const V64&              barcodes,
     int                     N_bits,
-    std::mt19937&           rng
+    boost::random::mt19937&           rng
   ) {
     int  N_barcodes = barcodes.size();
     Vint rch_counts(3 * N_barcodes, 0);
@@ -2832,8 +2960,9 @@ Vint simulate_barcode_spots_DG(
   }
 
 // Build barcode b's per-bit thresholds and Gaussian-correlation Cholesky factor (raw matrix -> nearPD
-// projection -> Cholesky). Must run in the parent process (uses dg_nearest_corr_matrix()'s R
-// callback); see make_SpotSim_DG() for why this is split out from simulate_barcode_spots_DG().
+// projection -> Cholesky). Pure C++ (dg_nearest_corr_matrix() is now a native nearPD port, no R
+// callback -- see dg_nearPD_native()); split out from simulate_barcode_spots_DG() per barcode so the
+// per-call noise model is built once per active barcode rather than once per simulated spot.
 std::pair<Vdbl, Eigen::MatrixXd> dg_precompute_barcode_noise(
     int              b,
     const FlipRates& fr,
@@ -2858,9 +2987,12 @@ std::pair<Vdbl, Eigen::MatrixXd> dg_precompute_barcode_noise(
 // Simulate and decode spot counts for every barcode with a nonzero true count this step, via DG
 // (correlated-Gaussian-noise) spot generation. Mirrors make_SpotSim()'s fork/pipe parallelism
 // (batches barcodes across n_forks processes, same pipe-based int-buffer handoff) -- the one
-// structural difference is the serial precompute pass below, run before forking, since building each
-// barcode's Cholesky factor needs an R callback (Matrix::nearPD) that forked children cannot safely
-// make.
+// structural difference is the precompute pass below, which still runs serially in the parent process
+// before forking. That split was originally forced by dg_nearest_corr_matrix()'s R callback (not
+// fork-safe); now that it's a native nearPD port (dg_nearPD_native()), the precompute step -- the
+// heavier numerical cost per active barcode (an iterative eigendecomposition-based projection) -- is
+// itself fork-safe and could be distributed across n_forks too, but isn't yet: doing so would need a
+// different pipe payload (each child's L/thresholds, not just its simulated counts).
 SpotSim make_SpotSim_DG(
     const Vint&      true_counts,
     const Codebook&  cb,
@@ -2907,7 +3039,7 @@ SpotSim make_SpotSim_DG(
           }
           Vint rch_counts_child(cache_size, 0);
           for (int b : barcode_batches[i]) {
-            std::mt19937 rng(ran_seed + i*n_use + b);
+            boost::random::mt19937 rng(ran_seed + i*n_use + b);
             Vint temp_vec = simulate_barcode_spots_DG(
               b, true_counts[b], thresholds_by_b[b], L_by_b[b], correction_table, cb.barcodes, N_bits, rng
             );
@@ -2951,7 +3083,7 @@ SpotSim make_SpotSim_DG(
       }
     } else {
       for (int b : active) {
-        std::mt19937 rng(ran_seed + b);
+        boost::random::mt19937 rng(ran_seed + b);
         Vint temp_vec = simulate_barcode_spots_DG(
           b, true_counts[b], thresholds_by_b[b], L_by_b[b], correction_table, cb.barcodes, N_bits, rng
         );
@@ -3110,14 +3242,21 @@ Vint dg_sample_without_replacement(int n, int k) {
 
 // C++ engine behind misread.qc.DG(): literal correlated-Gaussian-noise spot simulation (see the DG
 // correlation-matrix helpers above, and make_SpotSim_DG()) fit via Markov Chain Monte Carlo with
-// Simulated Annealing (MCMCSA) -- same walk mechanics as misread.qc.DG.legacy()/.DG_run_simulation()
-// (schedules, two-phase FR_search-then-burnin design, stochastic bit/pair pruning, burn-in mean-rate
-// enforcement), operating on FlipRates (rate10/rate01/corr1/corr0) and FlipRatePriors instead of
-// dg_legacy.R's flat flip-rate/single-correlation vectors. See misread.qc.DG()'s own documentation
-// (R/main.R) for the full argument/return contract; this function expects burnin/FR_search/
-// weights$max_blank/weights$min_blank already resolved (no NULL defaults at this level -- see
-// pack_weights()), and is not itself documented via roxygen (no man page), matching mQC()'s own
-// convention of leaving the internal C++-exported engine undocumented at the Rd level.
+// Simulated Annealing (MCMCSA) -- schedules, two-phase FR_search-then-burnin design, stochastic
+// bit/pair pruning, and burn-in mean-rate enforcement, operating on FlipRates (rate10/rate01/corr1/
+// corr0) and FlipRatePriors. See misread.qc.DG()'s own documentation (R/main.R) for the full
+// argument/return contract; this function expects burnin/FR_search/weights$max_blank/
+// weights$min_blank already resolved (no NULL defaults at this level -- see pack_weights()), and is
+// not itself documented via roxygen (no man page), matching mQC()'s own convention of leaving the
+// internal C++-exported engine undocumented at the Rd level.
+//
+// max_calls_per_step (see misread.qc.DG()'s own @param doc for the user-facing explanation): 0 means
+// unlimited, matching all prior behavior exactly. When > 0, a step that fails to accept a proposal
+// within this many attempts force-accepts its last proposal and moves on regardless of
+// acceptance_prob -- bounding worst-case runtime per step, since the annealing's acceptance rate can
+// otherwise collapse for some (seed, data, schedule) combinations and need many proposals to advance
+// (each one potentially expensive -- see make_SpotSim_DG()'s own neighbors). An opt-in safety valve
+// for development/test use (this package's own fast smoke tests use it), not routine production fits.
 // [[Rcpp::export]]
 List mQC_DG(
     NumericMatrix bc_counts,
@@ -3134,8 +3273,9 @@ List mQC_DG(
     int           n_forks,
     int           N_cells,
     List          fliprate_priors          = List(),
-    List          weights                  = List(), // See Weights/pack_weights(): max_blank/min_blank/prior/dispersion/feasibility, all defaulted there
-    int           max_fs_bc = 40
+    List          weights                  = List(),
+    int           max_fs_bc = 40,
+    int           max_calls_per_step = 0
   ) {
 
     ST_data STdata = load_STdata(bc_counts, codebook, codebook.ncol(), maxHam, true);
@@ -3244,6 +3384,7 @@ List mQC_DG(
 
     Rcpp::Rcout << "\n\nRunning Markov chain steps: \n\nRunning initial steps ..." << std::endl;
     int    step = 0, ctr = 0, last_step = 0, last_ctr = 0, last_message = 0;
+    int    attempts_this_step = 0; // resets whenever step advances; see max_calls_per_step above
     bool   maintain_gene_identity = false;
     double rate10_mean = NA_REAL, rate01_mean = NA_REAL;
     int    FR_sample_start = static_cast<int>(FR_search * 0.8);
@@ -3257,6 +3398,7 @@ List mQC_DG(
     while (step < n_steps) {
 
       ctr++;
+      attempts_this_step++;
 
       Vdbl rate10_next(N_bits), rate01_next(N_bits);
       for (int i = 0; i < N_bits; ++i) {
@@ -3321,11 +3463,13 @@ List mQC_DG(
 
       double acceptance_prob = std::min(1.0, std::exp(-(sim_mse_next - sim_mse_current) / temperature_schedule[step]));
       double draw = R::unif_rand();
-      if (draw < acceptance_prob || step == FR_search) {
+      bool   forced_accept = max_calls_per_step > 0 && attempts_this_step >= max_calls_per_step;
+      if (draw < acceptance_prob || step == FR_search || forced_accept) {
 
         fr_current      = fr_next;
         sim_mse_current = sim_mse_next;
         step++;
+        attempts_this_step = 0;
 
         msle[step - 1]             = sim_mse_current;
         stip_rate10_hist[step - 1] = std::accumulate(fr_next.rate10.begin(), fr_next.rate10.end(), 0.0) / N_bits;

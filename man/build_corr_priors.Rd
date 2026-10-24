@@ -19,10 +19,7 @@ Helper function to build a tiered Gaussian prior on bit-flip correlations from i
 }
 \section{Flip-rate priors}{
 
-\code{fliprate_priors} (and, where applicable, \code{stip_fliprate_priors}) is a structured prior
-list on flip rates and bit-flip correlations (mirrors the C++ \code{FlipRatePriors} struct, plus
-possibly additional terms to construct \code{sdcorr_pairs} from \code{bit_org}), with
-elements:\itemize{
+\code{fliprate_priors} (and, where applicable, \code{stip_fliprate_priors}) is a structured prior list on flip rates and bit-flip correlations (mirrors the C++ \code{FlipRatePriors} struct, plus possibly additional terms to construct \code{sdcorr_pairs} from \code{bit_org}), with elements: \itemize{
    \item \code{expected10}: Expected rate at which 1 bits flip to 0s, default 0.01.
    \item \code{expected01}: Expected rate at which 0 bits flip to 1s, default 0.05.
    \item \code{sd10}: Standard deviation (sd) of the 1-to-0 flip rate, default 0.1.
@@ -36,11 +33,7 @@ elements:\itemize{
    \item \code{sd_round}: For use with bit_org; Prior sd for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).
    \item \code{sd_channel}: For use with bit_org; Prior sd for bit pairs sharing a color channel but not a round (tier 2), default 0.1.
    \item \code{sd_other}: For use with bit_org; Prior sd for all remaining bit pairs (tier 3, pinned near \code{expectedcorr}), default 0.01.
-} Any element omitted from the supplied list falls back to its default. These values are used as
-the Gaussian prior-penalty term (when \code{weights$prior} or \code{weights$dispersion} are
-non-zero) and to draw the initial parameter point(s) before fitting begins. When \code{bit_org} is
-also supplied, \code{latent_bit_round} and \code{latent_bit_channel} will be extracted
-automatically and \code{sdcorr_pairs} will be automatically built from these two factors plus the
-values for \code{sd_round}, \code{sd_channel}, and \code{sd_other} (see \code{build_corr_priors()}).
+} 
+Any element omitted from the supplied list falls back to its default. These values are used as the Gaussian prior-penalty term (when \code{weights$prior} or \code{weights$dispersion} are non-zero) and to draw the initial parameter point(s) before fitting begins. When \code{bit_org} is also supplied, \code{latent_bit_round} and \code{latent_bit_channel} will be extracted automatically and \code{sdcorr_pairs} will be automatically built from these two factors plus the values for \code{sd_round}, \code{sd_channel}, and \code{sd_other} (see \code{build_corr_priors()}).
 }
 

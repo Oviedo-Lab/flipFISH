@@ -58,14 +58,11 @@ This function takes summary statistics (\code{STdata}) from a FISH-based spatial
   \item \strong{Corrected Count}: The number of spots labelled \emph{b} after error correction.
   \item \strong{Hit Count}: The number of spots labelled \emph{b} after error correction which are in fact \emph{b}, i.e., the number of reads error-corrected to \emph{b} which are correct, aka a "hit". 
 }
- The "best fit" is defined as least mean squared log error (msle) computed by comparing the analytically implied expected corrected counts to the observed corrected counts included in \code{STdata}. If \code{counts_uncorrected} are included in \code{STdata} and \code{weights$erc} > 0, then the msle is computed for the read count as well and combined with the corrected-count msle, weighted by \code{weights$erc}. Counts (corrected and read) for blank barcodes can be upweighted via \code{weights$blank}. Penalty terms based on flip rate priors (expected value for flip rates, expected values and dispersion for bit-flip correlations) and bit-flip correlation feasibility can be added by setting non-zero values for \code{weights$prior}, \code{weights$dispersion}, and \code{weights$feasibility}. For each barcode, the expected "confidence ratio" (CR) and expected positive predictive value (PPV) are computed, from these implied count values. The CR is a quality control metric proposed by the original developers of MERFISH (e.g., see DOI 10.1016/bs.mie.2016.03.020) defined per barcode as the read count over the corrected count, while PPV is defined as the hit count over the corrected count. That is, PPV tells us, for each barcode \emph{b}, the expected percentage of spots decoded as \emph{b} which are in fact \emph{b}.
+The "best fit" is defined as least mean squared log error (msle) computed by comparing the analytically implied expected corrected counts to the observed corrected counts included in \code{STdata}. If \code{counts_uncorrected} are included in \code{STdata} and \code{weights$erc} > 0, then the msle is computed for the read count as well and combined with the corrected-count msle, weighted by \code{weights$erc}. Counts (corrected and read) for blank barcodes can be upweighted via \code{weights$blank}. Penalty terms based on flip rate priors (expected value for flip rates, expected values and dispersion for bit-flip correlations) and bit-flip correlation feasibility can be added by setting non-zero values for \code{weights$prior}, \code{weights$dispersion}, and \code{weights$feasibility}. For each barcode, the expected "confidence ratio" (CR) and expected positive predictive value (PPV) are computed, from these implied count values. The CR is a quality control metric proposed by the original developers of MERFISH (e.g., see DOI 10.1016/bs.mie.2016.03.020) defined per barcode as the read count over the corrected count, while PPV is defined as the hit count over the corrected count. That is, PPV tells us, for each barcode \emph{b}, the expected percentage of spots decoded as \emph{b} which are in fact \emph{b}.
 }
 \section{Flip-rate priors}{
 
-\code{fliprate_priors} (and, where applicable, \code{stip_fliprate_priors}) is a structured prior
-list on flip rates and bit-flip correlations (mirrors the C++ \code{FlipRatePriors} struct, plus
-possibly additional terms to construct \code{sdcorr_pairs} from \code{bit_org}), with
-elements:\itemize{
+\code{fliprate_priors} (and, where applicable, \code{stip_fliprate_priors}) is a structured prior list on flip rates and bit-flip correlations (mirrors the C++ \code{FlipRatePriors} struct, plus possibly additional terms to construct \code{sdcorr_pairs} from \code{bit_org}), with elements: \itemize{
    \item \code{expected10}: Expected rate at which 1 bits flip to 0s, default 0.01.
    \item \code{expected01}: Expected rate at which 0 bits flip to 1s, default 0.05.
    \item \code{sd10}: Standard deviation (sd) of the 1-to-0 flip rate, default 0.1.
@@ -79,11 +76,7 @@ elements:\itemize{
    \item \code{sd_round}: For use with bit_org; Prior sd for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).
    \item \code{sd_channel}: For use with bit_org; Prior sd for bit pairs sharing a color channel but not a round (tier 2), default 0.1.
    \item \code{sd_other}: For use with bit_org; Prior sd for all remaining bit pairs (tier 3, pinned near \code{expectedcorr}), default 0.01.
-} Any element omitted from the supplied list falls back to its default. These values are used as
-the Gaussian prior-penalty term (when \code{weights$prior} or \code{weights$dispersion} are
-non-zero) and to draw the initial parameter point(s) before fitting begins. When \code{bit_org} is
-also supplied, \code{latent_bit_round} and \code{latent_bit_channel} will be extracted
-automatically and \code{sdcorr_pairs} will be automatically built from these two factors plus the
-values for \code{sd_round}, \code{sd_channel}, and \code{sd_other} (see \code{build_corr_priors()}).
+} 
+Any element omitted from the supplied list falls back to its default. These values are used as the Gaussian prior-penalty term (when \code{weights$prior} or \code{weights$dispersion} are non-zero) and to draw the initial parameter point(s) before fitting begins. When \code{bit_org} is also supplied, \code{latent_bit_round} and \code{latent_bit_channel} will be extracted automatically and \code{sdcorr_pairs} will be automatically built from these two factors plus the values for \code{sd_round}, \code{sd_channel}, and \code{sd_other} (see \code{build_corr_priors()}).
 }
 

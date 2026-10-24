@@ -1,16 +1,17 @@
 
 # File written by Claude Sonnet 5
 
-# Tests for mQC_DG()/misread.qc.DG() -- the C++-backed DG/MCMCSA method, as distinct from the
-# verbatim-preserved misread.qc.DG.legacy(). Three things are checked:
+# Tests for mQC_DG()/misread.qc.DG() -- the C++-backed DG/MCMCSA method. Three things are checked:
 #   1. The core bivariate-normal / correlation-inversion math (bvn_cdf_uppertail_test(),
 #      dg_find_sigma_RootBisection_test()), against R's own mvtnorm::pmvnorm and against exact
-#      achieved-vs-target correlation recovery -- the actual bug misread.qc.DG() fixes relative to
-#      misread.qc.DG.legacy() (see dg_sigma_formula()'s derivation in src/main.cpp).
-#   2. A smoke test that misread.qc.DG() runs end-to-end and returns the expected shape, same
-#      bundled sample data and output contract test-DG.R already checks for the legacy function.
-#   3. A loose sanity cross-check against misread.qc.DG.legacy() on the same small sample (not an
-#      exact-agreement check -- the two methods' internals now genuinely differ).
+#      achieved-vs-target correlation recovery (see dg_sigma_formula()'s derivation in src/main.cpp).
+#   2. Smoke tests that misread.qc.DG() runs end-to-end and returns the expected shape, on a small
+#      subset of the bundled sample data (inst/extdata/sample_m1/).
+#   3. That max_calls_per_step actually bounds worst-case runtime regardless of seed (see its own
+#      test below): simulated annealing's acceptance rate can collapse for some (seed, data,
+#      schedule) combinations, needing many proposal evaluations to advance a single step even when
+#      each evaluation itself is cheap -- not just a hypothetical, this is exactly what made these
+#      smoke tests intermittently take minutes before max_calls_per_step was added (see git log).
 
 library(flipFISH)
 
@@ -64,36 +65,48 @@ test_that("dg_find_sigma_RootBisection recovers the exact target correlation whe
 
 # ---- 2. misread.qc.DG() smoke test ------------------------------------------------------------
 
-extdata_path <- system.file("extdata", "dg_legacy", package = "flipFISH")
+extdata_path <- system.file("extdata", "sample_m1", package = "flipFISH")
 
-load_small_STdata <- function(n_genes = 8, n_blanks = 3) {
+load_small_STdata <- function(gene_idx, n_blanks = 3) {
   codebook <- read.csv(file.path(extdata_path, "codebook_obs.csv"), row.names = 1)
   genes    <- read.csv(file.path(extdata_path, "summary_stats_m1_genes.csv"))
   blanks   <- read.csv(file.path(extdata_path, "summary_stats_m1_blanks.csv"))
   blank_mask <- grepl("Blank", rownames(codebook), ignore.case = FALSE)
   rownames(genes)  <- rownames(codebook)[!blank_mask]
   rownames(blanks) <- rownames(codebook)[blank_mask]
-  STdata <- rbind(genes[seq_len(n_genes), , drop = FALSE], blanks[seq_len(n_blanks), , drop = FALSE])
+  STdata <- rbind(genes[gene_idx, , drop = FALSE], blanks[seq_len(n_blanks), , drop = FALSE])
   list(STdata = STdata, codebook = codebook[rownames(STdata), , drop = FALSE])
 }
 
-test_that("misread.qc.DG runs end-to-end on a small subset of the bundled legacy data", {
-  skip_if(extdata_path == "", "bundled DG legacy sample data not found")
+# gene_idx picks the package's own lowest-expression-rate genes (summary_stats_m1_genes.csv's
+# "rates" column), not just the first few by row order: misread.qc.DG()'s MCMCSA per-call cost
+# scales with how many transcripts get simulated per gene (proportional to each gene's rate, not to
+# N_cells alone -- see dg_draw_true_counts()), and a shape/smoke test doesn't need realistic
+# expression levels. This keeps each MCMCSA proposal evaluation these smoke tests make cheap. The
+# schedule (resamples/burnin/FR_search) is also kept minimal for the same reason, and
+# max_calls_per_step caps worst-case runtime outright: simulated annealing's acceptance rate can
+# collapse for some (seed, data, schedule) combinations regardless of how cheap each proposal is
+# (requiring many of them to advance a single step -- see misread.qc.DG()'s own doc on this), so
+# cheap proposals alone don't guarantee a fast test, only a bounded number of them does.
 
-  d <- load_small_STdata(n_genes = 8, n_blanks = 3)
+test_that("misread.qc.DG runs end-to-end on a small subset of the bundled legacy data", {
+  skip_if(extdata_path == "", "bundled sample_m1 data not found")
+
+  d <- load_small_STdata(gene_idx = c(5, 8, 4), n_blanks = 3) # rates ~0.08/0.16/0.21
 
   set.seed(1)
   res <- misread.qc.DG(
     d$STdata, d$codebook,
-    resamples = 2, burnin = 5, FR_search = 5,
-    n_tracker_updates = 2, n_forks = 1, N_cells = 100
+    resamples = 1, burnin = 2, FR_search = 2,
+    n_tracker_updates = 0, n_forks = 1, N_cells = 100,
+    max_calls_per_step = 10
   )
 
   expect_type(res, "list")
   expect_named(res, c("STdata", "fliprates", "erctc_plus", "msle", "PPV_by_step"))
 
-  n_steps <- 2 + 5 + 5
-  expect_equal(nrow(res$STdata), 11) # 8 genes + 3 blanks, echoing the (reordered) input
+  n_steps <- 1 + 2 + 2
+  expect_equal(nrow(res$STdata), 6) # 3 genes + 3 blanks, echoing the (reordered) input
   expect_true(setequal(rownames(res$STdata), rownames(d$STdata)))
   n_bits <- ncol(d$codebook)
   expect_equal(length(res$fliprates), 2 * n_bits + n_bits * (n_bits - 1))
@@ -102,13 +115,13 @@ test_that("misread.qc.DG runs end-to-end on a small subset of the bundled legacy
                   res$fliprates[grepl("^rate", names(res$fliprates))] <= 1))
   expect_equal(length(res$msle), n_steps)
   expect_equal(nrow(res$PPV_by_step), n_steps)
-  expect_equal(ncol(res$PPV_by_step), 8)
+  expect_equal(ncol(res$PPV_by_step), 3)
   # check_data() sorts genes/blanks by decreasing observed rate before fitting (same convention
   # misread.qc() already uses), so column/row order need not match the caller's original row order --
   # just confirm it's the same set of names.
-  expect_true(setequal(colnames(res$PPV_by_step), rownames(d$STdata)[seq_len(8)]))
+  expect_true(setequal(colnames(res$PPV_by_step), rownames(d$STdata)[seq_len(3)]))
   expect_named(res$erctc_plus, c("erc", "ecc", "ehc", "CR", "PPV", "PPV_lower", "PPV_upper"))
-  expect_equal(nrow(res$erctc_plus), 11) # 8 genes + 3 blanks, same shape as misread.qc()'s own erctc_plus
+  expect_equal(nrow(res$erctc_plus), 6) # 3 genes + 3 blanks, same shape as misread.qc()'s own erctc_plus
   expect_true(setequal(rownames(res$erctc_plus), rownames(d$STdata)))
 
   expect_true(all(is.finite(res$msle)))
@@ -116,46 +129,63 @@ test_that("misread.qc.DG runs end-to-end on a small subset of the bundled legacy
 })
 
 test_that("misread.qc.DG's feasibility penalty runs without error and stays finite", {
-  skip_if(extdata_path == "", "bundled DG legacy sample data not found")
-  d <- load_small_STdata(n_genes = 6, n_blanks = 3)
+  skip_if(extdata_path == "", "bundled sample_m1 data not found")
+  d <- load_small_STdata(gene_idx = c(5, 8), n_blanks = 3) # rates ~0.08/0.16
 
   set.seed(1)
   res <- misread.qc.DG(
     d$STdata, d$codebook,
-    resamples = 2, burnin = 5, FR_search = 5,
-    n_tracker_updates = 2, n_forks = 1, N_cells = 100,
+    resamples = 1, burnin = 2, FR_search = 2,
+    n_tracker_updates = 0, n_forks = 1, N_cells = 100,
     weights = list(prior = 0.1, dispersion = 0.1, feasibility = 0.05),
-    max_fs_bc = 5
+    max_fs_bc = 1, max_calls_per_step = 10
   )
   expect_true(all(is.finite(res$msle)))
 })
 
-# ---- 3. Second smoke test, different schedule/codebook subset ---------------------------------
+# ---- 3. max_calls_per_step bounds worst-case runtime regardless of seed -----------------------
 
-# NOTE on why there is no automated misread.qc.DG() vs. misread.qc.DG.legacy() cross-check here:
-# a live cross-check means running misread.qc.DG.legacy()'s full, unmodified MCMCSA random walk,
-# and that walk's runtime is NOT reliably bounded even at a seemingly reasonable N_cells. During
-# development, the same small codebook subset and schedule used elsewhere in this file ran
-# misread.qc.DG.legacy() for over an hour with zero progress at N_cells=100 on one seed, while
-# finishing in ~1 second on another -- Monte-Carlo-based simulated annealing's acceptance rate can
-# collapse once the annealing temperature cools, and how often/how badly that happens is sensitive
-# to the random draws, not just the nominal settings. misread.qc.DG() (this file's actual subject)
-# does not show this on its own in the configurations tested above; but legacy is unmodified,
-# verbatim-preserved code (see R/dg_legacy.R's own header), not something this change is meant to
-# fix, and pinning a specific seed here would only be testing "does this one seed happen to be
-# fast enough today" rather than anything real. A one-off manual comparison (both methods, same
-# seed, same small codebook subset) was run during development and landed in the same broad PPV
-# neighborhood for both; that comparison is not repeated here as an automated test.
+test_that("max_calls_per_step bounds misread.qc.DG's runtime across seeds that would otherwise stall", {
+  skip_if(extdata_path == "", "bundled sample_m1 data not found")
+  # Same feasibility-penalty configuration test 2 uses (max_fs_bc = 1 barcode is already the
+  # cheapest possible per-call cost), but with a longer schedule and max_calls_per_step = 1 -- which
+  # forces every single step to accept its first proposal, so each of these runs needs exactly
+  # n_steps = 15 total MCMCSA calls no matter how the annealing's acceptance rate behaves for a
+  # given seed. Several seeds known to need many dozens of calls without a cap (see this file's git
+  # history) are checked here specifically, to confirm the cap -- not seed luck -- is what's
+  # keeping this fast.
+  d <- load_small_STdata(gene_idx = c(5, 8), n_blanks = 3)
+  n_steps <- 5 + 5 + 5
+
+  for (seed in c(1, 2, 6, 7, 9, 10)) {
+    set.seed(seed)
+    t0  <- Sys.time()
+    res <- misread.qc.DG(
+      d$STdata, d$codebook,
+      resamples = 5, burnin = 5, FR_search = 5,
+      n_tracker_updates = 0, n_forks = 1, N_cells = 100,
+      weights = list(prior = 0.1, dispersion = 0.1, feasibility = 0.05),
+      max_fs_bc = 1, max_calls_per_step = 1
+    )
+    elapsed <- as.numeric(Sys.time() - t0, units = "secs")
+    expect_lt(elapsed, 10) # generous margin; uncapped, these seeds take tens of seconds or more
+    expect_equal(length(res$msle), n_steps)
+    expect_true(all(is.finite(res$msle)))
+  }
+})
+
+# ---- 4. Second smoke test, different schedule/codebook subset ---------------------------------
 
 test_that("misread.qc.DG runs end-to-end on a different small codebook subset/schedule", {
-  skip_if(extdata_path == "", "bundled DG legacy sample data not found")
-  d <- load_small_STdata(n_genes = 6, n_blanks = 3)
+  skip_if(extdata_path == "", "bundled sample_m1 data not found")
+  d <- load_small_STdata(gene_idx = c(8, 4), n_blanks = 2) # rates ~0.16/0.21
 
   set.seed(42)
   res <- misread.qc.DG(
     d$STdata, d$codebook,
-    resamples = 2, burnin = 5, FR_search = 5,
-    n_tracker_updates = 2, n_forks = 1, N_cells = 100
+    resamples = 1, burnin = 2, FR_search = 2,
+    n_tracker_updates = 0, n_forks = 1, N_cells = 100,
+    max_calls_per_step = 10
   )
 
   med <- median(res$erctc_plus$PPV, na.rm = TRUE)
