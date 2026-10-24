@@ -274,24 +274,16 @@ misread.qc <- function(
       paste0("corr_",      seq_len(length(qc$fliprates) - 2*N_bits))
     )
     
-    # Report flip-rate means
-    rate10_mean <- mean(qc$fliprates[grepl("rate10", names(qc$fliprates))])
-    rate01_mean <- mean(qc$fliprates[grepl("rate01", names(qc$fliprates))])
-    cat("\nEstimated flip rates:")
-    cat("\n1>0:", round(rate10_mean, 4))
-    cat("\n0>1:", round(rate01_mean, 4))
-    
     return(qc)
    
   }
 
 #' Run misread QC analysis using the dichotomized-Gaussian (DG) spot-simulation plus MCMCSA method
 #'
-#' \code{misread.qc.DG()} is a thin wrapper around the C++ \code{mQC_DG()} engine -- the same pattern
-#' \code{misread.qc()}/\code{mQC()} use -- implementing literal correlated-Gaussian-noise spot
-#' simulation, decoded and compared against \code{STdata}'s observed barcode counts via a Markov
+#' \code{misread.qc.DG()} implements literal correlated-Gaussian-noise spot
+#' simulations, decoded and compared against \code{STdata}'s observed barcode counts via a Markov
 #' Chain Monte Carlo with Simulated Annealing (MCMCSA) search over bit-flip rates and bit-flip
-#' correlations. The random-walk/annealing schedules use a two-phase FR_search-then-burnin design, 
+#' correlations. The random-walk and annealing schedules use a two-phase FR_search-then-burn-in design, 
 #' stochastic bit/pair pruning, and burn-in mean-rate enforcement.
 #'
 #' @inheritParams misread.qc
@@ -304,12 +296,12 @@ misread.qc <- function(
 #' @param min_temperature_scale Temperature is scaled down linearly to \code{max_temperature/(min_step_size_divider/min_temperature_scale)} over burn-in, default 0.5.
 #' @param n_tracker_updates Number of progress updates to print over the full walk, default 100.
 #' @param N_cells Number of cells to simulate at each step, default 1000. Lowering this trades simulation accuracy for speed -- useful for quick/development runs. Caution: too small a value (a few dozen, on a codebook with many bits) can make the MCMCSA walk itself pathologically slow rather than just less accurate -- the per-step simulation becomes so noisy that the acceptance rate can collapse to near zero once the annealing temperature cools, requiring many thousands of proposals to advance. If a run seems stuck (no progress message for a long time), try raising \code{N_cells} before assuming something is wrong.
-#' @param weights List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank}/\code{min_blank} are the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, mirroring \code{misread.qc}'s constant \code{weights$blank} but as a schedule rather than a single scalar, since \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; \code{prior}/\code{dispersion}/\code{feasibility} all default to 0, matching \code{misread.qc}'s "0 disables it" convention: \code{prior}/\code{dispersion} are the same Gaussian-prior/dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes corr1/corr0 for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.
+#' @param weights List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank} and \code{min_blank} specify the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, as \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; The weights \code{prior}, \code{dispersion}, and \code{feasibility} all default to 0. The weights \code{prior} and \code{dispersion} are the same Gaussian-prior and dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes the matrices \code{corr1} and \code{corr2} for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.
 #' @return A list giving:\itemize{
 #'    \item \code{sim_summaries}: a data frame, one row per accepted MCMCSA step, of simulation-fit summary statistics (CR/PPV slope and MSE, stipulated flip rates/correlations, decoding rates, etc.).
 #'    \item \code{PPV}: a data frame, one row per accepted MCMCSA step and one column per gene barcode, of the simulated PPV for that barcode at that step.
 #'    \item \code{PPV_summary}: a data frame summarizing \code{PPV} (over the \code{resamples} rows following burn-in) per gene barcode: median, lower/upper 95\% CI, and whether the lower CI clears 0.8.
-#'    \item \code{Counts_sorted_sim}/\code{Counts_sorted_obs}: data frames, one row per step, of the simulated and observed barcode counts (sorted consistently for comparison).
+#'    \item \code{Counts_sorted_sim} and \code{Counts_sorted_obs}: data frames, one row per step, of the simulated and observed barcode counts (sorted consistently for comparison).
 #'    \item \code{PPV_plot}: a ggplot object visualizing \code{PPV_summary}.
 #'    \item \code{sorted_count_plot}: a ggplot object comparing simulated vs. observed sorted barcode counts over the \code{resamples} rows following burn-in.
 #' }
@@ -319,7 +311,9 @@ misread.qc.DG <- function(
     STdata,
     codebook,
     bit_org                  = NULL,
+    n_forks                  = 1,
     maxHam                   = NULL,
+    max_fs_bc                = 40,
     resamples                = 1000,
     burnin                   = NULL,
     FR_search                = NULL,
@@ -328,45 +322,34 @@ misread.qc.DG <- function(
     max_temperature          = 0.2,
     min_temperature_scale    = 0.5,
     n_tracker_updates        = 100,
-    n_forks                  = 1,
     N_cells                  = 1e3,
     fliprate_priors          = list(),
-    weights                  = list(),
-    max_fs_bc = 40
+    weights                  = list()
   ) {
-
     cat("\n\nEstimating FPQC metrics with Markov chain Monte Carlo simulated annealing (DG method)")
-
-    # Confirm forking is possible and check number of cores (reuses misread.qc()'s own helper)
-    n_forks <- check_forks(n_forks)
    
-    # Check bit size, prep codebook and STdata, and set maxHam (reuses misread.qc()'s own helper;
-    # an optional counts_uncorrected column, if present, just rides along unused -- mQC_DG() has no
-    # use for it)
-    data_check <- check_data(STdata, codebook, bit_org, maxHam)
-    
-    # Build flip rate priors from bit_org, same as misread.qc() -- including stripping
-    # latent_bit_round/latent_bit_channel back out so bit_org only drives sdcorr_pairs here, not
-    # draw_random_fr()'s structured-truth generative mode (see misread.qc()'s own comment on this)
-    N_bits                       <- ncol(data_check$codebook)
-    fliprate_priors              <- build_corr_priors(bit_org = data_check$bit_org, fliprate_priors = fliprate_priors)
+    # Prep inputs
+    n_forks         <- check_forks(n_forks)                                   # Confirm forking settings
+    data_check      <- check_data(STdata, codebook, bit_org, maxHam)          # Check data
+    fliprate_priors <- build_corr_priors(data_check$bit_org, fliprate_priors) # Build flip rate priors from bit_org
    
     # Resolve NULL schedule defaults (same logic misread.qc.DG.legacy() uses)
     blank_mask <- grepl("Blank", rownames(data_check$STdata), ignore.case = FALSE)
     N_genes    <- sum(!blank_mask)
     N_blanks   <- sum(blank_mask)
-    if (is.null(FR_search)) FR_search <- as.integer(resamples / 2)
-    if (is.null(burnin))    burnin    <- as.integer(resamples / 2)
-    max_blank_weight_limit <- N_genes / N_blanks + 1
+    if (is.null(FR_search)) FR_search <- as.integer(round(resamples / 2))
+    if (is.null(burnin))    burnin    <- as.integer(round(resamples / 2))
+    max_blank <- N_genes / N_blanks + 1
     if (is.null(weights$max_blank)) {
-      weights$max_blank <- max_blank_weight_limit
-    } else if (weights$max_blank > max_blank_weight_limit) {
-      cat("\n\nRequested max blank weight too high, resetting to limit:", max_blank_weight_limit)
-      weights$max_blank <- max_blank_weight_limit
+      weights$max_blank <- max_blank
+    } else if (weights$max_blank > max_blank) {
+      cat("\n\nRequested max blank weight too high, resetting to limit:", max_blank)
+      weights$max_blank <- max_blank
     }
     if (is.null(weights$min_blank)) {
       weights$min_blank <- 2
     } else if (weights$min_blank < 1) {
+      cat("\n\nRequested min blank weight too low, resetting to limit: 1")
       weights$min_blank <- 1
     }
    
@@ -406,24 +389,6 @@ misread.qc.DG <- function(
     Counts_sorted_sim <- as.data.frame(res$Counts_sorted_sim)
     Counts_sorted_obs <- as.data.frame(res$Counts_sorted_obs)
    
-    # Same resamples-row window misread.qc.DG.legacy() uses (1-indexed, inclusive of the last burn-in
-    # row through the last resampled row)
-    n_steps        <- nrow(PPV)
-    resamples_rows <- (FR_search + burnin):(FR_search + burnin + resamples)
-    resamples_rows <- resamples_rows[resamples_rows >= 1 & resamples_rows <= n_steps]
-   
-    PPV_plot_info <- .DG_plot_PPV_cutoff(PPV[resamples_rows, , drop = FALSE])
-    PPV_summary   <- PPV_plot_info$summary_df
-    PPV_plot      <- PPV_plot_info$PPV_plot
-    print(PPV_plot)
-   
-    counts_sorted_sim_ <- apply(Counts_sorted_sim[resamples_rows, , drop = FALSE], 2, median)
-    counts_sorted_obs_ <- unlist(as.vector(Counts_sorted_obs[1, ]))
-    sorted_count_plot  <- .DG_plot_counts_sorted(counts_sorted_sim_, counts_sorted_obs_, length(gene_names))
-    print(sorted_count_plot)
-   
-    .DG_plot_MCMC_steps(sim_summaries, burnin, FR_search)
-   
     return(list(
       sim_summaries     = sim_summaries,
       PPV               = PPV,
@@ -433,7 +398,7 @@ misread.qc.DG <- function(
       PPV_plot          = PPV_plot,
       sorted_count_plot = sorted_count_plot
     ))
-
+   
   }
 
 #' Benchmark \code{misread.qc} function with Bernoulli simulations
@@ -720,4 +685,111 @@ plot.fr <- function(
       theme_minimal() +
       facet_grid(type ~ .)
     return(plt)
+  }
+
+# Plot simulation step information
+plot.MCMCsteps <- function(
+    sim_summaries,
+    burnin,
+    FR_search
+  ) {
+   
+    # Add step column
+    sim_summaries$step <- c(1:nrow(sim_summaries))
+   
+    # Set v-line points
+    burnin             <- burnin + FR_search
+    FR_search          <- mean(c(FR_search, FR_search + 1))
+    burnin             <- mean(c(burnin, burnin + 1))
+    vline_points       <- c(FR_search, burnin)
+   
+    # plot sim_mse
+    plot_mse <- ggplot(sim_summaries, aes(x = step, y = sim_mse)) +
+      geom_line() +
+      geom_vline(
+        xintercept = vline_points,
+        color.     = "black",
+        linetype   = "dashed",
+        linewidth  = 0.5
+      ) +
+      labs(title = "MCMCSA step diagnostics", x = "step", y = "MSE (log)") +
+      theme_minimal() +
+      theme(
+        legend.position = "none",
+        plot.title      = element_text(hjust = 0.5, size = .DG_title_size),
+        axis.title      = element_text(size = .DG_axis_size),
+        axis.text.y     = element_text(size = .DG_axis_size),
+        axis.text.x     = element_text(size = .DG_axis_size),
+        legend.title    = element_text(size = .DG_legend_size),
+        legend.text     = element_text(size = .DG_legend_size)
+      )
+   
+    # plot flip rates
+    df_flip <- rbind(
+      data.frame(
+        step     = sim_summaries$step,
+        FlipRate = sim_summaries$flip_rate_10_stip,
+        Type     = "1 to 0"),
+      data.frame(
+        step     = sim_summaries$step,
+        FlipRate = sim_summaries$flip_rate_01_stip,
+        Type     = "0 to 1")
+    )
+   
+    # Plot
+    plot_flip_rates <- ggplot(df_flip, aes(x = step, y = FlipRate, color = Type)) +
+      geom_line() +
+      geom_vline(
+        xintercept = vline_points,
+        color      = "black",
+        linetype   = "dashed",
+        linewidth  = 0.5
+      ) +
+      labs(title = "MCMCSA Flip Rates", x = "step", y = "Flip Rate") +
+      theme_minimal() +
+      theme(
+        plot.title   = element_text(hjust = 0.5, size = .DG_title_size),
+        axis.title   = element_text(size = .DG_axis_size),
+        axis.text.y  = element_text(size = .DG_axis_size),
+        axis.text.x  = element_text(size = .DG_axis_size),
+        legend.title = element_text(size = .DG_legend_size),
+        legend.text  = element_text(size = .DG_legend_size)
+      )
+   
+    # plot bit noise correlations
+    df_flip <- rbind(
+      data.frame(
+        step       = sim_summaries$step,
+        corr_param = sim_summaries$bit_noise_cor_sd_stip,
+        Type       = "sd"),
+      data.frame(
+        step       = sim_summaries$step,
+        corr_param = sim_summaries$bit_noise_cor_bias_stip,
+        Type       = "bias")
+    ) 
+   
+    # Plot
+    plot_corr_param <- ggplot(df_flip, aes(x = step, y = corr_param, color = Type)) +
+      geom_line() +
+      geom_vline(
+        xintercept = vline_points,
+        color      = "black",
+        linetype   = "dashed",
+        linewidth  = 0.5
+      ) +
+      labs(title = "MCMCSA bit-noise correlation parameters", x = "step", y = "Value") +
+      theme_minimal() +
+      theme(
+        plot.title   = element_text(hjust = 0.5, size = .DG_title_size),
+        axis.title   = element_text(size = .DG_axis_size),
+        axis.text.y  = element_text(size = .DG_axis_size),
+        axis.text.x  = element_text(size = .DG_axis_size),
+        legend.title = element_text(size = .DG_legend_size),
+        legend.text  = element_text(size = .DG_legend_size)
+      )
+   
+    print(plot_mse)
+    print(plot_flip_rates)
+    print(plot_corr_param)
+   
   }
