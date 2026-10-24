@@ -2973,49 +2973,46 @@ SpotSim make_SpotSim_DG(
     return sim;
   }
 
-// One MCMCSA step's simulation-fit summary, mirroring .DG_run_simulation()'s return value. Aggregate
-// statistics (mean/sd/OLS) skip NaN entries, matching R's implicit NaN-as-NA handling in mean()/sd()/
-// lm() -- PPV is undefined (NaN) for any gene with zero corrected spots this step, which is expected
-// and legitimate at small N_cells (see test-DG.R's existing tolerance for this).
+// One MCMCSA step's simulation-fit result: the scalar sim-mse objective that drives MCMCSA
+// acceptance (and is reported out as misread.qc.DG()'s "msle"), this step's per-gene PPV (reported
+// out as "PPV_by_step"), and this step's per-barcode read/corrected/hit counts in natural STdata row
+// order (genes and blanks, consumed by mQC_DG() to build "erctc_plus" -- never themselves returned to
+// R, so the only things crossing the R/C++ boundary per step stay small). PPV_genes is NaN for any
+// gene with zero corrected spots this step, which is expected and legitimate at small N_cells.
 struct DGStepResult {
-  Vdbl sim_summary;       // 15 elements, same order/names as dg_legacy.R's sim_summary
-  Vdbl PPV_genes;         // length N_genes, may contain NaN
-  Vdbl counts_sorted;     // length N_genes + N_blanks
-  Vdbl obs_counts_sorted; // length N_genes + N_blanks
+  double sim_mse;
+  Vdbl   PPV_genes;        // length N_genes, may contain NaN
+  Vdbl   read_counts;      // length N_barcodes, natural order (genes then blanks)
+  Vdbl   corrected_counts; // length N_barcodes, natural order
+  Vdbl   hit_counts;       // length N_barcodes, natural order
 };
 
-// OLS slope/MSE for y ~ slope*x + 0 (through the origin), skipping pairs where y is NaN
-std::pair<double, double> dg_ols_through_origin_skipna(const Vdbl& x, const Vdbl& y) {
-  double sxy = 0.0, sxx = 0.0;
-  int    n   = 0;
-  for (size_t i = 0; i < x.size(); ++i) {
-    if (std::isnan(y[i])) {continue;}
-    sxy += x[i] * y[i];
-    sxx += x[i] * x[i];
-    n++;
-  }
-  double slope = sxx > 0.0 ? sxy / sxx : 0.0;
-  double mse = 0.0;
-  for (size_t i = 0; i < x.size(); ++i) {
-    if (std::isnan(y[i])) {continue;}
-    double r = y[i] - slope * x[i];
-    mse += r * r;
-  }
-  mse = n > 0 ? mse / static_cast<double>(n) : NA_REAL;
-  return {slope, mse};
+// Median of x, skipping NaN entries (NA_REAL if nothing finite is left), matching R's median() with
+// NAs removed: for an even count of finite values, the mean of the two middle ones.
+double dg_median_skipna(Vdbl x) {
+  Vdbl finite;
+  finite.reserve(x.size());
+  for (double xi : x) {if (!std::isnan(xi)) {finite.push_back(xi);}}
+  if (finite.empty()) {return NA_REAL;}
+  std::sort(finite.begin(), finite.end());
+  size_t n = finite.size();
+  return n % 2 == 1 ? finite[n / 2] : (finite[n / 2 - 1] + finite[n / 2]) / 2.0;
 }
 
-// Mean and sd of x, skipping NaN entries (sd is NA with fewer than 2 finite values, matching R's sd())
-std::pair<double, double> dg_mean_sd_skipna(const Vdbl& x) {
-  double sum = 0.0;
-  int    n   = 0;
-  for (double xi : x) {if (!std::isnan(xi)) {sum += xi; n++;}}
-  if (n == 0) {return {NA_REAL, NA_REAL};}
-  double mean = sum / static_cast<double>(n);
-  if (n < 2) {return {mean, NA_REAL};}
-  double ss = 0.0;
-  for (double xi : x) {if (!std::isnan(xi)) {ss += (xi - mean) * (xi - mean);}}
-  return {mean, std::sqrt(ss / static_cast<double>(n - 1))};
+// Quantile of x at probability q, skipping NaN entries, using the same linear-interpolation-between-
+// order-statistics convention as R's default quantile(type = 7).
+double dg_quantile_skipna(Vdbl x, double q) {
+  Vdbl finite;
+  finite.reserve(x.size());
+  for (double xi : x) {if (!std::isnan(xi)) {finite.push_back(xi);}}
+  if (finite.empty()) {return NA_REAL;}
+  std::sort(finite.begin(), finite.end());
+  size_t n = finite.size();
+  if (n == 1) {return finite[0];}
+  double h       = (static_cast<double>(n) - 1.0) * q;
+  size_t lo      = static_cast<size_t>(std::floor(h));
+  size_t hi      = static_cast<size_t>(std::ceil(h));
+  return finite[lo] + (h - static_cast<double>(lo)) * (finite[hi] - finite[lo]);
 }
 
 DGStepResult dg_simulation_step(
@@ -3033,7 +3030,6 @@ DGStepResult dg_simulation_step(
 
     // 1. Draw this step's true counts and simulate/decode spots
     Vint true_counts = dg_draw_true_counts(STdata, fr, N_cells);
-    int  total_true  = std::accumulate(true_counts.begin(), true_counts.end(), 0);
     SpotSim sim = make_SpotSim_DG(true_counts, cb, fr, STdata.correction_table, ran_seed, n_forks);
 
     // 2. PPV per gene (hit / corrected; NaN when corrected == 0)
@@ -3045,19 +3041,8 @@ DGStepResult dg_simulation_step(
       }
     }
 
-    // 3. CR per barcode (read / corrected; 0 when corrected == 0, matching dg_legacy.R's convention)
-    int  N_barcodes = cb.barcodes.size();
-    Vdbl CR(N_barcodes, 0.0);
-    for (int b = 0; b < N_barcodes; ++b) {
-      CR[b] = sim.corrected_counts[b] > 0
-        ? static_cast<double>(sim.read_counts[b]) / static_cast<double>(sim.corrected_counts[b]) : 0.0;
-    }
-    Vdbl CR_genes(N_genes), CR_blanks(N_blanks);
-    for (int g = 0; g < N_genes;  ++g) {CR_genes[g]  = CR[cb.genes[g]];}
-    for (int b = 0; b < N_blanks; ++b) {CR_blanks[b] = CR[cb.blanks[b]];}
-    double max_blank_CR = N_blanks > 0 ? *std::max_element(CR_blanks.begin(), CR_blanks.end()) : 0.0;
-
-    // 4. Sorted-count comparison (observed vs. simulated corrected counts), weighted log-MSE
+    // 3. Sorted-count comparison (observed vs. simulated corrected counts), weighted log-MSE --
+    // drives the MCMCSA acceptance criterion (sim_mse); the sorted arrays themselves aren't kept.
     Vdbl obs_counts_genes(N_genes), obs_counts_blanks(N_blanks);
     for (int g = 0; g < N_genes;  ++g) {obs_counts_genes[g]  = STdata.bc_rates[cb.genes[g]]  * N_cells;}
     for (int b = 0; b < N_blanks; ++b) {obs_counts_blanks[b] = STdata.bc_rates[cb.blanks[b]] * N_cells;}
@@ -3070,7 +3055,6 @@ DGStepResult dg_simulation_step(
     Vdbl sim_counts_genes(N_genes), sim_counts_blanks(N_blanks);
     for (int g = 0; g < N_genes;  ++g) {sim_counts_genes[g]  = static_cast<double>(sim.corrected_counts[cb.genes[g]]);}
     for (int b = 0; b < N_blanks; ++b) {sim_counts_blanks[b] = static_cast<double>(sim.corrected_counts[cb.blanks[b]]);}
-    double max_blank_count = N_blanks > 0 ? *std::max_element(sim_counts_blanks.begin(), sim_counts_blanks.end()) : 0.0;
 
     Vdbl counts_sorted(N_genes + N_blanks), obs_counts_sorted(N_genes + N_blanks);
     for (int g = 0; g < N_genes;  ++g) {obs_counts_sorted[g]           = obs_counts_genes[obs_gene_order[g]];}
@@ -3098,47 +3082,12 @@ DGStepResult dg_simulation_step(
     }
     sim_mse /= static_cast<double>(N_genes + N_blanks);
 
-    // 5. CR~PPV relationship and blank-cutoff filter diagnostics
-    auto   ols                 = dg_ols_through_origin_skipna(CR_genes, PPV_genes);
-    double CR_PPV_lm_slope     = ols.first;
-    double CR_PPV_mse          = ols.second;
-    Vdbl   PPV_filtered, PPV_retained;
-    int    n_CR_filtered = 0;
-    for (int g = 0; g < N_genes; ++g) {
-      bool retained = sim_counts_genes[g] > max_blank_count;
-      if (retained) {PPV_retained.push_back(PPV_genes[g]);} else {PPV_filtered.push_back(PPV_genes[g]);}
-      if (CR_genes[g] <= max_blank_CR) {n_CR_filtered++;}
-    }
-    auto   filt_stats          = dg_mean_sd_skipna(PPV_filtered);
-    double PPV_mean_filtered   = filt_stats.first;
-    double PPV_sd_filtered     = filt_stats.second;
-    double PPV_mean_retained   = dg_mean_sd_skipna(PPV_retained).first;
-    double ratio_genes_CR_filtered = static_cast<double>(n_CR_filtered) / static_cast<double>(N_genes);
-
-    // 6. Bit-noise correlation summary (pooled corr1+corr0 -- replaces the single shared
-    // bit_lum_noise_correlations vector dg_legacy.R's version of this column summarized)
-    Vdbl pooled_corr = fr.corr1;
-    pooled_corr.insert(pooled_corr.end(), fr.corr0.begin(), fr.corr0.end());
-    auto corr_stats = dg_mean_sd_skipna(pooled_corr);
-
-    // 7. Spot decoding rates (fraction of simulated spots successfully labeled, before/after correction)
-    int total_read = std::accumulate(sim.read_counts.begin(), sim.read_counts.end(), 0);
-    int total_corr = std::accumulate(sim.corrected_counts.begin(), sim.corrected_counts.end(), 0);
-    double spot_decoding_rate           = total_true > 0 ? static_cast<double>(total_read) / total_true : NA_REAL;
-    double spot_decoding_rate_corrected = total_true > 0 ? static_cast<double>(total_corr) / total_true : NA_REAL;
-
     DGStepResult out;
-    out.sim_summary = {
-      CR_PPV_lm_slope, CR_PPV_mse, sim_mse,
-      PPV_mean_filtered, PPV_sd_filtered, PPV_mean_retained, ratio_genes_CR_filtered,
-      std::accumulate(fr.rate10.begin(), fr.rate10.end(), 0.0) / fr.rate10.size(), NA_REAL,
-      std::accumulate(fr.rate01.begin(), fr.rate01.end(), 0.0) / fr.rate01.size(), NA_REAL,
-      corr_stats.first, corr_stats.second,
-      spot_decoding_rate, spot_decoding_rate_corrected
-    };
-    out.PPV_genes         = PPV_genes;
-    out.counts_sorted     = counts_sorted;
-    out.obs_counts_sorted = obs_counts_sorted;
+    out.sim_mse          = sim_mse;
+    out.PPV_genes        = PPV_genes;
+    out.read_counts      = Vdbl(sim.read_counts.begin(), sim.read_counts.end());
+    out.corrected_counts = Vdbl(sim.corrected_counts.begin(), sim.corrected_counts.end());
+    out.hit_counts       = Vdbl(sim.hit_counts.begin(), sim.hit_counts.end());
     return out;
   }
 
@@ -3251,11 +3200,31 @@ List mQC_DG(
       for (int k = 0; k < corr_free; ++k) {corr_step_scale[k] = fr_priors.sdcorr_pairs[k] / fr_priors.sdcorr;}
     }
 
+    int N_barcodes = STdata.cb.barcodes.size();
     int n_steps = FR_search + burnin + resamples;
-    NumericMatrix sim_summaries(n_steps, 15);
+    NumericVector msle(n_steps);
     NumericMatrix PPV_genes_mat(n_steps, N_genes);
-    NumericMatrix Counts_sorted_sim(n_steps, N_genes + N_blanks);
-    NumericMatrix Counts_sorted_obs(n_steps, N_genes + N_blanks);
+    Vdbl stip_rate10_hist(n_steps, NA_REAL), stip_rate01_hist(n_steps, NA_REAL);
+
+    // Per-barcode read/corrected/hit counts, kept only for accepted steps in the post-burn-in
+    // resamples window and never themselves sent to R -- collapsed into the small erctc_plus matrix
+    // (N_barcodes x 7) once the walk finishes, so the only large structure ever built here stays
+    // internal to C++.
+    int resample_window_start = FR_search + burnin; // 1-indexed step count at which the window begins
+    std::vector<Vdbl> resample_read, resample_corrected, resample_hit;
+    resample_read.reserve(resamples + 1);
+    resample_corrected.reserve(resamples + 1);
+    resample_hit.reserve(resamples + 1);
+
+    // Per-bit/per-pair flip-rate and correlation state, same resamples window, collapsed to a single
+    // "fliprates" vector (median per parameter) once the walk finishes -- misread.qc.DG()'s analogue
+    // of misread.qc()'s own point-estimate fliprates vector, same length/layout (2*N_bits rates then
+    // 2*corr_free correlations), just a posterior median across the chain instead of an L-BFGS optimum.
+    std::vector<Vdbl> resample_rate10, resample_rate01, resample_corr1, resample_corr0;
+    resample_rate10.reserve(resamples + 1);
+    resample_rate01.reserve(resamples + 1);
+    resample_corr1.reserve(resamples + 1);
+    resample_corr0.reserve(resamples + 1);
 
     auto fresh_seed = []() {return static_cast<unsigned int>(R::unif_rand() * 4294967295.0);};
 
@@ -3264,7 +3233,7 @@ List mQC_DG(
 
     Rcpp::Rcout << "\n\nRunning initial simulation with structured-prior-drawn flip rates and correlations" << std::endl;
     DGStepResult init_result = dg_simulation_step(STdata, fr_current, N_cells, w.max_blank, false, (int)fresh_seed(), n_forks);
-    double sim_mse_current = init_result.sim_summary[2];
+    double sim_mse_current = init_result.sim_mse;
     if (w.prior > 0.0 || w.dispersion > 0.0) {
       sim_mse_current += fr_prior_penalty(fr_current, fr_priors, w.prior, w.dispersion, false, nullptr);
     }
@@ -3342,7 +3311,7 @@ List mQC_DG(
       DGStepResult result = dg_simulation_step(
         STdata, fr_next, N_cells, blank_weight_schedule[step], maintain_gene_identity, (int)fresh_seed(), n_forks
       );
-      double sim_mse_next = result.sim_summary[2];
+      double sim_mse_next = result.sim_mse;
       if (w.prior > 0.0 || w.dispersion > 0.0) {
         sim_mse_next += fr_prior_penalty(fr_next, fr_priors, w.prior, w.dispersion, false, nullptr);
       }
@@ -3358,11 +3327,18 @@ List mQC_DG(
         sim_mse_current = sim_mse_next;
         step++;
 
-        for (int c = 0; c < 15; ++c) {sim_summaries(step - 1, c) = result.sim_summary[c];}
+        msle[step - 1]             = sim_mse_current;
+        stip_rate10_hist[step - 1] = std::accumulate(fr_next.rate10.begin(), fr_next.rate10.end(), 0.0) / N_bits;
+        stip_rate01_hist[step - 1] = std::accumulate(fr_next.rate01.begin(), fr_next.rate01.end(), 0.0) / N_bits;
         for (int g = 0; g < N_genes; ++g) {PPV_genes_mat(step - 1, g) = result.PPV_genes[g];}
-        for (int i = 0; i < N_genes + N_blanks; ++i) {
-          Counts_sorted_sim(step - 1, i) = result.counts_sorted[i];
-          Counts_sorted_obs(step - 1, i) = result.obs_counts_sorted[i];
+        if (step >= resample_window_start) {
+          resample_read.push_back(result.read_counts);
+          resample_corrected.push_back(result.corrected_counts);
+          resample_hit.push_back(result.hit_counts);
+          resample_rate10.push_back(fr_next.rate10);
+          resample_rate01.push_back(fr_next.rate01);
+          resample_corr1.push_back(fr_next.corr1);
+          resample_corr0.push_back(fr_next.corr0);
         }
 
         if (step == FR_search) {
@@ -3370,7 +3346,7 @@ List mQC_DG(
           int lo = std::max(1, FR_sample_start), hi = FR_search;
           double sum10 = 0.0, sum01 = 0.0; int n_samp = 0;
           for (int s = lo; s <= hi; ++s) {
-            double v10 = sim_summaries(s - 1, 7), v01 = sim_summaries(s - 1, 9); // flip_rate_10_stip, flip_rate_01_stip
+            double v10 = stip_rate10_hist[s - 1], v01 = stip_rate01_hist[s - 1];
             if (!std::isnan(v10) && !std::isnan(v01)) {sum10 += v10; sum01 += v01; n_samp++;}
           }
           if (n_samp > 0) {rate10_mean = sum10 / n_samp; rate01_mean = sum01 / n_samp;}
@@ -3401,12 +3377,64 @@ List mQC_DG(
 
     }
 
+    // Collapse the resamples-window history into misread.qc()'s own erctc_plus shape: one row per
+    // barcode (genes and blanks), erc/ecc/ehc as the median simulated read/corrected/hit count over
+    // the window, CR/PPV from those medians, and PPV_lower/PPV_upper as the window's own 2.5%/97.5%
+    // empirical quantiles of the per-step PPV ratio -- the direct analogue of misread.qc()'s delta-
+    // method CI, but read straight off the chain's actual sampling distribution instead of a local
+    // Gaussian approximation. Blanks get a real erc/ecc/CR (other barcodes misread into them), but
+    // ehc/PPV for blanks will be ~0 by construction: dg_draw_true_counts() always draws 0 true counts
+    // for blanks, so there's never a true blank spot to be a "hit" -- matching misread.qc()'s own
+    // analytic model, which zeroes blanks' ground-truth count the same way.
+    NumericMatrix erctc_plus(N_barcodes, 7);
+    colnames(erctc_plus) = CharacterVector({"erc", "ecc", "ehc", "CR", "PPV", "PPV_lower", "PPV_upper"});
+    int n_resample_steps = resample_corrected.size();
+    for (int b = 0; b < N_barcodes; ++b) {
+      Vdbl erc_vals(n_resample_steps), ecc_vals(n_resample_steps), ehc_vals(n_resample_steps), ppv_ratio(n_resample_steps);
+      for (int s = 0; s < n_resample_steps; ++s) {
+        erc_vals[s] = resample_read[s][b];
+        ecc_vals[s] = resample_corrected[s][b];
+        ehc_vals[s] = resample_hit[s][b];
+        ppv_ratio[s] = resample_corrected[s][b] > 0.0
+          ? resample_hit[s][b] / resample_corrected[s][b]
+          : std::numeric_limits<double>::quiet_NaN();
+      }
+      double erc_med = dg_median_skipna(erc_vals);
+      double ecc_med = dg_median_skipna(ecc_vals);
+      double ehc_med = dg_median_skipna(ehc_vals);
+      erctc_plus(b, 0) = erc_med;
+      erctc_plus(b, 1) = ecc_med;
+      erctc_plus(b, 2) = ehc_med;
+      erctc_plus(b, 3) = ecc_med > 0.0 ? erc_med / ecc_med : NA_REAL;
+      erctc_plus(b, 4) = ecc_med > 0.0 ? ehc_med / ecc_med : NA_REAL;
+      erctc_plus(b, 5) = dg_quantile_skipna(ppv_ratio, 0.025);
+      erctc_plus(b, 6) = dg_quantile_skipna(ppv_ratio, 0.975);
+    }
+
+    // Collapse the same resamples window into a single "fliprates" vector -- misread.qc()'s own
+    // point-estimate layout (rate10 x N_bits, rate01 x N_bits, corr1 then corr0 x corr_free), but each
+    // entry the posterior median over the window rather than an L-BFGS optimum. R applies
+    // misread.qc()'s own naming convention to this vector, same as it does for misread.qc()'s.
+    NumericVector fliprates(n_params);
+    for (int i = 0; i < N_bits; ++i) {
+      Vdbl r10(n_resample_steps), r01(n_resample_steps);
+      for (int s = 0; s < n_resample_steps; ++s) {r10[s] = resample_rate10[s][i]; r01[s] = resample_rate01[s][i];}
+      fliprates[i]          = dg_median_skipna(r10);
+      fliprates[N_bits + i] = dg_median_skipna(r01);
+    }
+    for (int k = 0; k < corr_free; ++k) {
+      Vdbl c1(n_resample_steps), c0(n_resample_steps);
+      for (int s = 0; s < n_resample_steps; ++s) {c1[s] = resample_corr1[s][k]; c0[s] = resample_corr0[s][k];}
+      fliprates[2*N_bits + k]            = dg_median_skipna(c1);
+      fliprates[2*N_bits + corr_free + k] = dg_median_skipna(c0);
+    }
+
     return List::create(
-      _["sim_summaries"]     = sim_summaries,
-      _["PPV"]               = PPV_genes_mat,
-      _["Counts_sorted_sim"] = Counts_sorted_sim,
-      _["Counts_sorted_obs"] = Counts_sorted_obs,
-      _["gene_idx"]          = IntegerVector(STdata.cb.genes.begin(), STdata.cb.genes.end()),
-      _["blank_idx"]         = IntegerVector(STdata.cb.blanks.begin(), STdata.cb.blanks.end())
+      _["msle"]        = msle,
+      _["PPV_by_step"] = PPV_genes_mat,
+      _["erctc_plus"]  = erctc_plus,
+      _["fliprates"]   = fliprates,
+      _["gene_idx"]    = IntegerVector(STdata.cb.genes.begin(), STdata.cb.genes.end()),
+      _["blank_idx"]   = IntegerVector(STdata.cb.blanks.begin(), STdata.cb.blanks.end())
     );
   }

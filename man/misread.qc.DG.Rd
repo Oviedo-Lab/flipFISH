@@ -8,7 +8,9 @@ misread.qc.DG(
   STdata,
   codebook,
   bit_org = NULL,
+  n_forks = 1,
   maxHam = NULL,
+  max_fs_bc = 40,
   resamples = 1000,
   burnin = NULL,
   FR_search = NULL,
@@ -17,21 +19,23 @@ misread.qc.DG(
   max_temperature = 0.2,
   min_temperature_scale = 0.5,
   n_tracker_updates = 100,
-  n_forks = 1,
   N_cells = 1000,
   fliprate_priors = list(),
-  weights = list(),
-  max_fs_bc = 40
+  weights = list()
 )
 }
 \arguments{
-\item{STdata}{Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", and optionally "counts_uncorrected". The "counts" column must provide the corrected count, the "counts_uncorrected" column can be used to optionally provide the read count. The column "rates" is assumed to hold the per-cell rates for counts, i.e., corrected count over the number of cells. The "variance" column is assumed to hold the variance of the corrected count across cells. The matrix must have barcode names (e.g., gene or protein species) as row names, with blank species having "Blank" in their name.}
+\item{STdata}{Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", and optionally "counts_uncorrected". The "counts" column must provide the corrected count, the "counts_uncorrected" column can be used optionally to provide the read count. The column "rates" is assumed to hold the per-cell rates for counts, empirically estimated as corrected count over the number of cells. The "variance" column is assumed to hold the variance of the corrected count across cells. The matrix must have barcode names (e.g., gene or protein species) as row names, with blank species having "Blank" in their name.}
 
 \item{codebook}{Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0, depending on whether an mRNA molecule of the species represented by the row is expected to luminescence in the bit represented by the column. All row names from \code{STdata} must be included in the row names for \code{codebook}.}
 
-\item{bit_org}{Optional data frame/matrix with one row per bit (columns \code{imagingRound} and \code{color}) giving the imaging-round plus color-channel structure of the codebook, used to build a tiered \code{fliprate_priors} via \code{build_corr_priors()}. Default \code{NULL} skips this (unstructured prior, unless \code{fliprate_priors} is supplied directly). When \code{bit_org} is supplied, \code{fliprate_priors} may additionally include \code{build_corr_priors()}'s own \code{sd_round}/\code{sd_channel}/\code{sd_other} to tune the tiering itself (see the "Flip-rate priors" section below); these are forwarded into the \code{build_corr_priors()} call, not just overlaid on its result.}
+\item{bit_org}{Optional data frame (or matrix) with one row per bit (columns \code{imagingRound} and \code{color}) giving the imaging-round plus color-channel structure of the codebook, used to enrich \code{fliprate_priors} with tiered correlations (\code{sdcorr_pairs}) via \code{build_corr_priors()}. Default \code{NULL} leaves \code{sdcorr_pairs} empty (no correlation structure). Tiered values for use with \code{bit_org} structure is set via entries \code{sd_round}, \code{sd_channel}, and \code{sd_other} in \code{fliprate_priors} (see the "Flip-rate priors" section below).}
 
-\item{maxHam}{Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries. This value may or may not be too aggressive. There is a trade-off between missing spots of barcode \emph{b} misread as not \emph{b} (low \code{maxHam}) and correcting spots not of barcode \emph{b} as \emph{b} (high \code{maxHam}). Also, lower \code{maxHam} will run faster and use less memory than higher \code{maxHam}.}
+\item{n_forks}{Number of process forks to use for parallelizable computation (expected-count computation of \code{misread.qc()}, spot simulation in \code{misread.qc.DG()}), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.}
+
+\item{maxHam}{Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries. This default value may or may not be too aggressive. There is a trade-off between missing spots of barcode \emph{b} misread as not \emph{b} (low \code{maxHam}) and correcting spots not of barcode \emph{b} as \emph{b} (high \code{maxHam}). Also, lower \code{maxHam} will run faster and use less memory than higher \code{maxHam}.}
+
+\item{max_fs_bc}{Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty each time it's evaluated (per L-BFGS objective evaluation under this method; per MCMCSA step under the DG method, \code{misread.qc.DG()}), for speed on large codebooks. Ignored when \code{weights$feasibility} is 0. Default 40.}
 
 \item{resamples}{Number of steps to take in the post-burn-in random walk (these are the steps summarized in the returned results).}
 
@@ -49,54 +53,27 @@ misread.qc.DG(
 
 \item{n_tracker_updates}{Number of progress updates to print over the full walk, default 100.}
 
-\item{n_forks}{Number of process forks to use for parallelizable computation (expected-count computation under this, the L-BFGS method; spot simulation under the DG/MCMCSA method, \code{misread.qc.DG}), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.}
-
 \item{N_cells}{Number of cells to simulate at each step, default 1000. Lowering this trades simulation accuracy for speed -- useful for quick/development runs. Caution: too small a value (a few dozen, on a codebook with many bits) can make the MCMCSA walk itself pathologically slow rather than just less accurate -- the per-step simulation becomes so noisy that the acceptance rate can collapse to near zero once the annealing temperature cools, requiring many thousands of proposals to advance. If a run seems stuck (no progress message for a long time), try raising \code{N_cells} before assuming something is wrong.}
 
 \item{fliprate_priors}{Structured prior list on flip rates and bit-flip correlations (mirrors the C++ \code{FlipRatePriors} struct, plus possibly additional terms to construct \code{sdcorr_pairs} from \code{bit_org}); see the "Flip-rate priors" section below for the full element list.}
 
-\item{weights}{List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank}/\code{min_blank} are the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, mirroring \code{misread.qc}'s constant \code{weights$blank} but as a schedule rather than a single scalar, since \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; \code{prior}/\code{dispersion}/\code{feasibility} all default to 0, matching \code{misread.qc}'s "0 disables it" convention: \code{prior}/\code{dispersion} are the same Gaussian-prior/dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes corr1/corr0 for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.}
-
-\item{max_fs_bc}{Cap on the number of (deterministically subsampled) barcodes used to estimate the feasibility penalty each time it's evaluated (per L-BFGS objective evaluation under this method; per MCMCSA step under the DG method, \code{misread.qc.DG}), for speed on large codebooks. Ignored when \code{weights$feasibility} is 0. Default 40.}
+\item{weights}{List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank} and \code{min_blank} specify the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, as \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; The weights \code{prior}, \code{dispersion}, and \code{feasibility} all default to 0. The weights \code{prior} and \code{dispersion} are the same Gaussian-prior and dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes the matrices \code{corr1} and \code{corr2} for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.}
 }
 \value{
 A list giving:\itemize{
-   \item \code{sim_summaries}: a data frame, one row per accepted MCMCSA step, of simulation-fit summary statistics (CR/PPV slope and MSE, stipulated flip rates/correlations, decoding rates, etc.).
-   \item \code{PPV}: a data frame, one row per accepted MCMCSA step and one column per gene barcode, of the simulated PPV for that barcode at that step.
-   \item \code{PPV_summary}: a data frame summarizing \code{PPV} (over the \code{resamples} rows following burn-in) per gene barcode: median, lower/upper 95\% CI, and whether the lower CI clears 0.8.
-   \item \code{Counts_sorted_sim}/\code{Counts_sorted_obs}: data frames, one row per step, of the simulated and observed barcode counts (sorted consistently for comparison).
-   \item \code{PPV_plot}: a ggplot object visualizing \code{PPV_summary}.
-   \item \code{sorted_count_plot}: a ggplot object comparing simulated vs. observed sorted barcode counts over the \code{resamples} rows following burn-in.
+   \item \code{STdata}: a dataframe echoing the input summary data (\code{STdata}, after \code{check_data()}'s gene-then-blank reordering) used in the simulation.
+   \item \code{fliprates}: a labeled vector matching \code{misread.qc()}'s own \code{fliprates} layout and names (per-bit flip rates, then per-pair bit-flip correlations) -- but here each entry is the posterior median of that parameter over the post-burn-in \code{resamples} window, rather than an L-BFGS optimum.
+   \item \code{msle}: a numeric vector, one value per accepted MCMCSA step, of that step's simulated-fit mean squared log error (the same quantity the MCMCSA acceptance rule minimizes) -- \code{misread.qc.DG()}'s analogue of \code{misread.qc()}'s single \code{msle}, but across the whole walk rather than only at convergence.
+   \item \code{PPV_by_step}: a data frame, one row per accepted MCMCSA step and one column per gene barcode, of the simulated PPV for that barcode at that step.
+   \item \code{erctc_plus}: a data frame with the same shape and column names as \code{misread.qc()}'s own \code{erctc_plus} -- one row per barcode (genes and blanks), giving \code{erc}/\code{ecc}/\code{ehc} as the median simulated read/corrected/hit count over the post-burn-in \code{resamples} window, \code{CR}/\code{PPV} derived from those medians, and \code{PPV_lower}/\code{PPV_upper} as that window's own 2.5\%/97.5\% empirical quantiles of the per-step PPV ratio -- an empirical substitute for \code{misread.qc()}'s delta-method CI, taken directly from the chain's sampling distribution rather than a local Gaussian approximation. Blanks get a real \code{erc}/\code{ecc}/\code{CR} (other barcodes misread into them), but \code{ehc}/\code{PPV} for blanks will be ~0 by construction, matching \code{misread.qc()}'s own analytic model: neither method ever assigns blanks any true signal to "hit".
 }
 }
 \description{
-\code{misread.qc.DG} is a thin wrapper around the C++ \code{mQC_DG()} engine -- the same pattern
-\code{misread.qc()}/\code{mQC()} use -- implementing literal correlated-Gaussian-noise spot
-simulation, decoded and compared against \code{STdata}'s observed barcode counts via a Markov
+\code{misread.qc.DG()} implements literal correlated-Gaussian-noise spot
+simulations, decoded and compared against \code{STdata}'s observed barcode counts via a Markov
 Chain Monte Carlo with Simulated Annealing (MCMCSA) search over bit-flip rates and bit-flip
-correlations. It supersedes \code{misread.qc.DG.legacy} (the verbatim-preserved historical port) in
-three ways: (1) it correctly inverts the desired bit-flip correlations into the underlying Gaussian
-noise correlations actually needed to simulate them -- \code{misread.qc.DG.legacy} plugged bit-flip
-correlations in directly where Gaussian noise correlations were needed, and projects the result to
-the nearest valid (positive-semidefinite) correlation matrix per barcode when the requested
-correlations aren't jointly realizable; (2) it uses separate correlation matrices for when a given
-bit reads 1 vs. 0 (\code{corr1}/\code{corr0}), matching \code{misread.qc}'s \code{FlipRates}
-structure, instead of one shared matrix; and (3) it reuses \code{misread.qc}'s structured, tiered
-priors (\code{fliprate_priors}/\code{bit_org}) for the MCMCSA walk's proposal step sizes and
-acceptance-penalty term, not just its initial draw -- a tightly-pinned prior tier gets both a
-smaller per-step proposal and a larger penalty for moving away from it. The random-walk/annealing
-mechanics themselves (schedules, the two-phase FR_search-then-burnin design, stochastic bit/pair
-pruning, burn-in mean-rate enforcement) are unchanged from \code{misread.qc.DG.legacy}.
-}
-\details{
-One simplification relative to \code{misread.qc.DG.legacy}: the burn-in-phase mean-flip-rate
-enforcement targets the mean of the \emph{stipulated} (proposed/accepted) flip rates over the
-flip-rate-search window, rather than re-deriving an independently \emph{observed} flip rate from
-regenerating ground-truth RNA and comparing it to decoded spots. The two should track each other
-closely in expectation; this avoids porting that secondary diagnostic machinery. Correspondingly,
-\code{sim_summaries}' \code{flip_rate_10}/\code{flip_rate_01} columns (the observed-from-spots
-variant) are always \code{NA} here, same as \code{misread.qc.DG.legacy} already is except near its
-own \code{FR_search} boundary.
+correlations. The random-walk and annealing schedules use a two-phase FR_search-then-burn-in design, 
+stochastic bit/pair pruning, and burn-in mean-rate enforcement.
 }
 \section{Flip-rate priors}{
 

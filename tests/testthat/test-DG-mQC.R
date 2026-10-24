@@ -90,27 +90,29 @@ test_that("misread.qc.DG runs end-to-end on a small subset of the bundled legacy
   )
 
   expect_type(res, "list")
-  expect_named(
-    res,
-    c("sim_summaries", "PPV", "PPV_summary", "Counts_sorted_sim", "Counts_sorted_obs", "PPV_plot", "sorted_count_plot")
-  )
+  expect_named(res, c("STdata", "fliprates", "msle", "PPV_by_step", "erctc_plus"))
 
   n_steps <- 2 + 5 + 5
-  expect_equal(nrow(res$sim_summaries), n_steps)
-  expect_equal(nrow(res$PPV), n_steps)
-  expect_equal(ncol(res$PPV), 8)
+  expect_equal(nrow(res$STdata), 11) # 8 genes + 3 blanks, echoing the (reordered) input
+  expect_true(setequal(rownames(res$STdata), rownames(d$STdata)))
+  n_bits <- ncol(d$codebook)
+  expect_equal(length(res$fliprates), 2 * n_bits + n_bits * (n_bits - 1))
+  expect_true(all(grepl("^rate10_bit|^rate01_bit|^corr_", names(res$fliprates))))
+  expect_true(all(res$fliprates[grepl("^rate", names(res$fliprates))] >= 0 &
+                  res$fliprates[grepl("^rate", names(res$fliprates))] <= 1))
+  expect_equal(length(res$msle), n_steps)
+  expect_equal(nrow(res$PPV_by_step), n_steps)
+  expect_equal(ncol(res$PPV_by_step), 8)
   # check_data() sorts genes/blanks by decreasing observed rate before fitting (same convention
-  # misread.qc() already uses), so column order need not match the caller's original row order --
-  # just confirm it's the same set of gene names.
-  expect_true(setequal(colnames(res$PPV), rownames(d$STdata)[seq_len(8)]))
-  expect_equal(nrow(res$PPV_summary), 8)
-  expect_equal(nrow(res$Counts_sorted_sim), n_steps)
-  expect_equal(ncol(res$Counts_sorted_sim), 11)
+  # misread.qc() already uses), so column/row order need not match the caller's original row order --
+  # just confirm it's the same set of names.
+  expect_true(setequal(colnames(res$PPV_by_step), rownames(d$STdata)[seq_len(8)]))
+  expect_named(res$erctc_plus, c("erc", "ecc", "ehc", "CR", "PPV", "PPV_lower", "PPV_upper"))
+  expect_equal(nrow(res$erctc_plus), 11) # 8 genes + 3 blanks, same shape as misread.qc()'s own erctc_plus
+  expect_true(setequal(rownames(res$erctc_plus), rownames(d$STdata)))
 
-  expect_true(all(is.finite(res$sim_summaries$sim_mse)))
-  expect_true(all(res$PPV_summary$median >= 0 & res$PPV_summary$median <= 1, na.rm = TRUE))
-  expect_s3_class(res$PPV_plot, "ggplot")
-  expect_s3_class(res$sorted_count_plot, "ggplot")
+  expect_true(all(is.finite(res$msle)))
+  expect_true(all(res$erctc_plus$PPV >= 0 & res$erctc_plus$PPV <= 1, na.rm = TRUE))
 })
 
 test_that("misread.qc.DG's feasibility penalty runs without error and stays finite", {
@@ -123,9 +125,9 @@ test_that("misread.qc.DG's feasibility penalty runs without error and stays fini
     resamples = 2, burnin = 5, FR_search = 5,
     n_tracker_updates = 2, n_forks = 1, N_cells = 100,
     weights = list(prior = 0.1, dispersion = 0.1, feasibility = 0.05),
-    max_feasibility_barcodes = 5
+    max_fs_bc = 5
   )
-  expect_true(all(is.finite(res$sim_summaries$sim_mse)))
+  expect_true(all(is.finite(res$msle)))
 })
 
 # ---- 3. Second smoke test, different schedule/codebook subset ---------------------------------
@@ -156,7 +158,7 @@ test_that("misread.qc.DG runs end-to-end on a different small codebook subset/sc
     n_tracker_updates = 2, n_forks = 1, N_cells = 100
   )
 
-  med <- median(res$PPV_summary$median, na.rm = TRUE)
+  med <- median(res$erctc_plus$PPV, na.rm = TRUE)
   expect_true(is.finite(med) && med >= 0 && med <= 1)
-  expect_true(all(is.finite(res$sim_summaries$sim_mse)))
+  expect_true(all(is.finite(res$msle)))
 })

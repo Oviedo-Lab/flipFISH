@@ -176,7 +176,7 @@ build_corr_priors <- function(
 
 #' Run misread QC analysis on summary stats data from spatial transcriptomics experiment
 #'
-#' This function takes summary statistics (\code{STdata}) from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs L-BFGS (via nlopt) to make a best-fit estimate of the bit-flip rates and correlations while using the delta method to estimate 95% confidence intervals. The estimation uses an analytic conditional probability model to compute, for each barcode \emph{b}, values expected based on bit-flip rates and bit-flip correlations, for: \itemize{
+#' This function takes summary statistics (\code{STdata}) from a FISH-based spatial transcriptomics experiment and the barcode codebook (including blanks labelled with "Blank") and runs L-BFGS (via nlopt) to make a best-fit estimate of the bit-flip rates and correlations while using the delta method to estimate 95\% confidence intervals. The estimation uses an analytic conditional probability model to compute, for each barcode \emph{b}, values expected based on bit-flip rates and bit-flip correlations, for: \itemize{
 #'   \item \strong{Read Count}: The number of spots labelled \emph{b} before error correction.
 #'   \item \strong{Corrected Count}: The number of spots labelled \emph{b} after error correction.
 #'   \item \strong{Hit Count}: The number of spots labelled \emph{b} after error correction which are in fact \emph{b}, i.e., the number of reads error-corrected to \emph{b} which are correct, aka a "hit". 
@@ -298,12 +298,11 @@ misread.qc <- function(
 #' @param N_cells Number of cells to simulate at each step, default 1000. Lowering this trades simulation accuracy for speed -- useful for quick/development runs. Caution: too small a value (a few dozen, on a codebook with many bits) can make the MCMCSA walk itself pathologically slow rather than just less accurate -- the per-step simulation becomes so noisy that the acceptance rate can collapse to near zero once the annealing temperature cools, requiring many thousands of proposals to advance. If a run seems stuck (no progress message for a long time), try raising \code{N_cells} before assuming something is wrong.
 #' @param weights List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank} and \code{min_blank} specify the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, as \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; The weights \code{prior}, \code{dispersion}, and \code{feasibility} all default to 0. The weights \code{prior} and \code{dispersion} are the same Gaussian-prior and dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes the matrices \code{corr1} and \code{corr2} for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.
 #' @return A list giving:\itemize{
-#'    \item \code{sim_summaries}: a data frame, one row per accepted MCMCSA step, of simulation-fit summary statistics (CR/PPV slope and MSE, stipulated flip rates/correlations, decoding rates, etc.).
-#'    \item \code{PPV}: a data frame, one row per accepted MCMCSA step and one column per gene barcode, of the simulated PPV for that barcode at that step.
-#'    \item \code{PPV_summary}: a data frame summarizing \code{PPV} (over the \code{resamples} rows following burn-in) per gene barcode: median, lower/upper 95\% CI, and whether the lower CI clears 0.8.
-#'    \item \code{Counts_sorted_sim} and \code{Counts_sorted_obs}: data frames, one row per step, of the simulated and observed barcode counts (sorted consistently for comparison).
-#'    \item \code{PPV_plot}: a ggplot object visualizing \code{PPV_summary}.
-#'    \item \code{sorted_count_plot}: a ggplot object comparing simulated vs. observed sorted barcode counts over the \code{resamples} rows following burn-in.
+#'    \item \code{STdata}: a dataframe echoing the input summary data (\code{STdata}, after \code{check_data()}'s gene-then-blank reordering) used in the simulation.
+#'    \item \code{fliprates}: a labeled vector matching \code{misread.qc()}'s own \code{fliprates} layout and names (per-bit flip rates, then per-pair bit-flip correlations) -- but here each entry is the posterior median of that parameter over the post-burn-in \code{resamples} window, rather than an L-BFGS optimum.
+#'    \item \code{msle}: a numeric vector, one value per accepted MCMCSA step, of that step's simulated-fit mean squared log error (the same quantity the MCMCSA acceptance rule minimizes) -- \code{misread.qc.DG()}'s analogue of \code{misread.qc()}'s single \code{msle}, but across the whole walk rather than only at convergence.
+#'    \item \code{PPV_by_step}: a data frame, one row per accepted MCMCSA step and one column per gene barcode, of the simulated PPV for that barcode at that step.
+#'    \item \code{erctc_plus}: a data frame with the same shape and column names as \code{misread.qc()}'s own \code{erctc_plus} -- one row per barcode (genes and blanks), giving \code{erc}/\code{ecc}/\code{ehc} as the median simulated read/corrected/hit count over the post-burn-in \code{resamples} window, \code{CR}/\code{PPV} derived from those medians, and \code{PPV_lower}/\code{PPV_upper} as that window's own 2.5\%/97.5\% empirical quantiles of the per-step PPV ratio -- an empirical substitute for \code{misread.qc()}'s delta-method CI, taken directly from the chain's sampling distribution rather than a local Gaussian approximation. Blanks get a real \code{erc}/\code{ecc}/\code{CR} (other barcodes misread into them), but \code{ehc}/\code{PPV} for blanks will be ~0 by construction, matching \code{misread.qc()}'s own analytic model: neither method ever assigns blanks any true signal to "hit".
 #' }
 #' @inheritSection misread.qc Flip-rate priors
 #' @export
@@ -373,32 +372,28 @@ misread.qc.DG <- function(
       as.integer(max_fs_bc)
     )
    
-    # Annotate results. Plotting stays in R, reusing dg_legacy.R's private .DG_plot_* helpers (same
-    # package namespace; that file itself is untouched).
-    gene_names               <- rownames(data_check$STdata)[res$gene_idx + 1]
-    sim_summaries            <- as.data.frame(res$sim_summaries)
-    colnames(sim_summaries)  <- c(
-      "CR_PPV_slope", "CR_PPV_mse", "sim_mse",
-      "PPV_mean_filtered", "PPV_sd_filtered", "PPV_mean_retained", "ratio_genes_CR_filtered",
-      "flip_rate_10_stip", "flip_rate_10", "flip_rate_01_stip", "flip_rate_01",
-      "bit_noise_cor_bias_stip", "bit_noise_cor_sd_stip",
-      "spot_decoding_rate", "spot_decoding_rate_corrected"
+    # Annotate results
+    gene_names                 <- rownames(data_check$STdata)[res$gene_idx + 1]
+    PPV_by_step                <- as.data.frame(res$PPV_by_step)
+    colnames(PPV_by_step)      <- gene_names
+    erctc_plus                 <- as.data.frame(res$erctc_plus)
+    row.names(erctc_plus)      <- rownames(data_check$STdata)
+    N_bits                     <- ncol(data_check$codebook)
+    fliprates                  <- res$fliprates
+    names(fliprates)           <- c(
+      paste0("rate10_bit", seq_len(N_bits)),
+      paste0("rate01_bit", seq_len(N_bits)),
+      paste0("corr_",      seq_len(length(fliprates) - 2*N_bits))
     )
-    PPV               <- as.data.frame(res$PPV)
-    colnames(PPV)     <- gene_names
-    Counts_sorted_sim <- as.data.frame(res$Counts_sorted_sim)
-    Counts_sorted_obs <- as.data.frame(res$Counts_sorted_obs)
-   
+
     return(list(
-      sim_summaries     = sim_summaries,
-      PPV               = PPV,
-      PPV_summary       = PPV_summary,
-      Counts_sorted_sim = Counts_sorted_sim,
-      Counts_sorted_obs = Counts_sorted_obs,
-      PPV_plot          = PPV_plot,
-      sorted_count_plot = sorted_count_plot
+      STdata      = data_check$STdata,
+      fliprates   = fliprates,
+      msle        = res$msle,
+      PPV_by_step = PPV_by_step,
+      erctc_plus  = erctc_plus
     ))
-   
+
   }
 
 #' Benchmark \code{misread.qc} function with Bernoulli simulations
