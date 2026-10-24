@@ -90,7 +90,7 @@ test_that("misread.qc.DG runs end-to-end on a small subset of the bundled legacy
   )
 
   expect_type(res, "list")
-  expect_named(res, c("STdata", "fliprates", "msle", "PPV_by_step", "erctc_plus"))
+  expect_named(res, c("STdata", "fliprates", "erctc_plus", "msle", "PPV_by_step"))
 
   n_steps <- 2 + 5 + 5
   expect_equal(nrow(res$STdata), 11) # 8 genes + 3 blanks, echoing the (reordered) input

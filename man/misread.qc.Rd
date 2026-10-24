@@ -46,10 +46,10 @@ misread.qc(
 }
 \value{
 A list giving:\itemize{
-   \item \code{STdata}: a dataframe giving the summary data from the ST run used in the estimation.
-   \item \code{fliprates}: a labeled vector giving the estimated (i.e., best fit) flip rates and bit-flip correlations from the optimization.
-   \item \code{erctc_plus}: a data frame giving, for each barcode, the read, corrected, and hit counts as well as \code{CR} and \code{PPV} values implied by the analytic conditional probability model, given the values in \code{fliprates}, plus a 95\% confidence interval on \code{PPV} (\code{PPV_lower} and \code{PPV_upper}) from a delta-method (Laplace) approximation -- this propagates uncertainty in the fitted flip-rate and correlation parameters through to PPV, via a Gauss-Newton information matrix truncated to its well-conditioned directions, rather than treating PPV as a simple binomial proportion. Column names are: "erc", "ecc", "ehc", "CR", "PPV", "PPV_lower", "PPV_upper".
-   \item \code{msle}: A numeric value giving the minimal mean squared log error found by the L-BFGS optimization of the flip rates and bit-flip correlations.
+   \item \code{STdata}: a dataframe giving the summary data used in the fit, one row per barcode (genes and blanks) -- re-derived in C++ with columns \code{barcode} (the bit-packed codeword), \code{species}, \code{barcode_rate}, \code{barcode_variance}, and \code{count_observed}, which carry the same values as the input \code{STdata}'s \code{rates}/\code{variance}/\code{counts}, just reshaped (species moved from row names into its own column).
+   \item \code{fliprates}: a labeled vector giving the best-fit (L-BFGS optimum) flip rates and bit-flip correlations: one \code{rate10_bit}\emph{i}/\code{rate01_bit}\emph{i} entry per bit, and one \code{corr_}\emph{k} entry per bit pair.
+   \item \code{erctc_plus}: a data frame, one row per barcode (genes and blanks), giving the read, corrected, and hit counts (\code{erc}/\code{ecc}/\code{ehc}) and the \code{CR} and \code{PPV} values analytically implied by the conditional probability model at the fitted \code{fliprates}, plus a 95\% confidence interval on \code{PPV} (\code{PPV_lower} and \code{PPV_upper}) from a delta-method (Laplace) approximation -- this propagates uncertainty in the fitted flip-rate and correlation parameters through to PPV, via a Gauss-Newton information matrix truncated to its well-conditioned directions, rather than treating PPV as a simple binomial proportion. Column names are: "erc", "ecc", "ehc", "CR", "PPV", "PPV_lower", "PPV_upper".
+   \item \code{msle}: a single numeric value, the minimal mean squared log error found by the L-BFGS optimization of the flip rates and bit-flip correlations.
 }
 }
 \description{
