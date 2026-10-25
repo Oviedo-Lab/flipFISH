@@ -83,10 +83,10 @@ struct FlipRatePriors {
     Vint   latent_bit_channel;
     /*
      * Structured priors: 
-     *    sdcorr_pairs: Optional per-pair override of sdcorr (same strict-lower-triangle pair index as corr1 and corr0, 
-     *      i.e. pair (i,j), j<i, at index i*(i-1)/2+j). Empty (default) means "not set" and falls back to sdcorr. 
-     *      Lets a caller express a tiered correlation prior (e.g. a wide prior for bit-pairs sharing an imaging round, 
-     *      a narrower one for pairs only sharing a color channel, and a tight near-zero prior for everything else) 
+     *    sdcorr_pairs: Optional per-pair override of sdcorr (same strict-lower-triangle pair index as corr1 and corr0,
+     *      i.e. pair (i,j), j<i, at lower_tri_index(i, j)). Empty (default) means "not set" and falls back to sdcorr.
+     *      Lets a caller express a tiered correlation prior (e.g. a wide prior for bit-pairs sharing an imaging round,
+     *      a narrower one for pairs only sharing a color channel, and a tight near-zero prior for everything else)
      *      via R's build_corr_priors(), instead of one global sd for all pairs.
      *      
      *    latent_bit_round and latent_bit_channel: Two-level latent-factor structured-truth generative mode, used only 
@@ -225,6 +225,64 @@ Vint grep_idx(
     return idx;
   }
 
+// Index of pair (i, j), j < i, within the strict lower triangle of an N_bits x N_bits matrix, in
+// the canonical linear order corr1/corr0/sdcorr_pairs all use throughout this file (and that
+// lower_tri_pairs_raw()/its R-facing export below enumerate in that same order). Single source of
+// truth for this formula: every other site that needs it (TR(), dg_raw_gaussian_corr(),
+// dg_feasibility_penalty(), draw_structured_corr()) calls this instead of writing i*(i-1)/2+j
+// itself, so the formula can't drift between call sites.
+inline int lower_tri_index(
+    int i,
+    int j
+  ) {
+    return i * (i - 1) / 2 + j;
+  }
+
+// Enumerate the strict lower triangle (j < i) of an N_bits x N_bits matrix in that same canonical
+// order: pair (i, j) sits at linear index lower_tri_index(i, j), and walking i = 1..N_bits-1,
+// j = 0..i-1 visits those indices in increasing order, so a plain running counter matches
+// lower_tri_index() without computing it. Returns that enumeration as two parallel 0-based index
+// vectors (is[k], js[k] give the pair at linear index k) of length N_bits*(N_bits-1)/2. This is the
+// one place that order is built; draw_random_fr() and correlation_from_params() (both below) call
+// it instead of re-deriving the same nested loop, as does lower_tri_pairs() (the R-facing export
+// just below this), so none of them can drift out of sync with each other or with
+// lower_tri_index().
+std::pair<Vint, Vint> lower_tri_pairs_raw(
+    int N_bits
+  ) {
+    int  corr_free = N_bits * (N_bits - 1) / 2;
+    Vint is(corr_free), js(corr_free);
+    int  k = 0;
+    for (int i = 1; i < N_bits; ++i) {
+      for (int j = 0; j < i; ++j) {
+        is[k] = i;
+        js[k] = j;
+        ++k;
+      }
+    }
+    return {is, js};
+  }
+
+// R-facing export of lower_tri_pairs_raw(): the strict lower triangle's canonical pair order, as a
+// corr_free x 2 integer matrix with 1-based (R-style) "i"/"j" columns -- row k (1-based) gives the
+// pair at linear index k, matching corr1/corr0's/sdcorr_pairs' own layout. Lets build_corr_priors()
+// (R/main.R) enumerate these pairs directly instead of hand-rolling the matching nested loop, which
+// had to be kept manually consistent with this file's own index-building code.
+// [[Rcpp::export]]
+IntegerMatrix lower_tri_pairs(
+    int N_bits
+  ) {
+    auto pairs     = lower_tri_pairs_raw(N_bits);
+    int  corr_free = pairs.first.size();
+    IntegerMatrix out(corr_free, 2);
+    colnames(out) = CharacterVector::create("i", "j");
+    for (int k = 0; k < corr_free; ++k) {
+      out(k, 0) = pairs.first[k]  + 1;
+      out(k, 1) = pairs.second[k] + 1;
+    }
+    return out;
+  }
+
 // Convert flip rate vector into structured FR object
 FlipRates pack_fr(
     const Vdbl& rates_plus_corr,
@@ -235,7 +293,7 @@ FlipRates pack_fr(
     // Assign flip rates
     fr.rate10.assign(rates_plus_corr.begin(), rates_plus_corr.begin() + N_bits);
     fr.rate01.assign(rates_plus_corr.begin() + N_bits, rates_plus_corr.begin() + 2*N_bits);
-    // Find number of correlations (strict lower triangle) ... corr(i,j) = corrXXXX(i * (i - 1) / 2 + j)
+    // Find number of correlations (strict lower triangle) ... corr(i,j) = corrXXXX(lower_tri_index(i, j))
     int N_corrs = N_bits * (N_bits - 1) / 2;
     // Assign correlations
     fr.corr1.assign(rates_plus_corr.begin() + 2*N_bits, rates_plus_corr.begin() + 2*N_bits + N_corrs);
@@ -377,11 +435,10 @@ Eigen::MatrixXd correlation_from_params(
     const Vdbl& theta,
     int         n
   ) {
-    Eigen::MatrixXd L = Eigen::MatrixXd::Zero(n, n);
-    int k = 0;
-    for (int i = 0; i < n; ++i){
-      L(i, i) = 1.0;
-      for (int j = 0; j < i; ++j) {L(i, j) = theta[k++];}
+    Eigen::MatrixXd L = Eigen::MatrixXd::Identity(n, n);
+    auto pairs = lower_tri_pairs_raw(n); // same canonical (i, j) order theta is laid out in
+    for (size_t k = 0; k < pairs.first.size(); ++k) {
+      L(pairs.first[k], pairs.second[k]) = theta[k];
     }
     Eigen::MatrixXd S  = L * L.transpose();
     Eigen::VectorXd sd = S.diagonal().cwiseSqrt();
@@ -518,7 +575,7 @@ Eigen::MatrixXd dg_raw_gaussian_corr(
     Eigen::MatrixXd Sigma = Eigen::MatrixXd::Identity(N_bits, N_bits);
     for (int i = 1; i < N_bits; ++i) {
       for (int j = 0; j < i; ++j) {
-        int    k            = i * (i - 1) / 2 + j;
+        int    k            = lower_tri_index(i, j);
         double desired_corr = barcode_bits[i] == 1 ? fr.corr1[k] : fr.corr0[k];
         double p_i          = 1.0 - boost::math::cdf(dg_std_normal, thresholds[i]);
         double p_j          = 1.0 - boost::math::cdf(dg_std_normal, thresholds[j]);
@@ -691,7 +748,7 @@ double dg_feasibility_penalty(
       Eigen::MatrixXd projected = dg_nearest_corr_matrix(raw);
       for (int i = 1; i < N_bits; ++i) {
         for (int j = 0; j < i; ++j) {
-          int    k            = i * (i - 1) / 2 + j;
+          int    k            = lower_tri_index(i, j);
           bool   bit_i_is_1   = barcode_bits[i] == 1;
           double desired_corr = bit_i_is_1 ? fr.corr1[k] : fr.corr0[k];
           double p_i          = 1.0 - boost::math::cdf(dg_std_normal, thresholds[i]);
@@ -938,7 +995,7 @@ static Vdbl draw_structured_corr(
         for (int b = 0; b < a; ++b) {
           int hi  = std::max(members[a], members[b]);
           int lo  = std::min(members[a], members[b]);
-          int idx = hi * (hi - 1) / 2 + lo;
+          int idx = lower_tri_index(hi, lo);
           corr[idx] = w_round * local_mat(a, b);
         }
       }
@@ -957,7 +1014,7 @@ static Vdbl draw_structured_corr(
           if (bit_round[members[a]] == bit_round[members[b]]) continue;
           int hi  = std::max(members[a], members[b]);
           int lo  = std::min(members[a], members[b]);
-          int idx = hi * (hi - 1) / 2 + lo;
+          int idx = lower_tri_index(hi, lo);
           corr[idx] = w_channel * channel_rho;
         }
       }
@@ -1060,17 +1117,14 @@ Vdbl draw_random_fr(
       }
       auto corr1_mat = correlation_from_params(corr1, N_bits);
       auto corr0_mat = correlation_from_params(corr0, N_bits);
-      int  m = 0;
-      for (int i = 1; i < N_bits; ++i) {
-        for (int j = 0; j < i; ++j) {
-          corr1_final[m] = corr1_mat(i, j);
-          corr0_final[m] = corr0_mat(i, j);
-          ++m;
-        }
+      auto pairs     = lower_tri_pairs_raw(N_bits);
+      for (size_t m = 0; m < pairs.first.size(); ++m) {
+        corr1_final[m] = corr1_mat(pairs.first[m], pairs.second[m]);
+        corr0_final[m] = corr0_mat(pairs.first[m], pairs.second[m]);
       }
     }
-    // ... fill into FR (both routes produce corr1_final/corr0_final already in strict
-    // lower-triangle order i*(i-1)/2+j, matching the loop order below)
+    // ... fill into FR (both routes produce corr1_final/corr0_final already in lower_tri_index()'s
+    // canonical order, matching the loop order below)
     int k = N_bits * 2;
     for (int idx = 0; idx < corr_free; ++idx) {FR[k++] = corr1_final[idx];}
     for (int idx = 0; idx < corr_free; ++idx) {FR[k++] = corr0_final[idx];}
@@ -1207,7 +1261,7 @@ double TR(
       for (int j = 0; j < i; ++j) {
         if (flip_vec[j]) {
           // Conditional "if (flip_vec[j])" added by Claude Sonnet 4.6; adjustment by log_inv_corr applied only if the flip happens
-          int ij = i * (i-1) / 2 + j;
+          int ij = lower_tri_index(i, j);
           log_inv_corr[i] += bit_vec[i] ? std::log(1.0 - fr.corr1[ij]) : std::log(1.0 - fr.corr0[ij]);
         }
       }
@@ -1250,7 +1304,7 @@ double TR(
         // Gradient w.r.t. corr parameters: ∂log(p_i)/∂corr_relevant[k] = 1/(1-corr)
         for (int j = 0; j < i; ++j) {
           if (!flip_vec[j]) continue;  // corr[i,j] only appears when flip_j = 1
-          int k = i * (i-1) / 2 + j;
+          int k = lower_tri_index(i, j);
           if (bit_vec[i]) {
             double contrib = base / (1.0 - fr.corr1[k]);
             if (grad)  (*grad)[2*N_bits + k]  += contrib;
@@ -2360,7 +2414,7 @@ Vint simulate_barcode_spots(
         double log_inv_corr = 0.0; 
         for (int j = 0; j < i; ++j) {
           if (flips[j]) {
-            int ij = i * (i-1) / 2 + j;
+            int ij = lower_tri_index(i, j);
             log_inv_corr += bit ? std::log(1.0 - fr.corr1[ij]) : std::log(1.0 - fr.corr0[ij]);
           }
         }

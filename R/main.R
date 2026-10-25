@@ -119,7 +119,7 @@ build_corr_priors <- function(
     }
     N_bits <- 0
     
-    # Extract bit structure, integer-coded (via factor()) so arbitrary label types (character, numeric, ...) work
+    # Extract bit structure, integer-coded via factor() so arbitrary label types (character, numeric, ...) work
     if (!is.null(bit_org)) {
       if (is.null(dim(bit_org)))                                   stop("bit_org must be a matrix or data frame with N_bit rows")
       if (!all(c("imagingRound", "color") %in% colnames(bit_org))) stop("bit_org must have columns imagingRound and color")
@@ -150,22 +150,19 @@ build_corr_priors <- function(
       sd_other             <- fr_priors$sd_other
       fr_priors$sd_other   <- NULL
     }
-    # Fill in the same order as main.cpp's strict lower triangle (pair (i0, j0), 0-based, j0 < i0,
-    # at linear index i0*(i0-1)/2 + j0): looping i0 = 1..N_bits-1, j0 = 0..i0-1 visits that index in
-    # increasing order, so a plain running counter k matches it without computing the formula.
-    k <- 0
-    for (i0 in 1:(N_bits - 1)) {
-      for (j0 in 0:(i0 - 1)) {
-        k <- k  + 1
-        i <- i0 + 1 # 1-based R index into bit_round/bit_channel
-        j <- j0 + 1
-        if (fr_priors$latent_bit_round[i] == fr_priors$latent_bit_round[j]) {
-          sdcorr_pairs[k] <- sd_round
-        } else if (fr_priors$latent_bit_channel[i] == fr_priors$latent_bit_channel[j]) {
-          sdcorr_pairs[k] <- sd_channel
-        } else {
-          sdcorr_pairs[k] <- sd_other
-        }
+    # Fill in lower_tri_pairs()'s canonical pair order (1-based i, j), matching corr1/corr0's own
+    # layout on the C++ side -- lower_tri_pairs() (src/main.cpp) is the single source of truth for
+    # that pairing, so this can't drift out of sync with it.
+    pairs <- lower_tri_pairs(N_bits)
+    for (k in seq_len(corr_free)) {
+      i <- pairs[k, "i"]
+      j <- pairs[k, "j"]
+      if (fr_priors$latent_bit_round[i] == fr_priors$latent_bit_round[j]) {
+        sdcorr_pairs[k] <- sd_round
+      } else if (fr_priors$latent_bit_channel[i] == fr_priors$latent_bit_channel[j]) {
+        sdcorr_pairs[k] <- sd_channel
+      } else {
+        sdcorr_pairs[k] <- sd_other
       }
     }
     fr_priors$sdcorr_pairs <- sdcorr_pairs

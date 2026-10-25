@@ -11,6 +11,17 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// lower_tri_pairs
+IntegerMatrix lower_tri_pairs(int N_bits);
+RcppExport SEXP _flipFISH_lower_tri_pairs(SEXP N_bitsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type N_bits(N_bitsSEXP);
+    rcpp_result_gen = Rcpp::wrap(lower_tri_pairs(N_bits));
+    return rcpp_result_gen;
+END_RCPP
+}
 // bvn_cdf_uppertail_test
 double bvn_cdf_uppertail_test(double h, double k, double rho);
 RcppExport SEXP _flipFISH_bvn_cdf_uppertail_test(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
@@ -267,6 +278,7 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_flipFISH_lower_tri_pairs", (DL_FUNC) &_flipFISH_lower_tri_pairs, 1},
     {"_flipFISH_bvn_cdf_uppertail_test", (DL_FUNC) &_flipFISH_bvn_cdf_uppertail_test, 3},
     {"_flipFISH_dg_find_sigma_RootBisection_test", (DL_FUNC) &_flipFISH_dg_find_sigma_RootBisection_test, 3},
     {"_flipFISH_dg_nearPD_native_test", (DL_FUNC) &_flipFISH_dg_nearPD_native_test, 1},
