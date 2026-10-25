@@ -8,7 +8,7 @@ misread.qc.DG(
   STdata,
   codebook,
   bit_org = NULL,
-  n_forks = 1,
+  n_forks = NULL,
   maxHam = NULL,
   max_fs_bc = 40,
   resamples = 1000,
@@ -33,7 +33,7 @@ misread.qc.DG(
 
 \item{bit_org}{Optional data frame (or matrix) with one row per bit (columns \code{imagingRound} and \code{color}) giving the imaging-round plus color-channel structure of the codebook, used to enrich \code{fliprate_priors} with tiered correlations (\code{sdcorr_pairs}) via \code{build_corr_priors()}. Default \code{NULL} leaves \code{sdcorr_pairs} empty (no correlation structure). Tiered values for use with \code{bit_org} structure is set via entries \code{sd_round}, \code{sd_channel}, and \code{sd_other} in \code{fliprate_priors} (see the "Flip-rate priors" section below).}
 
-\item{n_forks}{Number of process forks to use for parallelizable computation (expected-count computation of \code{misread.qc()}, spot simulation in \code{misread.qc.DG()}), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.}
+\item{n_forks}{Number of process forks to use for parallelizable computation (expected-count computation of \code{misread.qc()}, spot simulation in \code{misread.qc.DG()}). Default \code{NULL} resolves to half the detected cores (\code{parallel::detectCores()}, floored, minimum 1) on Mac/Linux, or 1 on Windows. Must be 1 on Windows; can be set higher than the default on Mac and Linux, up to the detected core count.}
 
 \item{maxHam}{Maximum Hamming distance for misreads to be corrected, default NULL sets it to one less than the minimum Hamming distance between codebook entries. This default value may or may not be too aggressive. There is a trade-off between missing spots of barcode \emph{b} misread as not \emph{b} (low \code{maxHam}) and correcting spots not of barcode \emph{b} as \emph{b} (high \code{maxHam}). Also, lower \code{maxHam} will run faster and use less memory than higher \code{maxHam}.}
 

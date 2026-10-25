@@ -80,9 +80,19 @@ check_data <- function(
 
 # Helper function to check forks 
 check_forks <- function(
-    n_forks
+    n_forks = NULL
   ) {
-    if (!(Sys.info()["sysname"] == "Darwin" || Sys.info()["sysname"] == "Linux")) {
+    is_unix <- Sys.info()["sysname"] %in% c("Darwin", "Linux")
+    if (is.null(n_forks)) {
+      # Default: half the detected cores (floor, minimum 1) on Mac/Linux, 1 on Windows. Forking is
+      # fork-safe and parallelizable here, but we leave the other half of the machine free by
+      # default since this is a library call, not a dedicated batch job.
+      cores <- parallel::detectCores()
+      if (is.na(cores)) {cores <- 1L}
+      n_forks <- if (is_unix) max(1L, cores %/% 2L) else 1L
+      cat("\nn_forks not specified, defaulting to", n_forks)
+    }
+    if (!is_unix) {
       if (n_forks > 1) {
         cat("\nForking not available on Windows, setting n_forks to 1")
         n_forks <- 1
@@ -182,7 +192,7 @@ build_corr_priors <- function(
 #' @param STdata Numeric matrix with rows as barcodes, columns labeled "rates", "variance", "counts", and optionally "counts_uncorrected". The "counts" column must provide the corrected count, the "counts_uncorrected" column can be used optionally to provide the read count. The column "rates" is assumed to hold the per-cell rates for counts, empirically estimated as corrected count over the number of cells. The "variance" column is assumed to hold the variance of the corrected count across cells. The matrix must have barcode names (e.g., gene or protein species) as row names, with blank species having "Blank" in their name.
 #' @param codebook Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0, depending on whether an mRNA molecule of the species represented by the row is expected to luminescence in the bit represented by the column. All row names from \code{STdata} must be included in the row names for \code{codebook}.
 #' @param bit_org Optional data frame (or matrix) with one row per bit (columns \code{imagingRound} and \code{color}) giving the imaging-round plus color-channel structure of the codebook, used to enrich \code{fliprate_priors} with tiered correlations (\code{sdcorr_pairs}) via \code{build_corr_priors()}. Default \code{NULL} leaves \code{sdcorr_pairs} empty (no correlation structure). Tiered values for use with \code{bit_org} structure is set via entries \code{sd_round}, \code{sd_channel}, and \code{sd_other} in \code{fliprate_priors} (see the "Flip-rate priors" section below).
-#' @param n_forks Number of process forks to use for parallelizable computation (expected-count computation of \code{misread.qc()}, spot simulation in \code{misread.qc.DG()}), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.
+#' @param n_forks Number of process forks to use for parallelizable computation (expected-count computation of \code{misread.qc()}, spot simulation in \code{misread.qc.DG()}). Default \code{NULL} resolves to half the detected cores (\code{parallel::detectCores()}, floored, minimum 1) on Mac/Linux, or 1 on Windows. Must be 1 on Windows; can be set higher than the default on Mac and Linux, up to the detected core count.
 #' @param max_flips When analytically computing expected counts per barcode, the function will ignore misreads larger than this Hamming distance. The default is 0, which is interpreted as no limit. Using all misreads will likely be prohibitively slow; a value between 6 and 10 is probably advisable. Values of 3 or 4 work well for initial trouble shooting and testing.
 #' @param report_freq Divisor specifying report frequency during optimization; will print updates every \code{report_freq} accepted calls, default 10.
 #' @param maxeval Maximum number of objective function evaluations for L-BFGS, default 500.
@@ -218,8 +228,8 @@ build_corr_priors <- function(
 misread.qc <- function(
     STdata,
     codebook,
-    bit_org         = NULL, 
-    n_forks         = 1,
+    bit_org         = NULL,
+    n_forks         = NULL,
     max_flips       = 0,
     report_freq     = 10,
     maxeval         = 500, 
@@ -297,7 +307,7 @@ misread.qc.DG <- function(
     STdata,
     codebook,
     bit_org               = NULL,
-    n_forks               = 1,
+    n_forks               = NULL,
     maxHam                = NULL,
     max_fs_bc             = 40,
     resamples             = 1000,
@@ -411,7 +421,7 @@ sim.benchmark <- function(
     codebook,
     bit_org              = NULL,
     n_sims               = 5,
-    n_forks              = 1,
+    n_forks              = NULL,
     max_flips            = 0,
     report_freq          = 10,
     maxeval              = 500,

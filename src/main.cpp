@@ -499,15 +499,16 @@ static boost::math::normal_distribution<double> dg_std_normal(0.0, 1.0);
 
 // Normal CDF, with inverse (native; no R callback)
 double norm_cdf(
-    const double& x,
-    const double& mu,
-    const double& sd,
-    const bool&   inverse
+    double x,
+    double mu,
+    double sd,
+    bool   inverse
   ) {
     if (inverse) {
-      double xc = x;
-      if (xc < 1e-10)       {xc = 1e-10;}
-      if (xc > 1.0 - 1e-10) {xc = 1.0 - 1e-10;}
+      double xc  = x;
+      double eps = std::numeric_limits<double>::epsilon();
+      if (xc < eps)       {xc = eps;}
+      if (xc > 1.0 - eps) {xc = 1.0 - eps;}
       boost::math::normal_distribution<double> dist(mu, sd);
       return boost::math::quantile(dist, xc);
     } else {
@@ -522,15 +523,13 @@ double bvn_cdf_uppertail(
     double k,
     double rho
   ) {
-    double denom = std::sqrt(1.0 - rho * rho);
-    double a     = (k - rho * h) / (h * denom);
-    double b     = (h - rho * k) / (k * denom);
-    double delta = 0.0;
-    if (h * k < 0.0 || (h * k == 0.0 && (h + k) < 0.0)) {delta = 0.5;}
-    double Phi_h = boost::math::cdf(dg_std_normal, h);
-    double Phi_k = boost::math::cdf(dg_std_normal, k);
-    double phi2_lower = 0.5 * (Phi_h + Phi_k)
-      - boost::math::owens_t(h, a) - boost::math::owens_t(k, b) - delta;
+    double denom      = std::sqrt(1.0 - rho * rho);
+    double a          = (k - rho * h) / (h * denom);
+    double b          = (h - rho * k) / (k * denom);
+    double delta      = h * k < 0.0 || (h * k == 0.0 && (h + k) < 0.0) ? 0.5 : 0.0;
+    double Phi_h      = boost::math::cdf(dg_std_normal, h);
+    double Phi_k      = boost::math::cdf(dg_std_normal, k);
+    double phi2_lower = 0.5 * (Phi_h + Phi_k) - boost::math::owens_t(h, a) - boost::math::owens_t(k, b) - delta;
     return 1.0 - Phi_h - Phi_k + phi2_lower;
    
     /*
@@ -735,7 +734,7 @@ double dg_pairwise_achieved_corr(
     return achieved_cov / (sd_i * sd_j);
    
     /*
-     * I.e. the raw pairwise map alone, for a given desired correlation. Used both to build each
+     * Returns the raw pairwise map alone, for a given desired correlation. Used both to build each
      * barcode's raw matrix and, cheaply, to estimate dg_feasibility_penalty()'s gradient without
      * ever re-calling nearPD.
      */
@@ -762,9 +761,9 @@ double dg_feasibility_penalty(
       thresholds_0[i] = dg_bit_threshold(0, fr.rate10[i], fr.rate01[i]);
     }
    
-    const double eps = 1e-3;
-    double total_sq = 0.0;
-    int    n_terms   = 0;
+    const double eps      = 1e-3;
+    double       total_sq = 0.0;
+    int          n_terms  = 0;
     for (int b = 0; b < N_barcodes; b += step) {
       Vint barcode_bits(N_bits);
       Vdbl thresholds(N_bits);
@@ -776,25 +775,25 @@ double dg_feasibility_penalty(
       Eigen::MatrixXd projected = dg_nearest_corr_matrix(raw);
       for (int i = 1; i < N_bits; ++i) {
         for (int j = 0; j < i; ++j) {
-          int    k            = lower_tri_index(i, j);
-          bool   bit_i_is_1   = barcode_bits[i] == 1;
-          double desired_corr = bit_i_is_1 ? fr.corr1[k] : fr.corr0[k];
-          double p_i          = 1.0 - boost::math::cdf(dg_std_normal, thresholds[i]);
-          double p_j          = 1.0 - boost::math::cdf(dg_std_normal, thresholds[j]);
-          double sd_i         = std::sqrt(p_i * (1.0 - p_i));
-          double sd_j         = std::sqrt(p_j * (1.0 - p_j));
+          int    k             = lower_tri_index(i, j);
+          bool   bit_i_is_1    = barcode_bits[i] == 1;
+          double desired_corr  = bit_i_is_1 ? fr.corr1[k] : fr.corr0[k];
+          double p_i           = 1.0 - boost::math::cdf(dg_std_normal, thresholds[i]);
+          double p_j           = 1.0 - boost::math::cdf(dg_std_normal, thresholds[j]);
+          double sd_i          = std::sqrt(p_i * (1.0 - p_i));
+          double sd_j          = std::sqrt(p_j * (1.0 - p_j));
           double achieved_cov  = bvn_cdf_uppertail(thresholds[i], thresholds[j], projected(i, j)) - p_i * p_j;
           double achieved_corr = achieved_cov / (sd_i * sd_j);
           double diff          = achieved_corr - desired_corr;
-          total_sq += diff * diff;
+          total_sq            += diff * diff;
           n_terms++;
          
           if (do_grad) {
-            double ach_plus  = dg_pairwise_achieved_corr(thresholds[i], thresholds[j], desired_corr + eps, sd_i, sd_j);
-            double ach_minus = dg_pairwise_achieved_corr(thresholds[i], thresholds[j], desired_corr - eps, sd_i, sd_j);
-            double sensitivity = (ach_plus - ach_minus) / (2.0 * eps); // d(achieved_unprojected)/d(desired)
-            double dpenalty    = 2.0 * diff * (sensitivity - 1.0);    // d(diff^2)/d(desired)
-            int    param_idx   = bit_i_is_1 ? (2*N_bits + k) : (2*N_bits + corr_free + k);
+            double ach_plus     = dg_pairwise_achieved_corr(thresholds[i], thresholds[j], desired_corr + eps, sd_i, sd_j);
+            double ach_minus    = dg_pairwise_achieved_corr(thresholds[i], thresholds[j], desired_corr - eps, sd_i, sd_j);
+            double sensitivity  = (ach_plus - ach_minus) / (2.0 * eps); // d(achieved_unprojected)/d(desired)
+            double dpenalty     = 2.0 * diff * (sensitivity - 1.0);     // d(diff^2)/d(desired)
+            int    param_idx    = bit_i_is_1 ? (2*N_bits + k) : (2*N_bits + corr_free + k);
             (*grad)[param_idx] += dpenalty; // divided by n_terms once, after the loop
           }
         }
@@ -2491,7 +2490,7 @@ SpotSim make_SpotSim(
           Vint rch_counts_child(cache_size, 0);
           
           for (int b : barcode_batches[i]) {
-            boost::random::mt19937 rng(ran_seed + i*n_forks + b);
+            boost::random::mt19937 rng(ran_seed + b);
             Vint temp_vec = simulate_barcode_spots(
               b, 
               bc_counts[b], 
@@ -3183,18 +3182,14 @@ SpotSim make_SpotSim_DG(
     int N_barcodes = cb.barcodes.size();
     int N_bits     = cb.N_bits;
    
-    // Active barcodes (nonzero true count this step) -- precompute their noise model serially, in
-    // this (parent) process, before any forking.
+    // Active barcodes (nonzero true count this step). Each active barcode's noise model (nearPD
+    // projection + Cholesky factor, via dg_precompute_barcode_noise()) is computed inside whichever
+    // process -- a forked child, or this process itself when n_use==1 -- ends up simulating that
+    // barcode's spots, rather than upfront here for all active barcodes; see this function's closing
+    // comment for why that's both correct and fork-safe.
     Vint active;
     for (int b = 0; b < N_barcodes; ++b) {if (true_counts[b] > 0) {active.push_back(b);}}
-    std::vector<Vdbl>            thresholds_by_b(N_barcodes);
-    std::vector<Eigen::MatrixXd> L_by_b(N_barcodes);
-    for (int b : active) {
-      auto pre            = dg_precompute_barcode_noise(b, fr, cb.barcodes, N_bits);
-      thresholds_by_b[b]  = pre.first;
-      L_by_b[b]           = pre.second;
-    }
-   
+
     // Batch active barcodes across forks (same pattern as make_SpotSim())
     int n_active = active.size();
     int n_use    = std::max(1, std::min(n_forks, std::max(1, n_active)));
@@ -3217,9 +3212,10 @@ SpotSim make_SpotSim_DG(
           }
           Vint rch_counts_child(cache_size, 0);
           for (int b : barcode_batches[i]) {
-            boost::random::mt19937 rng(ran_seed + i*n_use + b);
+            auto                    pre = dg_precompute_barcode_noise(b, fr, cb.barcodes, N_bits);
+            boost::random::mt19937  rng(ran_seed + b);
             Vint temp_vec = simulate_barcode_spots_DG(
-              b, true_counts[b], thresholds_by_b[b], L_by_b[b], correction_table, cb.barcodes, N_bits, rng
+              b, true_counts[b], pre.first, pre.second, correction_table, cb.barcodes, N_bits, rng
             );
             for (int j = 0; j < cache_size; ++j) {rch_counts_child[j] += temp_vec[j];}
           }
@@ -3261,9 +3257,10 @@ SpotSim make_SpotSim_DG(
       }
     } else {
       for (int b : active) {
-        boost::random::mt19937 rng(ran_seed + b);
+        auto                    pre = dg_precompute_barcode_noise(b, fr, cb.barcodes, N_bits);
+        boost::random::mt19937  rng(ran_seed + b);
         Vint temp_vec = simulate_barcode_spots_DG(
-          b, true_counts[b], thresholds_by_b[b], L_by_b[b], correction_table, cb.barcodes, N_bits, rng
+          b, true_counts[b], pre.first, pre.second, correction_table, cb.barcodes, N_bits, rng
         );
         for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
       }
@@ -3284,14 +3281,15 @@ SpotSim make_SpotSim_DG(
    
     /*
      * Via DG (correlated-Gaussian-noise) spot generation. Mirrors make_SpotSim()'s fork/pipe
-     * parallelism (batches barcodes across n_forks processes, same pipe-based int-buffer handoff)
-     * -- the one structural difference is the precompute pass above, which still runs serially in
-     * the parent process before forking. That split was originally forced by
+     * parallelism (batches barcodes across n_forks processes, same pipe-based int-buffer handoff).
+     * Each active barcode's precompute (dg_precompute_barcode_noise(): nearPD projection + Cholesky
+     * -- the heavier numerical cost per active barcode, an iterative eigendecomposition-based
+     * projection) now runs inside whichever process actually simulates that barcode, rather than
+     * serially in the parent for every active barcode before forking. That used to be forced by
      * dg_nearest_corr_matrix()'s R callback (not fork-safe); now that it's a native nearPD port
-     * (dg_nearPD_native()), the precompute step -- the heavier numerical cost per active barcode
-     * (an iterative eigendecomposition-based projection) -- is itself fork-safe and could be
-     * distributed across n_forks too, but isn't yet: doing so would need a different pipe payload
-     * (each child's L/thresholds, not just its simulated counts).
+     * (dg_nearPD_native()), it's itself fork-safe, and distributing it across n_forks this way needs
+     * no new pipe payload -- each child only ever needs the precompute results for barcodes it alone
+     * simulates, and (as before) sends back just its simulated counts.
      */
   }
 

@@ -9,7 +9,7 @@ sim.benchmark(
   codebook,
   bit_org = NULL,
   n_sims = 5,
-  n_forks = 1,
+  n_forks = NULL,
   max_flips = 0,
   report_freq = 10,
   maxeval = 500,
@@ -29,7 +29,7 @@ sim.benchmark(
 
 \item{n_sims}{Number of Bernoulli simulations to run. The default is 100.}
 
-\item{n_forks}{Number of process forks to use for parallelizable computation (expected-count computation of \code{misread.qc()}, spot simulation in \code{misread.qc.DG()}), default is 1. Must be 1 on Windows, can be higher on Mac and Linux.}
+\item{n_forks}{Number of process forks to use for parallelizable computation (expected-count computation of \code{misread.qc()}, spot simulation in \code{misread.qc.DG()}). Default \code{NULL} resolves to half the detected cores (\code{parallel::detectCores()}, floored, minimum 1) on Mac/Linux, or 1 on Windows. Must be 1 on Windows; can be set higher than the default on Mac and Linux, up to the detected core count.}
 
 \item{max_flips}{When analytically computing expected counts per barcode, the function will ignore misreads larger than this Hamming distance. The default is 0, which is interpreted as no limit. Using all misreads will likely be prohibitively slow; a value between 6 and 10 is probably advisable. Values of 3 or 4 work well for initial trouble shooting and testing.}
 
