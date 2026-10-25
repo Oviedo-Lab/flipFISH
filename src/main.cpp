@@ -207,9 +207,9 @@ double compute_msle(
 
 // String search returning indexes
 Vint grep_idx(
-    Rcpp::CharacterVector x,
-    std::string           s,
-    bool                  neg = false
+    CharacterVector x,
+    std::string     s,
+    bool            neg = false
   ) {
     Vint idx;
     for (int i = 0; i < x.size(); ++i) {
@@ -222,12 +222,8 @@ Vint grep_idx(
         idx.push_back(i);
       }
     }
-    if (idx.size() > 0) {
-      return idx; 
-    } else {
-      return {-1};
-    }
-  } 
+    return idx;
+  }
 
 // Convert flip rate vector into structured FR object
 FlipRates pack_fr(
@@ -377,12 +373,9 @@ V64 neighbors(
   }
 
 // Create valid correlation matrix from random parameter draw
-// ... Note: signature spelled out as std::vector<double> rather than the Vdbl typedef because
-//     Rcpp attribute parsing can't resolve local typedefs from main.cpp.
-// [[Rcpp::export]]
 Eigen::MatrixXd correlation_from_params(
-    const std::vector<double>& theta,
-    int n
+    const Vdbl& theta,
+    int         n
   ) {
     Eigen::MatrixXd L = Eigen::MatrixXd::Zero(n, n);
     int k = 0;

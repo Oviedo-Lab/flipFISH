@@ -11,18 +11,6 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
-// correlation_from_params
-Eigen::MatrixXd correlation_from_params(const std::vector<double>& theta, int n);
-RcppExport SEXP _flipFISH_correlation_from_params(SEXP thetaSEXP, SEXP nSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const std::vector<double>& >::type theta(thetaSEXP);
-    Rcpp::traits::input_parameter< int >::type n(nSEXP);
-    rcpp_result_gen = Rcpp::wrap(correlation_from_params(theta, n));
-    return rcpp_result_gen;
-END_RCPP
-}
 // bvn_cdf_uppertail_test
 double bvn_cdf_uppertail_test(double h, double k, double rho);
 RcppExport SEXP _flipFISH_bvn_cdf_uppertail_test(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
@@ -279,7 +267,6 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_flipFISH_correlation_from_params", (DL_FUNC) &_flipFISH_correlation_from_params, 2},
     {"_flipFISH_bvn_cdf_uppertail_test", (DL_FUNC) &_flipFISH_bvn_cdf_uppertail_test, 3},
     {"_flipFISH_dg_find_sigma_RootBisection_test", (DL_FUNC) &_flipFISH_dg_find_sigma_RootBisection_test, 3},
     {"_flipFISH_dg_nearPD_native_test", (DL_FUNC) &_flipFISH_dg_nearPD_native_test, 1},

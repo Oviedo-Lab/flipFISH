@@ -279,6 +279,7 @@ misread.qc <- function(
 #' @param resamples Number of steps to take in the post-burn-in random walk (these are the steps summarized in the returned results).
 #' @param burnin Number of burn-in steps before resampling begins, default \code{resamples/2}.
 #' @param FR_search Number of initial steps used to search for a reasonable overall (mean) flip rate before burn-in, default \code{resamples/2}.
+#' @param max_calls_per_step Cap on proposal attempts within a single step before it is force-accepted regardless of the simulated-annealing acceptance rule, bounding how long any one step (and so the whole walk) can run. Default 0 (unlimited, i.e. no change from prior behavior) -- see \code{N_cells}'s own note on acceptance-rate collapse for why a step can otherwise need many proposals to advance. Intended as a safety valve for development/test use (small codebooks, small \code{N_cells}) rather than for routine production fits, where an unbounded search is normally preferable to a silently truncated one.
 #' @param max_step_size Size of the largest per-step Gaussian proposal in the random walk, default 0.2.
 #' @param min_step_size_divider Step size is scaled down linearly to \code{max_step_size/min_step_size_divider} over burn-in, default 10.
 #' @param max_temperature Simulated-annealing temperature at the start of the walk, default 0.2.
@@ -286,7 +287,6 @@ misread.qc <- function(
 #' @param n_tracker_updates Number of progress updates to print over the full walk, default 100.
 #' @param N_cells Number of cells to simulate at each step, default 1000. Lowering this trades simulation accuracy for speed -- useful for quick/development runs. Caution: too small a value (a few dozen, on a codebook with many bits) can make the MCMCSA walk itself pathologically slow rather than just less accurate -- the per-step simulation becomes so noisy that the acceptance rate can collapse to near zero once the annealing temperature cools, requiring many thousands of proposals to advance. If a run seems stuck (no progress message for a long time), try raising \code{N_cells} before assuming something is wrong.
 #' @param weights List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank} and \code{min_blank} specify the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, as \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; The weights \code{prior}, \code{dispersion}, and \code{feasibility} all default to 0. The weights \code{prior} and \code{dispersion} are the same Gaussian-prior and dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes the matrices \code{corr1} and \code{corr2} for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.
-#' @param max_calls_per_step Cap on proposal attempts within a single step before it is force-accepted regardless of the simulated-annealing acceptance rule, bounding how long any one step (and so the whole walk) can run. Default 0 (unlimited, i.e. no change from prior behavior) -- see \code{N_cells}'s own note on acceptance-rate collapse for why a step can otherwise need many proposals to advance. Intended as a safety valve for development/test use (small codebooks, small \code{N_cells}) rather than for routine production fits, where an unbounded search is normally preferable to a silently truncated one.
 #' @return A list giving: \itemize{
 #'    \item \code{STdata}: a dataframe giving the summary data used in the simulation, one row per barcode (genes and blanks) -- here the literal input \code{STdata} (after \code{check_data()}'s gene-then-blank reordering), with its own \code{rates}, \code{variance}, and \code{counts} columns and species as row names, rather than \code{misread.qc()}'s re-derived \code{barcode}, \code{species}, \code{barcode_rate}, \code{barcode_variance}, and \code{count_observed} columns.
 #'    \item \code{fliprates}: a labeled vector matching \code{misread.qc()}'s own \code{fliprates} layout and names (one \code{rate10_bit}\emph{i}/\code{rate01_bit}\emph{i} entry per bit, one \code{corr_}\emph{k} entry per bit pair) -- but here each entry is the posterior median of that parameter over the post-burn-in \code{resamples} window, rather than an L-BFGS optimum.
@@ -299,22 +299,22 @@ misread.qc <- function(
 misread.qc.DG <- function(
     STdata,
     codebook,
-    bit_org                  = NULL,
-    n_forks                  = 1,
-    maxHam                   = NULL,
-    max_fs_bc                = 40,
-    resamples                = 1000,
-    burnin                   = NULL,
-    FR_search                = NULL,
-    max_step_size            = 0.2,
-    min_step_size_divider    = 10,
-    max_temperature          = 0.2,
-    min_temperature_scale    = 0.5,
-    n_tracker_updates        = 100,
-    N_cells                  = 1e3,
-    fliprate_priors          = list(),
-    weights                  = list(),
-    max_calls_per_step       = 0
+    bit_org               = NULL,
+    n_forks               = 1,
+    maxHam                = NULL,
+    max_fs_bc             = 40,
+    resamples             = 1000,
+    burnin                = NULL,
+    FR_search             = NULL,
+    max_calls_per_step    = 0,
+    max_step_size         = 0.2,
+    min_step_size_divider = 10,
+    max_temperature       = 0.2,
+    min_temperature_scale = 0.5,
+    n_tracker_updates     = 100,
+    N_cells               = 1e3,
+    fliprate_priors       = list(),
+    weights               = list()
   ) {
     cat("\n\nEstimating FPQC metrics with Markov chain Monte Carlo simulated annealing (DG method)")
    
