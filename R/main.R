@@ -134,7 +134,7 @@ build_corr_priors <- function(
     corr_free    <- N_bits * (N_bits - 1) / 2
     sdcorr_pairs <- numeric(corr_free)
     
-    # Build sdcorr_pairs
+    # Get sd values for sdcorr_pairs
     sd_round   <- 0.2
     sd_channel <- 0.1
     sd_other   <- 0.01
@@ -150,9 +150,8 @@ build_corr_priors <- function(
       sd_other             <- fr_priors$sd_other
       fr_priors$sd_other   <- NULL
     }
-    # Fill in lower_tri_pairs()'s canonical pair order (1-based i, j), matching corr1/corr0's own
-    # layout on the C++ side -- lower_tri_pairs() (src/main.cpp) is the single source of truth for
-    # that pairing, so this can't drift out of sync with it.
+    
+    # Build sdcorr_pairs via lower_tri_pairs()'s canonical pair order (1-based i, j)
     pairs <- lower_tri_pairs(N_bits)
     for (k in seq_len(corr_free)) {
       i <- pairs[k, "i"]
@@ -283,6 +282,7 @@ misread.qc <- function(
 #' @param min_temperature_scale Temperature is scaled down linearly to \code{max_temperature/(min_step_size_divider/min_temperature_scale)} over burn-in, default 0.5.
 #' @param n_tracker_updates Number of progress updates to print over the full walk, default 100.
 #' @param N_cells Number of cells to simulate at each step, default 1000. Lowering this trades simulation accuracy for speed -- useful for quick/development runs. Caution: too small a value (a few dozen, on a codebook with many bits) can make the MCMCSA walk itself pathologically slow rather than just less accurate -- the per-step simulation becomes so noisy that the acceptance rate can collapse to near zero once the annealing temperature cools, requiring many thousands of proposals to advance. If a run seems stuck (no progress message for a long time), try raising \code{N_cells} before assuming something is wrong.
+#' @param seed Integer seed for the walk's random draws (proposals, stochastic bit/pair pruning, acceptance, and the per-step dichotomized-Gaussian spot simulation), via a dedicated \code{boost::random::mt19937} generator on the C++ side. Default a fixed constant, so a single call is reproducible by default without needing \code{set.seed()}. Note this is unrelated to R's own RNG: calling \code{set.seed()} before \code{misread.qc.DG()} has no effect on its result, only \code{seed} does.
 #' @param weights List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank} and \code{min_blank} specify the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, as \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; The weights \code{prior}, \code{dispersion}, and \code{feasibility} all default to 0. The weights \code{prior} and \code{dispersion} are the same Gaussian-prior and dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes the matrices \code{corr1} and \code{corr2} for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.
 #' @return A list giving: \itemize{
 #'    \item \code{STdata}: a dataframe giving the summary data used in the simulation, one row per barcode (genes and blanks) -- here the literal input \code{STdata} (after \code{check_data()}'s gene-then-blank reordering), with its own \code{rates}, \code{variance}, and \code{counts} columns and species as row names, rather than \code{misread.qc()}'s re-derived \code{barcode}, \code{species}, \code{barcode_rate}, \code{barcode_variance}, and \code{count_observed} columns.
@@ -311,7 +311,8 @@ misread.qc.DG <- function(
     n_tracker_updates     = 100,
     N_cells               = 1e3,
     fliprate_priors       = list(),
-    weights               = list()
+    weights               = list(),
+    seed                  = 726354819
   ) {
     cat("\n\nEstimating FPQC metrics with Markov chain Monte Carlo simulated annealing (DG method)")
    
@@ -320,22 +321,24 @@ misread.qc.DG <- function(
     data_check      <- check_data(STdata, codebook, bit_org, maxHam)          # Check data
     fliprate_priors <- build_corr_priors(data_check$bit_org, fliprate_priors) # Build flip rate priors from bit_org
    
-    # Resolve NULL schedule defaults (same logic misread.qc.DG.legacy() uses)
+    # Resolve NULL schedule defaults
+    if (is.null(FR_search)) FR_search <- as.integer(round(resamples / 2))
+    if (is.null(burnin))    burnin    <- as.integer(round(resamples / 2))
     blank_mask <- grepl("Blank", rownames(data_check$STdata), ignore.case = FALSE)
     N_genes    <- sum(!blank_mask)
     N_blanks   <- sum(blank_mask)
-    if (is.null(FR_search)) FR_search <- as.integer(round(resamples / 2))
-    if (is.null(burnin))    burnin    <- as.integer(round(resamples / 2))
-    max_blank <- N_genes / N_blanks + 1
+    max_blank  <- N_genes / N_blanks + 1
     if (is.null(weights$max_blank)) {
       weights$max_blank <- max_blank
     } else if (weights$max_blank > max_blank) {
+      # Mathematical necessity for keeping total weight constant
       cat("\n\nRequested max blank weight too high, resetting to limit:", max_blank)
       weights$max_blank <- max_blank
     }
     if (is.null(weights$min_blank)) {
       weights$min_blank <- 2
     } else if (weights$min_blank < 1) {
+      # Design choice: Blanks provide best signal, so don't weight less than genes
       cat("\n\nRequested min blank weight too low, resetting to limit: 1")
       weights$min_blank <- 1
     }
@@ -358,7 +361,8 @@ misread.qc.DG <- function(
       as.list(fliprate_priors),
       as.list(weights),
       as.integer(max_fs_bc),
-      as.integer(max_calls_per_step)
+      as.integer(max_calls_per_step),
+      as.integer(seed)
     )
    
     # Annotate results
@@ -374,7 +378,7 @@ misread.qc.DG <- function(
       paste0("rate01_bit", seq_len(N_bits)),
       paste0("corr_",      seq_len(length(fliprates) - 2*N_bits))
     )
-
+   
     return(list(
       STdata      = data_check$STdata,
       fliprates   = fliprates,
@@ -382,7 +386,7 @@ misread.qc.DG <- function(
       msle        = res$msle,
       PPV_by_step = PPV_by_step
     ))
-
+   
   }
 
 #' Benchmark \code{misread.qc} function with Bernoulli simulations

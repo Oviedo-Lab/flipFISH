@@ -5,34 +5,6 @@ lower_tri_pairs <- function(N_bits) {
     .Call(`_flipFISH_lower_tri_pairs`, N_bits)
 }
 
-bvn_cdf_uppertail_test <- function(h, k, rho) {
-    .Call(`_flipFISH_bvn_cdf_uppertail_test`, h, k, rho)
-}
-
-dg_find_sigma_RootBisection_test <- function(threshold_i, threshold_j, desired_cov) {
-    .Call(`_flipFISH_dg_find_sigma_RootBisection_test`, threshold_i, threshold_j, desired_cov)
-}
-
-dg_nearPD_native_test <- function(x) {
-    .Call(`_flipFISH_dg_nearPD_native_test`, x)
-}
-
-rng_engine_draw_test <- function(seed, n) {
-    .Call(`_flipFISH_rng_engine_draw_test`, seed, n)
-}
-
-rng_normal_draw_test <- function(seed, n, mean, sd) {
-    .Call(`_flipFISH_rng_normal_draw_test`, seed, n, mean, sd)
-}
-
-rng_bernoulli_draw_test <- function(seed, n, p) {
-    .Call(`_flipFISH_rng_bernoulli_draw_test`, seed, n, p)
-}
-
-rng_normal_paramtype_draw_test <- function(seed, mean1, sd1, mean2, sd2) {
-    .Call(`_flipFISH_rng_normal_paramtype_draw_test`, seed, mean1, sd1, mean2, sd2)
-}
-
 unique_Hamming_cb <- function(codebook) {
     .Call(`_flipFISH_unique_Hamming_cb`, codebook)
 }
@@ -65,7 +37,47 @@ tr_sum_check <- function(bc, rate10, rate01, corr1, corr0) {
     .Call(`_flipFISH_tr_sum_check`, bc, rate10, rate01, corr1, corr0)
 }
 
-mQC_DG <- function(bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc = 40L, max_calls_per_step = 0L) {
-    .Call(`_flipFISH_mQC_DG`, bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc, max_calls_per_step)
+bvn_cdf_uppertail_test <- function(h, k, rho) {
+    .Call(`_flipFISH_bvn_cdf_uppertail_test`, h, k, rho)
+}
+
+dg_find_sigma_RootBisection_test <- function(threshold_i, threshold_j, desired_cov) {
+    .Call(`_flipFISH_dg_find_sigma_RootBisection_test`, threshold_i, threshold_j, desired_cov)
+}
+
+dg_nearPD_native_test <- function(x) {
+    .Call(`_flipFISH_dg_nearPD_native_test`, x)
+}
+
+rng_engine_draw_test <- function(seed, n) {
+    .Call(`_flipFISH_rng_engine_draw_test`, seed, n)
+}
+
+rng_normal_draw_test <- function(seed, n, mean, sd) {
+    .Call(`_flipFISH_rng_normal_draw_test`, seed, n, mean, sd)
+}
+
+rng_bernoulli_draw_test <- function(seed, n, p) {
+    .Call(`_flipFISH_rng_bernoulli_draw_test`, seed, n, p)
+}
+
+rng_gamma_draw_test <- function(seed, n, shape, scale) {
+    .Call(`_flipFISH_rng_gamma_draw_test`, seed, n, shape, scale)
+}
+
+rng_poisson_draw_test <- function(seed, n, mean) {
+    .Call(`_flipFISH_rng_poisson_draw_test`, seed, n, mean)
+}
+
+rng_normal_paramtype_draw_test <- function(seed, mean1, sd1, mean2, sd2) {
+    .Call(`_flipFISH_rng_normal_paramtype_draw_test`, seed, mean1, sd1, mean2, sd2)
+}
+
+dg_ppois_lower_test <- function(x, lambda) {
+    .Call(`_flipFISH_dg_ppois_lower_test`, x, lambda)
+}
+
+mQC_DG <- function(bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc = 40L, max_calls_per_step = 0L, seed = 726354819L) {
+    .Call(`_flipFISH_mQC_DG`, bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc, max_calls_per_step, seed)
 }
 

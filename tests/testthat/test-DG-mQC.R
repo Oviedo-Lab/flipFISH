@@ -12,6 +12,10 @@
 #      schedule) combinations, needing many proposal evaluations to advance a single step even when
 #      each evaluation itself is cheap -- not just a hypothetical, this is exactly what made these
 #      smoke tests intermittently take minutes before max_calls_per_step was added (see git log).
+#
+# misread.qc.DG()'s own randomness (proposals, stochastic pruning, acceptance, per-cell transcript
+# draws) is driven entirely by its own `seed` argument via a dedicated boost::random::mt19937 on the
+# C++ side, not by R's RNG -- so set.seed() has no effect on it, and these tests don't call it.
 
 library(flipFISH)
 
@@ -94,7 +98,6 @@ test_that("misread.qc.DG runs end-to-end on a small subset of the bundled legacy
 
   d <- load_small_STdata(gene_idx = c(5, 8, 4), n_blanks = 3) # rates ~0.08/0.16/0.21
 
-  set.seed(1)
   res <- misread.qc.DG(
     d$STdata, d$codebook,
     resamples = 1, burnin = 2, FR_search = 2,
@@ -132,7 +135,6 @@ test_that("misread.qc.DG's feasibility penalty runs without error and stays fini
   skip_if(extdata_path == "", "bundled sample_m1 data not found")
   d <- load_small_STdata(gene_idx = c(5, 8), n_blanks = 3) # rates ~0.08/0.16
 
-  set.seed(1)
   res <- misread.qc.DG(
     d$STdata, d$codebook,
     resamples = 1, burnin = 2, FR_search = 2,
@@ -153,19 +155,20 @@ test_that("max_calls_per_step bounds misread.qc.DG's runtime across seeds that w
   # n_steps = 15 total MCMCSA calls no matter how the annealing's acceptance rate behaves for a
   # given seed. Several seeds known to need many dozens of calls without a cap (see this file's git
   # history) are checked here specifically, to confirm the cap -- not seed luck -- is what's
-  # keeping this fast.
+  # keeping this fast. "Seed" here is misread.qc.DG()'s own `seed` argument (its C++-side
+  # boost::random::mt19937), not R's set.seed() -- see this file's top-of-file note.
   d <- load_small_STdata(gene_idx = c(5, 8), n_blanks = 3)
   n_steps <- 5 + 5 + 5
 
   for (seed in c(1, 2, 6, 7, 9, 10)) {
-    set.seed(seed)
     t0  <- Sys.time()
     res <- misread.qc.DG(
       d$STdata, d$codebook,
       resamples = 5, burnin = 5, FR_search = 5,
       n_tracker_updates = 0, n_forks = 1, N_cells = 100,
       weights = list(prior = 0.1, dispersion = 0.1, feasibility = 0.05),
-      max_fs_bc = 1, max_calls_per_step = 1
+      max_fs_bc = 1, max_calls_per_step = 1,
+      seed = seed
     )
     elapsed <- as.numeric(Sys.time() - t0, units = "secs")
     expect_lt(elapsed, 10) # generous margin; uncapped, these seeds take tens of seconds or more
@@ -180,7 +183,6 @@ test_that("misread.qc.DG runs end-to-end on a different small codebook subset/sc
   skip_if(extdata_path == "", "bundled sample_m1 data not found")
   d <- load_small_STdata(gene_idx = c(8, 4), n_blanks = 2) # rates ~0.16/0.21
 
-  set.seed(42)
   res <- misread.qc.DG(
     d$STdata, d$codebook,
     resamples = 1, burnin = 2, FR_search = 2,

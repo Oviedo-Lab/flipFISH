@@ -14,6 +14,7 @@ misread.qc.DG(
   resamples = 1000,
   burnin = NULL,
   FR_search = NULL,
+  max_calls_per_step = 0,
   max_step_size = 0.2,
   min_step_size_divider = 10,
   max_temperature = 0.2,
@@ -22,7 +23,7 @@ misread.qc.DG(
   N_cells = 1000,
   fliprate_priors = list(),
   weights = list(),
-  max_calls_per_step = 0
+  seed = 726354819
 )
 }
 \arguments{
@@ -44,6 +45,8 @@ misread.qc.DG(
 
 \item{FR_search}{Number of initial steps used to search for a reasonable overall (mean) flip rate before burn-in, default \code{resamples/2}.}
 
+\item{max_calls_per_step}{Cap on proposal attempts within a single step before it is force-accepted regardless of the simulated-annealing acceptance rule, bounding how long any one step (and so the whole walk) can run. Default 0 (unlimited, i.e. no change from prior behavior) -- see \code{N_cells}'s own note on acceptance-rate collapse for why a step can otherwise need many proposals to advance. Intended as a safety valve for development/test use (small codebooks, small \code{N_cells}) rather than for routine production fits, where an unbounded search is normally preferable to a silently truncated one.}
+
 \item{max_step_size}{Size of the largest per-step Gaussian proposal in the random walk, default 0.2.}
 
 \item{min_step_size_divider}{Step size is scaled down linearly to \code{max_step_size/min_step_size_divider} over burn-in, default 10.}
@@ -60,7 +63,7 @@ misread.qc.DG(
 
 \item{weights}{List with elements \code{max_blank}, \code{min_blank}, \code{prior}, \code{dispersion}, \code{feasibility}: \code{max_blank} and \code{min_blank} specify the weight given to blanks (vs. genes) in the fit objective, scheduled from \code{max_blank} at the start of \code{FR_search} down to \code{min_blank} (its final, held value) by the end of burn-in -- defaults are \code{N_genes/N_blanks + 1} and 2, respectively, as \code{FR_search} needs a strong blank signal early on to find a reasonable flip rate; The weights \code{prior}, \code{dispersion}, and \code{feasibility} all default to 0. The weights \code{prior} and \code{dispersion} are the same Gaussian-prior and dispersion penalty \code{misread.qc} uses (added to the simulated-annealing energy); \code{feasibility} penalizes the matrices \code{corr1} and \code{corr2} for requiring a large correction before they could be realized as an actual (PSD) per-barcode Gaussian correlation structure, mirroring \code{misread.qc}'s own \code{feasibility} weight so the two methods' fitted correlations stay comparable.}
 
-\item{max_calls_per_step}{Cap on proposal attempts within a single step before it is force-accepted regardless of the simulated-annealing acceptance rule, bounding how long any one step (and so the whole walk) can run. Default 0 (unlimited, i.e. no change from prior behavior) -- see \code{N_cells}'s own note on acceptance-rate collapse for why a step can otherwise need many proposals to advance. Intended as a safety valve for development/test use (small codebooks, small \code{N_cells}) rather than for routine production fits, where an unbounded search is normally preferable to a silently truncated one.}
+\item{seed}{Integer seed for the walk's random draws (proposals, stochastic bit/pair pruning, acceptance, and the per-step dichotomized-Gaussian spot simulation), via a dedicated \code{boost::random::mt19937} generator on the C++ side. Default a fixed constant, so a single call is reproducible by default without needing \code{set.seed()}. Note this is unrelated to R's own RNG: calling \code{set.seed()} before \code{misread.qc.DG()} has no effect on its result, only \code{seed} does.}
 }
 \value{
 A list giving: \itemize{

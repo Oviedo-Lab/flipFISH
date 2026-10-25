@@ -61,3 +61,59 @@ test_that("normal_distribution draws via param_type reset (seed 2024) are unchan
     tolerance = tol
   )
 })
+
+# gamma_distribution/poisson_distribution: added when dg_draw_true_counts()'s per-cell transcript
+# draws moved from R::rgamma()/R::rpois() to boost::random, so mQC_DG()'s hot loop no longer calls
+# into R at all (see dg_draw_true_counts(), and the `seed` argument added to mQC_DG()/
+# misread.qc.DG()).
+
+test_that("gamma_distribution(2.0, 1.5) draw sequence for seed 12345 is unchanged", {
+  expect_equal(
+    rng_gamma_draw_test(12345L, 5L, 2.0, 1.5),
+    c(0.915970170923289, 5.49268773199246, 3.1940126259417,
+      3.44508430664966, 1.14114138563479),
+    tolerance = tol
+  )
+})
+
+test_that("gamma_distribution(5.0, 0.5) draw sequence for seed 42 is unchanged", {
+  expect_equal(
+    rng_gamma_draw_test(42L, 5L, 5.0, 0.5),
+    c(1.76587267434506, 2.8003654916141, 2.80021950625805,
+      2.27679153234628, 1.32938534881185),
+    tolerance = tol
+  )
+})
+
+test_that("poisson_distribution(3.2) draw sequence for seed 7 is unchanged", {
+  expect_equal(
+    rng_poisson_draw_test(7L, 10L, 3.2),
+    c(1L, 2L, 4L, 2L, 3L, 7L, 4L, 3L, 7L, 2L)
+  )
+})
+
+test_that("poisson_distribution(0.5) draw sequence for seed 999 is unchanged", {
+  expect_equal(
+    rng_poisson_draw_test(999L, 10L, 0.5),
+    c(1L, 0L, 0L, 3L, 0L, 0L, 1L, 0L, 0L, 0L)
+  )
+})
+
+# dg_ppois_lower(): this file's native (boost::math, no R callback) replacement for the single
+# R::ppois(x, lambda, 1, 0) call dg_draw_true_counts() used to make per MCMCSA step -- a statistical
+# correctness check against R's own ppois(), not a pinned-sequence test (no randomness involved).
+
+test_that("dg_ppois_lower matches R's ppois(x, lambda, lower.tail = TRUE) over a grid", {
+  xs      <- c(0, 0.5, 1, 2.5, 3, 7, 10.999, 15)
+  lambdas <- c(0.5, 1, 3.2, 10, 25)
+  for (lambda in lambdas) {
+    for (x in xs) {
+      expect_equal(dg_ppois_lower_test(x, lambda), ppois(x, lambda), tolerance = 1e-9)
+    }
+  }
+})
+
+test_that("dg_ppois_lower reproduces R's ppois() edge cases", {
+  expect_equal(dg_ppois_lower_test(5, 0), 1) # lambda == 0: Poisson(0) is a point mass at 0
+  expect_equal(dg_ppois_lower_test(-1, 3), 0) # x < 0
+})

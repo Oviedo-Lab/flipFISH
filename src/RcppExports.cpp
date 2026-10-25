@@ -22,97 +22,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// bvn_cdf_uppertail_test
-double bvn_cdf_uppertail_test(double h, double k, double rho);
-RcppExport SEXP _flipFISH_bvn_cdf_uppertail_test(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type h(hSEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
-    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
-    rcpp_result_gen = Rcpp::wrap(bvn_cdf_uppertail_test(h, k, rho));
-    return rcpp_result_gen;
-END_RCPP
-}
-// dg_find_sigma_RootBisection_test
-double dg_find_sigma_RootBisection_test(double threshold_i, double threshold_j, double desired_cov);
-RcppExport SEXP _flipFISH_dg_find_sigma_RootBisection_test(SEXP threshold_iSEXP, SEXP threshold_jSEXP, SEXP desired_covSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type threshold_i(threshold_iSEXP);
-    Rcpp::traits::input_parameter< double >::type threshold_j(threshold_jSEXP);
-    Rcpp::traits::input_parameter< double >::type desired_cov(desired_covSEXP);
-    rcpp_result_gen = Rcpp::wrap(dg_find_sigma_RootBisection_test(threshold_i, threshold_j, desired_cov));
-    return rcpp_result_gen;
-END_RCPP
-}
-// dg_nearPD_native_test
-Eigen::MatrixXd dg_nearPD_native_test(Eigen::MatrixXd x);
-RcppExport SEXP _flipFISH_dg_nearPD_native_test(SEXP xSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< Eigen::MatrixXd >::type x(xSEXP);
-    rcpp_result_gen = Rcpp::wrap(dg_nearPD_native_test(x));
-    return rcpp_result_gen;
-END_RCPP
-}
-// rng_engine_draw_test
-std::vector<unsigned int> rng_engine_draw_test(unsigned int seed, int n);
-RcppExport SEXP _flipFISH_rng_engine_draw_test(SEXP seedSEXP, SEXP nSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
-    Rcpp::traits::input_parameter< int >::type n(nSEXP);
-    rcpp_result_gen = Rcpp::wrap(rng_engine_draw_test(seed, n));
-    return rcpp_result_gen;
-END_RCPP
-}
-// rng_normal_draw_test
-std::vector<double> rng_normal_draw_test(unsigned int seed, int n, double mean, double sd);
-RcppExport SEXP _flipFISH_rng_normal_draw_test(SEXP seedSEXP, SEXP nSEXP, SEXP meanSEXP, SEXP sdSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
-    Rcpp::traits::input_parameter< int >::type n(nSEXP);
-    Rcpp::traits::input_parameter< double >::type mean(meanSEXP);
-    Rcpp::traits::input_parameter< double >::type sd(sdSEXP);
-    rcpp_result_gen = Rcpp::wrap(rng_normal_draw_test(seed, n, mean, sd));
-    return rcpp_result_gen;
-END_RCPP
-}
-// rng_bernoulli_draw_test
-std::vector<int> rng_bernoulli_draw_test(unsigned int seed, int n, double p);
-RcppExport SEXP _flipFISH_rng_bernoulli_draw_test(SEXP seedSEXP, SEXP nSEXP, SEXP pSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
-    Rcpp::traits::input_parameter< int >::type n(nSEXP);
-    Rcpp::traits::input_parameter< double >::type p(pSEXP);
-    rcpp_result_gen = Rcpp::wrap(rng_bernoulli_draw_test(seed, n, p));
-    return rcpp_result_gen;
-END_RCPP
-}
-// rng_normal_paramtype_draw_test
-std::vector<double> rng_normal_paramtype_draw_test(unsigned int seed, double mean1, double sd1, double mean2, double sd2);
-RcppExport SEXP _flipFISH_rng_normal_paramtype_draw_test(SEXP seedSEXP, SEXP mean1SEXP, SEXP sd1SEXP, SEXP mean2SEXP, SEXP sd2SEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
-    Rcpp::traits::input_parameter< double >::type mean1(mean1SEXP);
-    Rcpp::traits::input_parameter< double >::type sd1(sd1SEXP);
-    Rcpp::traits::input_parameter< double >::type mean2(mean2SEXP);
-    Rcpp::traits::input_parameter< double >::type sd2(sd2SEXP);
-    rcpp_result_gen = Rcpp::wrap(rng_normal_paramtype_draw_test(seed, mean1, sd1, mean2, sd2));
-    return rcpp_result_gen;
-END_RCPP
-}
 // unique_Hamming_cb
 IntegerVector unique_Hamming_cb(const IntegerMatrix& codebook);
 RcppExport SEXP _flipFISH_unique_Hamming_cb(SEXP codebookSEXP) {
@@ -249,9 +158,139 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// bvn_cdf_uppertail_test
+double bvn_cdf_uppertail_test(double h, double k, double rho);
+RcppExport SEXP _flipFISH_bvn_cdf_uppertail_test(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type h(hSEXP);
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(bvn_cdf_uppertail_test(h, k, rho));
+    return rcpp_result_gen;
+END_RCPP
+}
+// dg_find_sigma_RootBisection_test
+double dg_find_sigma_RootBisection_test(double threshold_i, double threshold_j, double desired_cov);
+RcppExport SEXP _flipFISH_dg_find_sigma_RootBisection_test(SEXP threshold_iSEXP, SEXP threshold_jSEXP, SEXP desired_covSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type threshold_i(threshold_iSEXP);
+    Rcpp::traits::input_parameter< double >::type threshold_j(threshold_jSEXP);
+    Rcpp::traits::input_parameter< double >::type desired_cov(desired_covSEXP);
+    rcpp_result_gen = Rcpp::wrap(dg_find_sigma_RootBisection_test(threshold_i, threshold_j, desired_cov));
+    return rcpp_result_gen;
+END_RCPP
+}
+// dg_nearPD_native_test
+Eigen::MatrixXd dg_nearPD_native_test(Eigen::MatrixXd x);
+RcppExport SEXP _flipFISH_dg_nearPD_native_test(SEXP xSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Eigen::MatrixXd >::type x(xSEXP);
+    rcpp_result_gen = Rcpp::wrap(dg_nearPD_native_test(x));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rng_engine_draw_test
+std::vector<unsigned int> rng_engine_draw_test(unsigned int seed, int n);
+RcppExport SEXP _flipFISH_rng_engine_draw_test(SEXP seedSEXP, SEXP nSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    rcpp_result_gen = Rcpp::wrap(rng_engine_draw_test(seed, n));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rng_normal_draw_test
+std::vector<double> rng_normal_draw_test(unsigned int seed, int n, double mean, double sd);
+RcppExport SEXP _flipFISH_rng_normal_draw_test(SEXP seedSEXP, SEXP nSEXP, SEXP meanSEXP, SEXP sdSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< double >::type mean(meanSEXP);
+    Rcpp::traits::input_parameter< double >::type sd(sdSEXP);
+    rcpp_result_gen = Rcpp::wrap(rng_normal_draw_test(seed, n, mean, sd));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rng_bernoulli_draw_test
+std::vector<int> rng_bernoulli_draw_test(unsigned int seed, int n, double p);
+RcppExport SEXP _flipFISH_rng_bernoulli_draw_test(SEXP seedSEXP, SEXP nSEXP, SEXP pSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< double >::type p(pSEXP);
+    rcpp_result_gen = Rcpp::wrap(rng_bernoulli_draw_test(seed, n, p));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rng_gamma_draw_test
+std::vector<double> rng_gamma_draw_test(unsigned int seed, int n, double shape, double scale);
+RcppExport SEXP _flipFISH_rng_gamma_draw_test(SEXP seedSEXP, SEXP nSEXP, SEXP shapeSEXP, SEXP scaleSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< double >::type shape(shapeSEXP);
+    Rcpp::traits::input_parameter< double >::type scale(scaleSEXP);
+    rcpp_result_gen = Rcpp::wrap(rng_gamma_draw_test(seed, n, shape, scale));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rng_poisson_draw_test
+std::vector<int> rng_poisson_draw_test(unsigned int seed, int n, double mean);
+RcppExport SEXP _flipFISH_rng_poisson_draw_test(SEXP seedSEXP, SEXP nSEXP, SEXP meanSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< double >::type mean(meanSEXP);
+    rcpp_result_gen = Rcpp::wrap(rng_poisson_draw_test(seed, n, mean));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rng_normal_paramtype_draw_test
+std::vector<double> rng_normal_paramtype_draw_test(unsigned int seed, double mean1, double sd1, double mean2, double sd2);
+RcppExport SEXP _flipFISH_rng_normal_paramtype_draw_test(SEXP seedSEXP, SEXP mean1SEXP, SEXP sd1SEXP, SEXP mean2SEXP, SEXP sd2SEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
+    Rcpp::traits::input_parameter< double >::type mean1(mean1SEXP);
+    Rcpp::traits::input_parameter< double >::type sd1(sd1SEXP);
+    Rcpp::traits::input_parameter< double >::type mean2(mean2SEXP);
+    Rcpp::traits::input_parameter< double >::type sd2(sd2SEXP);
+    rcpp_result_gen = Rcpp::wrap(rng_normal_paramtype_draw_test(seed, mean1, sd1, mean2, sd2));
+    return rcpp_result_gen;
+END_RCPP
+}
+// dg_ppois_lower_test
+double dg_ppois_lower_test(double x, double lambda);
+RcppExport SEXP _flipFISH_dg_ppois_lower_test(SEXP xSEXP, SEXP lambdaSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type x(xSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda(lambdaSEXP);
+    rcpp_result_gen = Rcpp::wrap(dg_ppois_lower_test(x, lambda));
+    return rcpp_result_gen;
+END_RCPP
+}
 // mQC_DG
-List mQC_DG(NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int resamples, int burnin, int FR_search, double max_step_size, int min_step_size_divider, double max_temperature, double min_temperature_scale, int n_tracker_updates, int n_forks, int N_cells, List fliprate_priors, List weights, int max_fs_bc, int max_calls_per_step);
-RcppExport SEXP _flipFISH_mQC_DG(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP resamplesSEXP, SEXP burninSEXP, SEXP FR_searchSEXP, SEXP max_step_sizeSEXP, SEXP min_step_size_dividerSEXP, SEXP max_temperatureSEXP, SEXP min_temperature_scaleSEXP, SEXP n_tracker_updatesSEXP, SEXP n_forksSEXP, SEXP N_cellsSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP max_fs_bcSEXP, SEXP max_calls_per_stepSEXP) {
+List mQC_DG(NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int resamples, int burnin, int FR_search, double max_step_size, int min_step_size_divider, double max_temperature, double min_temperature_scale, int n_tracker_updates, int n_forks, int N_cells, List fliprate_priors, List weights, int max_fs_bc, int max_calls_per_step, unsigned int seed);
+RcppExport SEXP _flipFISH_mQC_DG(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP resamplesSEXP, SEXP burninSEXP, SEXP FR_searchSEXP, SEXP max_step_sizeSEXP, SEXP min_step_size_dividerSEXP, SEXP max_temperatureSEXP, SEXP min_temperature_scaleSEXP, SEXP n_tracker_updatesSEXP, SEXP n_forksSEXP, SEXP N_cellsSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP max_fs_bcSEXP, SEXP max_calls_per_stepSEXP, SEXP seedSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -272,20 +311,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< List >::type weights(weightsSEXP);
     Rcpp::traits::input_parameter< int >::type max_fs_bc(max_fs_bcSEXP);
     Rcpp::traits::input_parameter< int >::type max_calls_per_step(max_calls_per_stepSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC_DG(bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc, max_calls_per_step));
+    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(mQC_DG(bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc, max_calls_per_step, seed));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
     {"_flipFISH_lower_tri_pairs", (DL_FUNC) &_flipFISH_lower_tri_pairs, 1},
-    {"_flipFISH_bvn_cdf_uppertail_test", (DL_FUNC) &_flipFISH_bvn_cdf_uppertail_test, 3},
-    {"_flipFISH_dg_find_sigma_RootBisection_test", (DL_FUNC) &_flipFISH_dg_find_sigma_RootBisection_test, 3},
-    {"_flipFISH_dg_nearPD_native_test", (DL_FUNC) &_flipFISH_dg_nearPD_native_test, 1},
-    {"_flipFISH_rng_engine_draw_test", (DL_FUNC) &_flipFISH_rng_engine_draw_test, 2},
-    {"_flipFISH_rng_normal_draw_test", (DL_FUNC) &_flipFISH_rng_normal_draw_test, 4},
-    {"_flipFISH_rng_bernoulli_draw_test", (DL_FUNC) &_flipFISH_rng_bernoulli_draw_test, 3},
-    {"_flipFISH_rng_normal_paramtype_draw_test", (DL_FUNC) &_flipFISH_rng_normal_paramtype_draw_test, 5},
     {"_flipFISH_unique_Hamming_cb", (DL_FUNC) &_flipFISH_unique_Hamming_cb, 1},
     {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 11},
     {"_flipFISH_mQC_msle_at", (DL_FUNC) &_flipFISH_mQC_msle_at, 9},
@@ -294,7 +327,17 @@ static const R_CallMethodDef CallEntries[] = {
     {"_flipFISH_mQC_ehc_jacobian_at", (DL_FUNC) &_flipFISH_mQC_ehc_jacobian_at, 6},
     {"_flipFISH_test_fr_recovery", (DL_FUNC) &_flipFISH_test_fr_recovery, 12},
     {"_flipFISH_tr_sum_check", (DL_FUNC) &_flipFISH_tr_sum_check, 5},
-    {"_flipFISH_mQC_DG", (DL_FUNC) &_flipFISH_mQC_DG, 17},
+    {"_flipFISH_bvn_cdf_uppertail_test", (DL_FUNC) &_flipFISH_bvn_cdf_uppertail_test, 3},
+    {"_flipFISH_dg_find_sigma_RootBisection_test", (DL_FUNC) &_flipFISH_dg_find_sigma_RootBisection_test, 3},
+    {"_flipFISH_dg_nearPD_native_test", (DL_FUNC) &_flipFISH_dg_nearPD_native_test, 1},
+    {"_flipFISH_rng_engine_draw_test", (DL_FUNC) &_flipFISH_rng_engine_draw_test, 2},
+    {"_flipFISH_rng_normal_draw_test", (DL_FUNC) &_flipFISH_rng_normal_draw_test, 4},
+    {"_flipFISH_rng_bernoulli_draw_test", (DL_FUNC) &_flipFISH_rng_bernoulli_draw_test, 3},
+    {"_flipFISH_rng_gamma_draw_test", (DL_FUNC) &_flipFISH_rng_gamma_draw_test, 4},
+    {"_flipFISH_rng_poisson_draw_test", (DL_FUNC) &_flipFISH_rng_poisson_draw_test, 3},
+    {"_flipFISH_rng_normal_paramtype_draw_test", (DL_FUNC) &_flipFISH_rng_normal_paramtype_draw_test, 5},
+    {"_flipFISH_dg_ppois_lower_test", (DL_FUNC) &_flipFISH_dg_ppois_lower_test, 2},
+    {"_flipFISH_mQC_DG", (DL_FUNC) &_flipFISH_mQC_DG, 18},
     {NULL, NULL, 0}
 };
 
