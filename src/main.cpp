@@ -41,8 +41,8 @@ using LUTr = std::unordered_map<int, V64>;
  */
 
 // Barcode codebook
-// ... Note: Experimental structure (rounds and channels) captured in FlipRatePriors
 struct Codebook {
+    // ... Note: Experimental structure (rounds and channels) captured in FlipRatePriors
     int  N_bits;
     V64  barcodes; // list of barcodes
     Vstr species;  // list of species (gene or blank) names, order matches barcodes
@@ -465,7 +465,7 @@ Eigen::MatrixXd correlation_from_params(
     int         n
   ) {
     Eigen::MatrixXd L = Eigen::MatrixXd::Identity(n, n);
-    auto pairs = lower_tri_pairs_raw(n); // same canonical (i, j) order theta is laid out in
+    auto pairs = lower_tri_pairs_raw(n); // same canonical (i, j) order in which theta is laid out
     for (size_t k = 0; k < pairs.first.size(); ++k) {
       L(pairs.first[k], pairs.second[k]) = theta[k];
     }
@@ -1391,7 +1391,7 @@ std::tuple<Vdbl, Vdbl, Vdbl> expected_bc_counts(
     // (fork_utils.h): batches run in forked children when n_forks > 1 (POSIX only), else serially
     // in this process -- see that header for why both cases share this same per-batch logic.
     int n_grad_blocks = do_grad ? (1 + (do_grad_erc ? 1 : 0) + (do_grad_ehc ? 1 : 0)) : 0;
-
+   
     run_forked_batches<double>(
       n_forks,
       // batch_payload_size
@@ -1406,13 +1406,13 @@ std::tuple<Vdbl, Vdbl, Vdbl> expected_bc_counts(
         Vdbl grad_ecc_b(do_grad     ? n_params : 0, 0.0); // per-barcode ecc-gradient buffer
         Vdbl grad_erc_b(do_grad_erc ? n_params : 0, 0.0); // per-barcode erc-gradient buffer
         Vdbl grad_ehc_b(do_grad_ehc ? n_params : 0, 0.0); // per-barcode ehc-gradient buffer
-
+       
         // Fixed block offsets within the grad region (ecc block always first when do_grad; erc
         // block next if requested; ehc block after that, right after whichever of ecc/erc precedes it)
         int ecc_grad_start = 3 * N_barcodes_batch;
         int erc_grad_start = ecc_grad_start + N_barcodes_batch * n_params;
         int ehc_grad_start = erc_grad_start + (do_grad_erc ? N_barcodes_batch * n_params : 0);
-
+        
         for (int b = 0; b < N_barcodes_batch; ++b) {
           if (do_grad)     std::fill(grad_ecc_b.begin(), grad_ecc_b.end(), 0.0);
           if (do_grad_erc) std::fill(grad_erc_b.begin(), grad_erc_b.end(), 0.0);
@@ -1487,7 +1487,7 @@ std::tuple<Vdbl, Vdbl, Vdbl> expected_bc_counts(
                std::to_string(barcode_batches[i][0]) + " to " + std::to_string(barcode_batches[i].back()) + ".";
       }
     );
-
+   
     return {erc, ecc, ehc};
   }
 
@@ -1540,38 +1540,6 @@ static void apply_misread_loss_rescaling(
      * Shared by prepare_STdata_at() (called with an empty fliprate_priors, matching its
      * pre-existing behavior) and prepare_STdata_for_mQC() (called with the caller's real
      * fliprate_priors).
-     */
-  }
-
-// Shared setup for the single-point diagnostic exports
-static std::pair<ST_data, FlipRates> prepare_STdata_at(
-    const std::vector<double>& FR,
-    NumericMatrix              bc_counts,
-    IntegerMatrix              codebook,
-    int                        maxHam,
-    int                        n_forks,
-    int                        max_flips
-  ) {
-    
-    auto STdata = load_STdata(bc_counts, codebook, max_flips, maxHam, false);
-    STdata.n_forks = n_forks;
-   
-    apply_misread_loss_rescaling(STdata, List());
-    
-    FlipRates fr = pack_fr(Vdbl(FR.begin(), FR.end()), STdata.cb.N_bits);
-    return {STdata, fr};
-   
-    /*
-     * Function description:
-     *
-     * Shared setup for the single-point diagnostic exports (mQC_ecc_jacobian_at, mQC_ehc_jacobian_at,
-     * mQC_counts_at): load ST_data, estimate and apply the misread-loss rescaling of bc_counts_true exactly
-     * as mQC() does (zeroing blanks), then pack FR into a FlipRates struct. These diagnostics skip
-     * mQC()'s msle_weights/fr_priors/prior_weight/dispersion_weight/erc setup entirely, since
-     * expected_bc_counts() (and hence their gradients/counts) doesn't depend on those -- only
-     * mQC_msle()'s penalty terms do.
-     * 
-     * Initial draft of this function written by Claude Sonnet 5.
      */
   }
 
@@ -1848,8 +1816,8 @@ List mQC(
   ) {
    
     // Load in data and set up the msle objective (weights, priors, erc term, misread-loss rescaling)
-    Weights w       = pack_weights(weights);
-    auto     STdata = prepare_STdata_for_mQC(
+    Weights w      = pack_weights(weights);
+    auto    STdata = prepare_STdata_for_mQC(
       bc_counts, codebook, maxHam, n_forks, max_flips,
       true, // Make verbose printouts
       fliprate_priors, w,
@@ -2102,6 +2070,37 @@ double mQC_msle_at(
      */
    
   }
+
+// Shared setup for the single-point diagnostic exports
+static std::pair<ST_data, FlipRates> prepare_STdata_at(
+    const std::vector<double>& FR,
+    NumericMatrix              bc_counts,
+    IntegerMatrix              codebook,
+    int                        maxHam,
+    int                        n_forks,
+    int                        max_flips
+  ) {
+    
+    auto STdata = load_STdata(bc_counts, codebook, max_flips, maxHam, false);
+    STdata.n_forks = n_forks;
+    apply_misread_loss_rescaling(STdata, List());
+    FlipRates fr = pack_fr(Vdbl(FR.begin(), FR.end()), STdata.cb.N_bits);
+    return {STdata, fr};
+   
+    /*
+     * Function description:
+     *
+     * Shared setup for the single-point diagnostic exports (mQC_ecc_jacobian_at, mQC_ehc_jacobian_at,
+     * mQC_counts_at): load ST_data, estimate and apply the misread-loss rescaling of bc_counts_true exactly
+     * as mQC() does (zeroing blanks), then pack FR into a FlipRates struct. These diagnostics skip
+     * mQC()'s msle_weights/fr_priors/prior_weight/dispersion_weight/erc setup entirely, since
+     * expected_bc_counts() (and hence their gradients/counts) doesn't depend on those -- only
+     * mQC_msle()'s penalty terms do.
+     * 
+     * Initial draft of this function written by Claude Sonnet 5.
+     */
+  }
+
 
 // Analytic Jacobian d(ecc_b)/d(theta_k) at a single, caller-supplied FR.
 // [[Rcpp::export]]
@@ -2641,166 +2640,7 @@ List test_fr_recovery(
 
 /*
  * *********************************************************************************************************************
- * Test helpers (exported for use in testthat only)
- */
-
-// Sum TR(bc, flips, fr) over all 2^N_bits flip patterns; must equal 1.0 for every valid parameter set.
-// [[Rcpp::export]]
-double tr_sum_check(
-    int                        bc,
-    const std::vector<double>& rate10,
-    const std::vector<double>& rate01,
-    const std::vector<double>& corr1,
-    const std::vector<double>& corr0
-  ) {
-    int N_bits = rate10.size();
-    Vdbl params;
-    params.insert(params.end(), rate10.begin(), rate10.end());
-    params.insert(params.end(), rate01.begin(), rate01.end());
-    params.insert(params.end(), corr1.begin(),  corr1.end());
-    params.insert(params.end(), corr0.begin(),  corr0.end());
-    FlipRates fr = pack_fr(params, N_bits);
-   
-    double total = 0.0;
-    uint64_t n_patterns = 1ULL << N_bits;
-    for (uint64_t flips = 0; flips < n_patterns; ++flips) {
-      total += TR(static_cast<uint64_t>(bc), flips, fr);
-    }
-    return total;
-   
-    /*
-     * Arguments mirror pack_fr: rate10 and rate01 are per-bit flip rates; corr1 and corr0 are the
-     * strict lower-triangle correlation vectors (length N_bits*(N_bits-1)/2 each). Signature
-     * spelled out as std::vector<double> rather than the Vdbl typedef because
-     * Rcpp::compileAttributes()/RcppExports.cpp can't resolve local typedefs from main.cpp.
-     *
-     * Initial draft of this function written by Claude Sonnet 4.6.
-     */
-  }
-
-// Test export wrapping bvn_cdf_uppertail() for verifying against R's mvtnorm::pmvnorm
-// [[Rcpp::export]]
-double bvn_cdf_uppertail_test(double h, double k, double rho) {return bvn_cdf_uppertail(h, k, rho);}
-
-// Test export wrapping dg_find_sigma_RootBisection(); see bvn_cdf_uppertail_test()'s own note.
-// [[Rcpp::export]]
-double dg_find_sigma_RootBisection_test(double threshold_i, double threshold_j, double desired_cov) {return dg_find_sigma_RootBisection(threshold_i, threshold_j, desired_cov);}
-
-// Test export wrapping dg_nearPD_native(), checked against R's Matrix::nearPD() over random matrices.
-// [[Rcpp::export]]
-Eigen::MatrixXd dg_nearPD_native_test(Eigen::MatrixXd x) {return dg_nearPD_native(x, true, true, true);}
-
-// Test export pinning boost::random::mt19937's exact draw sequence for a fixed seed.
-// [[Rcpp::export]]
-std::vector<unsigned int> rng_engine_draw_test(
-    unsigned int seed, 
-    int n
-  ) {
-    boost::random::mt19937     rng(seed);
-    std::vector<unsigned int>  out(n);
-    for (int i = 0; i < n; ++i) {out[i] = rng();}
-    return out;
-   
-    /*
-     * This and the other rng_*_draw_test() exports below pin the exact draw sequence
-     * boost::random::mt19937 (and its normal_distribution/bernoulli_distribution) produce for a
-     * fixed seed. The statistical properties of these draws are not in question; the point is to
-     * catch anything that silently changes the *specific numbers* a fixed seed produces -- a
-     * reversion to std::, a Boost upgrade that changes a distribution's internal sampling
-     * algorithm, or a change to call order/seeding -- since any of those would make simulation
-     * results produced before vs. after the change diverge for users who rely on a fixed seed for
-     * reproducibility (see draw_random_fr() above).
-     */
-  }
-
-// Test export pinning boost::random::normal_distribution's exact draw sequence for a fixed seed.
-// [[Rcpp::export]]
-std::vector<double> rng_normal_draw_test(
-    unsigned int seed, 
-    int n, 
-    double mean, 
-    double sd
-  ) {
-    boost::random::mt19937                     rng(seed);
-    boost::random::normal_distribution<double> dist(mean, sd);
-    std::vector<double>                        out(n);
-    for (int i = 0; i < n; ++i) {out[i] = dist(rng);}
-    return out;
-  }
-
-// Test export pinning boost::random::bernoulli_distribution's exact draw sequence for a fixed seed.
-// [[Rcpp::export]]
-std::vector<int> rng_bernoulli_draw_test(
-    unsigned int seed, 
-    int n, 
-    double p
-  ) {
-    boost::random::mt19937                        rng(seed);
-    boost::random::bernoulli_distribution<double> dist(p);
-    std::vector<int>                              out(n);
-    for (int i = 0; i < n; ++i) {out[i] = dist(rng) ? 1 : 0;}
-    return out;
-  }
-
-// Test export pinning boost::random::gamma_distribution's exact draw sequence for a fixed seed.
-// [[Rcpp::export]]
-std::vector<double> rng_gamma_draw_test(
-    unsigned int seed,
-    int          n,
-    double       shape,
-    double       scale
-  ) {
-    boost::random::mt19937                    rng(seed);
-    boost::random::gamma_distribution<double> dist(shape, scale);
-    std::vector<double>                       out(n);
-    for (int i = 0; i < n; ++i) {out[i] = dist(rng);}
-    return out;
-  }
-
-// Test export pinning boost::random::poisson_distribution's exact draw sequence for a fixed seed.
-// [[Rcpp::export]]
-std::vector<int> rng_poisson_draw_test(
-    unsigned int seed,
-    int          n,
-    double       mean
-  ) {
-    boost::random::mt19937                 rng(seed);
-    boost::random::poisson_distribution<int> dist(mean);
-    std::vector<int>                       out(n);
-    for (int i = 0; i < n; ++i) {out[i] = dist(rng);}
-    return out;
-  }
-
-// Test export pinning the param_type-reset reuse pattern in draw_random_fr()'s normal_distribution.
-// [[Rcpp::export]]
-std::vector<double> rng_normal_paramtype_draw_test(
-    unsigned int                seed,
-    double                      mean1, double sd1,
-    double                      mean2, double sd2
-  ) {
-    boost::random::mt19937                     rng(seed);
-    boost::random::normal_distribution<double> dist(0.0, 1.0);
-    boost::random::normal_distribution<double>::param_type p1(mean1, sd1);
-    boost::random::normal_distribution<double>::param_type p2(mean2, sd2);
-    std::vector<double> out(2);
-    out[0] = dist(rng, p1);
-    out[1] = dist(rng, p2);
-    return out;
-   
-    /*
-     * One normal_distribution object, re-parameterized per draw via param_type rather than
-     * reconstructed -- a distinct boost::random code path from a freshly constructed distribution,
-     * worth pinning separately.
-     */
-  }
-
-/*
- * *********************************************************************************************************************
- * DG simulation functions (mQC_DG): C++ port of R/dg_legacy.R's misread.qc.DG.legacy()/
- * .DG_run_simulation() -- literal dichotomized-Gaussian spot simulation fit via MCMCSA, rather than
- * mQC()'s analytic/gradient-based fit -- reusing FlipRates/FlipRatePriors/Codebook/ST_data and the
- * corrected correlation-matrix machinery above instead of dg_legacy.R's own (uninverted,
- * single-shared-matrix) noise model.
+ * DG simulation functions (mQC_DG)
  */
 
 // Draw n i.i.d. samples from N(0, Sigma) given Sigma's lower-triangular Cholesky factor L.
@@ -2827,25 +2667,22 @@ Eigen::MatrixXd dg_mvn_draw_cholesky(
      */
   }
 
-// R::ppois(x, lambda, lower_tail = 1, log_p = 0) semantics, natively: the lower-tail Poisson CDF is
-// the regularized upper incomplete gamma function gamma_q(floor(x)+1, lambda) (boost::math::cdf()
-// evaluates gamma_q(k+1, lambda) directly without flooring non-integer k -- see
-// boost/math/distributions/poisson.hpp -- so the floor(x + 1e-7) step below, matching R's own
-// nmath/ppois.c, is reproduced explicitly here). Also reproduces R's edge cases: x < 0 -> 0,
-// lambda == 0 -> 1 (boost's cdf() returns 0 for mean == 0, since it has no such Poisson(0)-is-a-
-// point-mass-at-0 special case).
+// Compute lower-tail Poisson CDF
 double dg_ppois_lower(double x, double lambda) {
-  if (x < 0.0) {return 0.0;}
-  if (lambda <= 0.0) {return 1.0;}
-  double x_floor = std::floor(x + 1e-7);
-  return boost::math::cdf(boost::math::poisson_distribution<double>(lambda), x_floor);
-}
-
-// Test export wrapping dg_ppois_lower() (this file's native replacement for R::ppois(x, lambda, 1,
-// 0)), for direct comparison against R's own ppois() over a range of x/lambda.
-// [[Rcpp::export]]
-double dg_ppois_lower_test(double x, double lambda) {return dg_ppois_lower(x, lambda);}
-
+    if (x < 0.0) {return 0.0;}
+    if (lambda <= 0.0) {return 1.0;}
+    double x_floor = std::floor(x + 1e-7);
+    return boost::math::cdf(boost::math::poisson_distribution<double>(lambda), x_floor);
+    /*
+     * R::ppois(x, lambda, lower_tail = 1, log_p = 0) semantics, natively: the lower-tail Poisson CDF is 
+     * the regularized upper incomplete gamma function gamma_q(floor(x)+1, lambda) (boost::math::cdf()
+     * evaluates gamma_q(k+1, lambda) directly without flooring non-integer k -- see
+     * boost/math/distributions/poisson.hpp -- so the floor(x + 1e-7) step below, matching R's own
+     * nmath/ppois.c, is reproduced explicitly here). Also reproduces R's edge cases: x < 0 -> 0,
+     * lambda == 0 -> 1 (boost's cdf() returns 0 for mean == 0, since it has no such Poisson(0)-is-a-
+     * point-mass-at-0 special case).
+     */
+  }
 
 // This step's total "true" transcript counts per barcode, for a freshly-simulated population of N_cells.
 Vint dg_draw_true_counts(
@@ -3537,3 +3374,164 @@ List mQC_DG(
      * caller's set.seed() in R has no effect on mQC_DG()'s/misread.qc.DG()'s reproducibility.
      */
   }
+
+/*
+ * *********************************************************************************************************************
+ * Test helpers (exported for use in testthat only)
+ */
+
+// Sum TR(bc, flips, fr) over all 2^N_bits flip patterns; must equal 1.0 for every valid parameter set.
+// [[Rcpp::export]]
+double tr_sum_check(
+    int                        bc,
+    const std::vector<double>& rate10,
+    const std::vector<double>& rate01,
+    const std::vector<double>& corr1,
+    const std::vector<double>& corr0
+  ) {
+    int N_bits = rate10.size();
+    Vdbl params;
+    params.insert(params.end(), rate10.begin(), rate10.end());
+    params.insert(params.end(), rate01.begin(), rate01.end());
+    params.insert(params.end(), corr1.begin(),  corr1.end());
+    params.insert(params.end(), corr0.begin(),  corr0.end());
+    FlipRates fr = pack_fr(params, N_bits);
+   
+    double total = 0.0;
+    uint64_t n_patterns = 1ULL << N_bits;
+    for (uint64_t flips = 0; flips < n_patterns; ++flips) {
+      total += TR(static_cast<uint64_t>(bc), flips, fr);
+    }
+    return total;
+   
+    /*
+     * Arguments mirror pack_fr: rate10 and rate01 are per-bit flip rates; corr1 and corr0 are the
+     * strict lower-triangle correlation vectors (length N_bits*(N_bits-1)/2 each). Signature
+     * spelled out as std::vector<double> rather than the Vdbl typedef because
+     * Rcpp::compileAttributes()/RcppExports.cpp can't resolve local typedefs from main.cpp.
+     *
+     * Initial draft of this function written by Claude Sonnet 4.6.
+     */
+  }
+
+// Test export wrapping bvn_cdf_uppertail() for verifying against R's mvtnorm::pmvnorm
+// [[Rcpp::export]]
+double bvn_cdf_uppertail_test(double h, double k, double rho) {return bvn_cdf_uppertail(h, k, rho);}
+
+// Test export wrapping dg_find_sigma_RootBisection(); see bvn_cdf_uppertail_test()'s own note.
+// [[Rcpp::export]]
+double dg_find_sigma_RootBisection_test(double threshold_i, double threshold_j, double desired_cov) {return dg_find_sigma_RootBisection(threshold_i, threshold_j, desired_cov);}
+
+// Test export wrapping dg_nearPD_native(), checked against R's Matrix::nearPD() over random matrices.
+// [[Rcpp::export]]
+Eigen::MatrixXd dg_nearPD_native_test(Eigen::MatrixXd x) {return dg_nearPD_native(x, true, true, true);}
+
+// Test export pinning boost::random::mt19937's exact draw sequence for a fixed seed.
+// [[Rcpp::export]]
+std::vector<unsigned int> rng_engine_draw_test(
+    unsigned int seed, 
+    int n
+  ) {
+    boost::random::mt19937     rng(seed);
+    std::vector<unsigned int>  out(n);
+    for (int i = 0; i < n; ++i) {out[i] = rng();}
+    return out;
+   
+    /*
+     * This and the other rng_*_draw_test() exports below pin the exact draw sequence
+     * boost::random::mt19937 (and its normal_distribution/bernoulli_distribution) produce for a
+     * fixed seed. The statistical properties of these draws are not in question; the point is to
+     * catch anything that silently changes the *specific numbers* a fixed seed produces -- a
+     * reversion to std::, a Boost upgrade that changes a distribution's internal sampling
+     * algorithm, or a change to call order/seeding -- since any of those would make simulation
+     * results produced before vs. after the change diverge for users who rely on a fixed seed for
+     * reproducibility (see draw_random_fr() above).
+     */
+  }
+
+// Test export pinning boost::random::normal_distribution's exact draw sequence for a fixed seed.
+// [[Rcpp::export]]
+std::vector<double> rng_normal_draw_test(
+    unsigned int seed, 
+    int n, 
+    double mean, 
+    double sd
+  ) {
+    boost::random::mt19937                     rng(seed);
+    boost::random::normal_distribution<double> dist(mean, sd);
+    std::vector<double>                        out(n);
+    for (int i = 0; i < n; ++i) {out[i] = dist(rng);}
+    return out;
+  }
+
+// Test export pinning boost::random::bernoulli_distribution's exact draw sequence for a fixed seed.
+// [[Rcpp::export]]
+std::vector<int> rng_bernoulli_draw_test(
+    unsigned int seed, 
+    int n, 
+    double p
+  ) {
+    boost::random::mt19937                        rng(seed);
+    boost::random::bernoulli_distribution<double> dist(p);
+    std::vector<int>                              out(n);
+    for (int i = 0; i < n; ++i) {out[i] = dist(rng) ? 1 : 0;}
+    return out;
+  }
+
+// Test export pinning boost::random::gamma_distribution's exact draw sequence for a fixed seed.
+// [[Rcpp::export]]
+std::vector<double> rng_gamma_draw_test(
+    unsigned int seed,
+    int          n,
+    double       shape,
+    double       scale
+  ) {
+    boost::random::mt19937                    rng(seed);
+    boost::random::gamma_distribution<double> dist(shape, scale);
+    std::vector<double>                       out(n);
+    for (int i = 0; i < n; ++i) {out[i] = dist(rng);}
+    return out;
+  }
+
+// Test export pinning boost::random::poisson_distribution's exact draw sequence for a fixed seed.
+// [[Rcpp::export]]
+std::vector<int> rng_poisson_draw_test(
+    unsigned int seed,
+    int          n,
+    double       mean
+  ) {
+    boost::random::mt19937                 rng(seed);
+    boost::random::poisson_distribution<int> dist(mean);
+    std::vector<int>                       out(n);
+    for (int i = 0; i < n; ++i) {out[i] = dist(rng);}
+    return out;
+  }
+
+// Test export pinning the param_type-reset reuse pattern in draw_random_fr()'s normal_distribution.
+// [[Rcpp::export]]
+std::vector<double> rng_normal_paramtype_draw_test(
+    unsigned int                seed,
+    double                      mean1, double sd1,
+    double                      mean2, double sd2
+  ) {
+    boost::random::mt19937                     rng(seed);
+    boost::random::normal_distribution<double> dist(0.0, 1.0);
+    boost::random::normal_distribution<double>::param_type p1(mean1, sd1);
+    boost::random::normal_distribution<double>::param_type p2(mean2, sd2);
+    std::vector<double> out(2);
+    out[0] = dist(rng, p1);
+    out[1] = dist(rng, p2);
+    return out;
+   
+    /*
+     * One normal_distribution object, re-parameterized per draw via param_type rather than
+     * reconstructed -- a distinct boost::random code path from a freshly constructed distribution,
+     * worth pinning separately.
+     */
+  }
+
+// Test export wrapping dg_ppois_lower() (this file's native replacement for R::ppois(x, lambda, 1,
+// 0)), for direct comparison against R's own ppois() over a range of x/lambda.
+// [[Rcpp::export]]
+double dg_ppois_lower_test(double x, double lambda) {return dg_ppois_lower(x, lambda);}
+
