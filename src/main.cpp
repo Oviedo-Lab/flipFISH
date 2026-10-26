@@ -8,8 +8,7 @@
 #include <unordered_set>
 #include <map>          // std::map, used by draw_structured_corr() to group bits by round/channel
 #include <numeric>      // std::accumulate
-#include <unistd.h>     // fork, pipe, read, write, close
-#include <sys/wait.h>   // waitpid
+#include "fork_utils.h" // run_forked_batches() -- shared fork/pipe map-reduce, Windows-guarded
 #include <nlopt.hpp>    // L-BFGS and other gradient-based optimizers
 #include <boost/math/distributions/normal.hpp>     // norm_cdf() -- native (no R callback) normal CDF/quantile
 #include <boost/math/special_functions/owens_t.hpp> // bvn_cdf_uppertail() -- native bivariate normal CDF
@@ -1384,151 +1383,76 @@ std::tuple<Vdbl, Vdbl, Vdbl> expected_bc_counts(
       Rcpp::stop("Error in batching barcodes for simulation. Expected all barcodes to be in one batch when n_forks=1.");
     }
    
-    if (n_forks > 1) {
-      // Run in parallel with forking.
-      // Child payload layout (per barcode in batch):
-      //   [erc_0..erc_{N-1} | ecc_0..ecc_{N-1} | ehc_0..ehc_{N-1} | grad_ecc_b0..b{N-1} | grad_erc_b0..b{N-1} (if requested) | grad_ehc_b0..b{N-1} (if requested)]
-      // where each grad_*_b is n_params doubles. The grad_ecc block is present when do_grad=true; the
-      // grad_erc and grad_ehc blocks are each independently present when do_grad_erc/do_grad_ehc=true,
-      // in that fixed order (erc before ehc) whenever both are requested.
-      int n_grad_blocks = do_grad ? (1 + (do_grad_erc ? 1 : 0) + (do_grad_ehc ? 1 : 0)) : 0;
-     
-      // Pipes for inter-process communication
-      Vint                pids(n_forks);
-      std::vector<std::array<int, 2>> pipes(n_forks);
-     
-      // Initialize pipes
-      for (int i = 0; i < n_forks; ++i) {pipe(pipes[i].data());}
-     
-      // fork processes
-      for (int i = 0; i < n_forks; i++) {
-        pid_t pid              = fork();
-        int   N_barcodes_batch = barcode_batches[i].size();
-       
-        if (pid == 0) { // child process
-         
-          // Close unrelated pipe ends
-          for (int j = 0; j < n_forks; ++j) {
-            if (j == i) {
-              close(pipes[j][0]); // keep write end
-            } else {
-              close(pipes[j][0]);
-              close(pipes[j][1]);
-            }
-          }
-          int payload_size  = (3 + n_grad_blocks * n_params) * N_barcodes_batch;
-          Vdbl erchc_child(payload_size, 0.0);
-          Vdbl grad_ecc_b(do_grad     ? n_params : 0, 0.0); // per-barcode ecc-gradient buffer
-          Vdbl grad_erc_b(do_grad_erc ? n_params : 0, 0.0); // per-barcode erc-gradient buffer
-          Vdbl grad_ehc_b(do_grad_ehc ? n_params : 0, 0.0); // per-barcode ehc-gradient buffer
-         
-          // Fixed block offsets within the grad region (ecc block always first when do_grad; erc
-          // block next if requested; ehc block after that, right after whichever of ecc/erc precedes it)
-          int ecc_grad_start = 3 * N_barcodes_batch;
-          int erc_grad_start = ecc_grad_start + N_barcodes_batch * n_params;
-          int ehc_grad_start = erc_grad_start + (do_grad_erc ? N_barcodes_batch * n_params : 0);
-         
-          for (int b = 0; b < N_barcodes_batch; ++b) {
-            if (do_grad)     std::fill(grad_ecc_b.begin(), grad_ecc_b.end(), 0.0);
-            if (do_grad_erc) std::fill(grad_erc_b.begin(), grad_erc_b.end(), 0.0);
-            if (do_grad_ehc) std::fill(grad_ehc_b.begin(), grad_ehc_b.end(), 0.0);
-            std::tuple<double, double, double> erchc = expected_bc_count(
-              barcodes[barcode_batches[i][b]],
-              fr, bc_counts, barcodes,
-              cti.at(barcode_batches[i][b]),
-              max_flips,
-              do_grad     ? &grad_ecc_b : nullptr,
-              do_grad_erc ? &grad_erc_b : nullptr,
-              do_grad_ehc ? &grad_ehc_b : nullptr
-            );
-            erchc_child[b]                      = std::get<0>(erchc); // expected read count
-            erchc_child[b + N_barcodes_batch]   = std::get<1>(erchc); // expected corrected count
-            erchc_child[b + 2*N_barcodes_batch] = std::get<2>(erchc); // expected hit count
-            if (do_grad) {
-              std::copy(grad_ecc_b.begin(), grad_ecc_b.end(),
-                        erchc_child.begin() + ecc_grad_start + b*n_params);
-            }
-            if (do_grad_erc) {
-              std::copy(grad_erc_b.begin(), grad_erc_b.end(),
-                        erchc_child.begin() + erc_grad_start + b*n_params);
-            }
-            if (do_grad_ehc) {
-              std::copy(grad_ehc_b.begin(), grad_ehc_b.end(),
-                        erchc_child.begin() + ehc_grad_start + b*n_params);
-            }
-          }
-          
-          // Send result 
-          const char* buffer        = reinterpret_cast<const char*>(erchc_child.data());
-          size_t      nbytes        = sizeof(double) * erchc_child.size();
-          size_t      total_written = 0;
-          while (total_written < nbytes) {
-            ssize_t n_written = write(
-              pipes[i][1],
-              buffer + total_written,
-              nbytes - total_written 
-            );
-            if (n_written <= 0) {
-              if (errno == EINTR) continue; // Retry if interrupted
-              close(pipes[i][1]);
-              _exit(1);
-            } 
-            total_written += static_cast<size_t>(n_written);
-          } 
-          
-          close(pipes[i][1]);    // Close write end
-          _exit(0);              // Exit child process
-          
-        } else if (pid > 0) {    // parent process 
-          pids[i] = pid;         // Grab child pid
-          close(pipes[i][1]);    // Close write end
-        } else { 
-          Rcpp::stop("Fork failed!");
-        } 
-        
-      } 
-      
-      // Fetch results from pipes
-      for (int i = 0; i < n_forks; i++) {
-        int N_barcodes_batch = barcode_batches[i].size();
-        int payload_size     = (3 + n_grad_blocks * n_params) * N_barcodes_batch;
+    // Child payload layout (per barcode in batch):
+    //   [erc_0..erc_{N-1} | ecc_0..ecc_{N-1} | ehc_0..ehc_{N-1} | grad_ecc_b0..b{N-1} | grad_erc_b0..b{N-1} (if requested) | grad_ehc_b0..b{N-1} (if requested)]
+    // where each grad_*_b is n_params doubles. The grad_ecc block is present when do_grad=true; the
+    // grad_erc and grad_ehc blocks are each independently present when do_grad_erc/do_grad_ehc=true,
+    // in that fixed order (erc before ehc) whenever both are requested. Run via run_forked_batches()
+    // (fork_utils.h): batches run in forked children when n_forks > 1 (POSIX only), else serially
+    // in this process -- see that header for why both cases share this same per-batch logic.
+    int n_grad_blocks = do_grad ? (1 + (do_grad_erc ? 1 : 0) + (do_grad_ehc ? 1 : 0)) : 0;
+
+    run_forked_batches<double>(
+      n_forks,
+      // batch_payload_size
+      [&](int i) -> size_t {
+        return static_cast<size_t>(3 + n_grad_blocks * n_params) * barcode_batches[i].size();
+      },
+      // compute_batch
+      [&](int i) -> Vdbl {
+        int  N_barcodes_batch = barcode_batches[i].size();
+        int  payload_size     = (3 + n_grad_blocks * n_params) * N_barcodes_batch;
         Vdbl erchc_child(payload_size, 0.0);
-        
-        // Read the row from the pipe into the buffer
-        char*  buffer     = reinterpret_cast<char*>(erchc_child.data());
-        size_t nbytes     = sizeof(double) * erchc_child.size();
-        size_t total_read = 0;
-        while (total_read < nbytes) {
-          ssize_t n_read = read(
-            pipes[i][0],
-            buffer + total_read,
-            nbytes - total_read
-          );
-          if (n_read == 0) {
-            close(pipes[i][0]);
-            int status;
-            waitpid(pids[i], &status, WNOHANG);
-            Rcpp::stop(
-              "\nUnexpected EOF while reading pipe " + std::to_string(i) + " of " + std::to_string(n_forks) + ". " +
-              "\nCheck for quiet core crash from a child-process error." +
-              "\nRead " + std::to_string(total_read) + " of " + std::to_string(nbytes) + " bytes." + 
-              "\nBatch size: " + std::to_string(barcode_batches[i].size()) + " barcodes, from " + std::to_string(barcode_batches[i][0]) + " to " + std::to_string(barcode_batches[i].back()) + "."
-            );
-          }
-          if (n_read < 0) {
-            if (errno == EINTR) continue; // Retry if interrupted
-            close(pipes[i][0]);
-            Rcpp::stop("Pipe read failed");
-          }
-          total_read += static_cast<size_t>(n_read);
-        }
-        
-        // Same fixed block offsets as the child used to write this payload (see above)
+        Vdbl grad_ecc_b(do_grad     ? n_params : 0, 0.0); // per-barcode ecc-gradient buffer
+        Vdbl grad_erc_b(do_grad_erc ? n_params : 0, 0.0); // per-barcode erc-gradient buffer
+        Vdbl grad_ehc_b(do_grad_ehc ? n_params : 0, 0.0); // per-barcode ehc-gradient buffer
+
+        // Fixed block offsets within the grad region (ecc block always first when do_grad; erc
+        // block next if requested; ehc block after that, right after whichever of ecc/erc precedes it)
         int ecc_grad_start = 3 * N_barcodes_batch;
         int erc_grad_start = ecc_grad_start + N_barcodes_batch * n_params;
         int ehc_grad_start = erc_grad_start + (do_grad_erc ? N_barcodes_batch * n_params : 0);
-       
-        // Add child to total count
+
+        for (int b = 0; b < N_barcodes_batch; ++b) {
+          if (do_grad)     std::fill(grad_ecc_b.begin(), grad_ecc_b.end(), 0.0);
+          if (do_grad_erc) std::fill(grad_erc_b.begin(), grad_erc_b.end(), 0.0);
+          if (do_grad_ehc) std::fill(grad_ehc_b.begin(), grad_ehc_b.end(), 0.0);
+          std::tuple<double, double, double> erchc = expected_bc_count(
+            barcodes[barcode_batches[i][b]],
+            fr, bc_counts, barcodes,
+            cti.at(barcode_batches[i][b]),
+            max_flips,
+            do_grad     ? &grad_ecc_b : nullptr,
+            do_grad_erc ? &grad_erc_b : nullptr,
+            do_grad_ehc ? &grad_ehc_b : nullptr
+          );
+          erchc_child[b]                      = std::get<0>(erchc); // expected read count
+          erchc_child[b + N_barcodes_batch]   = std::get<1>(erchc); // expected corrected count
+          erchc_child[b + 2*N_barcodes_batch] = std::get<2>(erchc); // expected hit count
+          if (do_grad) {
+            std::copy(grad_ecc_b.begin(), grad_ecc_b.end(),
+                      erchc_child.begin() + ecc_grad_start + b*n_params);
+          }
+          if (do_grad_erc) {
+            std::copy(grad_erc_b.begin(), grad_erc_b.end(),
+                      erchc_child.begin() + erc_grad_start + b*n_params);
+          }
+          if (do_grad_ehc) {
+            std::copy(grad_ehc_b.begin(), grad_ehc_b.end(),
+                      erchc_child.begin() + ehc_grad_start + b*n_params);
+          }
+        }
+        return erchc_child;
+      },
+      // reduce_batch
+      [&](int i, const Vdbl& erchc_child) {
+        int N_barcodes_batch = barcode_batches[i].size();
+
+        // Same fixed block offsets as compute_batch used to build this payload (see above)
+        int ecc_grad_start = 3 * N_barcodes_batch;
+        int erc_grad_start = ecc_grad_start + N_barcodes_batch * n_params;
+        int ehc_grad_start = erc_grad_start + (do_grad_erc ? N_barcodes_batch * n_params : 0);
+
         for (int b = 0; b < N_barcodes_batch; ++b) {
           int bc_idx = barcode_batches[i][b];
           erc[bc_idx] += erchc_child[b];
@@ -1538,64 +1462,32 @@ std::tuple<Vdbl, Vdbl, Vdbl> expected_bc_counts(
             std::copy(
               erchc_child.begin() + ecc_grad_start + b*n_params,
               erchc_child.begin() + ecc_grad_start + (b+1)*n_params,
-              (*grad_ecc).begin() + bc_idx * n_params
+              grad_ecc->begin() + bc_idx * n_params
             );
           }
           if (do_grad_erc) {
             std::copy(
               erchc_child.begin() + erc_grad_start + b*n_params,
               erchc_child.begin() + erc_grad_start + (b+1)*n_params,
-              (*grad_erc).begin() + bc_idx * n_params
+              grad_erc->begin() + bc_idx * n_params
             );
           }
           if (do_grad_ehc) {
             std::copy(
               erchc_child.begin() + ehc_grad_start + b*n_params,
               erchc_child.begin() + ehc_grad_start + (b+1)*n_params,
-              (*grad_ehc).begin() + bc_idx * n_params
+              grad_ehc->begin() + bc_idx * n_params
             );
           }
         }
-        close(pipes[i][0]);           // Close read end
-        int status;
-        waitpid(pids[i], &status, 0);
-        if (WIFSIGNALED(status)) {Rcpp::Rcout << "Child killed by signal " << WTERMSIG(status) << std::endl;}
-        if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {Rcpp::Rcout << "Child exited with code " << WEXITSTATUS(status) << std::endl;}
+      },
+      // batch_error_context
+      [&](int i) -> std::string {
+        return "\nBatch size: " + std::to_string(barcode_batches[i].size()) + " barcodes, from " +
+               std::to_string(barcode_batches[i][0]) + " to " + std::to_string(barcode_batches[i].back()) + ".";
       }
-      
-    } else {
-      // Run in serial
-      Vdbl grad_ecc_b(do_grad     ? n_params : 0, 0.0); // reused per-barcode ecc-gradient buffer
-      Vdbl grad_erc_b(do_grad_erc ? n_params : 0, 0.0); // reused per-barcode erc-gradient buffer
-      Vdbl grad_ehc_b(do_grad_ehc ? n_params : 0, 0.0); // reused per-barcode ehc-gradient buffer
-      for (int b : barcode_batches[0]) {
-        if (do_grad)     std::fill(grad_ecc_b.begin(), grad_ecc_b.end(), 0.0);
-        if (do_grad_erc) std::fill(grad_erc_b.begin(), grad_erc_b.end(), 0.0);
-        if (do_grad_ehc) std::fill(grad_ehc_b.begin(), grad_ehc_b.end(), 0.0);
-        std::tuple<double, double, double> erchc = expected_bc_count(
-          barcodes[b],
-          fr, bc_counts, barcodes,
-          cti.at(b),
-          max_flips,
-          do_grad     ? &grad_ecc_b : nullptr,
-          do_grad_erc ? &grad_erc_b : nullptr,
-          do_grad_ehc ? &grad_ehc_b : nullptr
-        );
-        erc[b] = std::get<0>(erchc); // expected read count
-        ecc[b] = std::get<1>(erchc); // expected corrected count
-        ehc[b] = std::get<2>(erchc); // expected hit counts
-        if (do_grad) {
-          std::copy(grad_ecc_b.begin(), grad_ecc_b.end(), (*grad_ecc).begin() + b * n_params);
-        }
-        if (do_grad_erc) {
-          std::copy(grad_erc_b.begin(), grad_erc_b.end(), (*grad_erc).begin() + b * n_params);
-        }
-        if (do_grad_ehc) {
-          std::copy(grad_ehc_b.begin(), grad_ehc_b.end(), (*grad_ehc).begin() + b * n_params);
-        }
-      }
-    }
-    
+    );
+
     return {erc, ecc, ehc};
   }
 
@@ -2462,129 +2354,35 @@ SpotSim make_SpotSim(
     Rcpp::Rcout << "Simulating and decoding spot counts for each barcode." << std::endl; 
     int cache_size = 3 * N_barcodes;
     Vint rch_counts(cache_size, 0);
-    if (n_forks > 1) {
-      // Run in parallel with forking
-      
-      // Pipes for inter-process communication
-      Vint pids(n_forks);
-      std::vector<std::array<int, 2>> pipes(n_forks); 
-      
-      // Initialize pipes 
-      for (int i = 0; i < n_forks; ++i) {pipe(pipes[i].data());}
-      
-      // fork processes
-      for (int i = 0; i < n_forks; i++) {
-        pid_t pid = fork();
-        
-        if (pid == 0) { // child process
-          
-          // Close unrelated pipe ends
-          for (int j = 0; j < n_forks; ++j) {
-            if (j == i) {
-              close(pipes[j][0]); // keep write end
-            } else {
-              close(pipes[j][0]);
-              close(pipes[j][1]);
-            }
-          }
-          Vint rch_counts_child(cache_size, 0);
-          
-          for (int b : barcode_batches[i]) {
-            boost::random::mt19937 rng(ran_seed + b);
-            Vint temp_vec = simulate_barcode_spots(
-              b, 
-              bc_counts[b], 
-              fr,
-              correction_table, 
-              cb.barcodes, 
-              rng
-            ); 
-            for (int j = 0; j < cache_size; ++j) {rch_counts_child[j] += temp_vec[j];}
-          }
-          
-          // Send result 
-          const char* buffer        = reinterpret_cast<const char*>(rch_counts_child.data());
-          size_t      nbytes        = sizeof(int) * cache_size;
-          size_t      total_written = 0;
-          while (total_written < nbytes) {
-            ssize_t n_written = write(
-              pipes[i][1],
-              buffer + total_written,
-              nbytes - total_written
-            );
-            if (n_written <= 0) {
-              if (errno == EINTR) continue; // Retry if interrupted
-              close(pipes[i][1]);
-              _exit(1);
-            }
-            total_written += static_cast<size_t>(n_written);
-          }
-          
-          close(pipes[i][1]);    // Close write end
-          _exit(0);              // Exit child process
-          
-        } else if (pid > 0) { // parent process
-          pids[i] = pid;      // Grab child pid
-          close(pipes[i][1]); // Close write end
-        } else {
-          Rcpp::stop("Fork failed!");
-        }
-        
-      }
-      
-      // Fetch results from pipes
-      for (int i = 0; i < n_forks; i++) {
-        Vint temp_vec(cache_size, 0);
-        
-        // Read the row from the pipe into the buffer
-        char*  buffer     = reinterpret_cast<char*>(temp_vec.data());
-        size_t nbytes     = sizeof(int) * cache_size;
-        size_t total_read = 0;
-        while (total_read < nbytes) {
-          ssize_t n_read = read(
-            pipes[i][0],
-            buffer + total_read,
-            nbytes - total_read
+    // Run via run_forked_batches() (fork_utils.h): batches run in forked children when
+    // n_forks > 1 (POSIX only), else serially in this process.
+    run_forked_batches<int>(
+      n_forks,
+      // batch_payload_size
+      [&](int /*i*/) -> size_t {return static_cast<size_t>(cache_size);},
+      // compute_batch
+      [&](int i) -> Vint {
+        Vint rch_counts_batch(cache_size, 0);
+        for (int b : barcode_batches[i]) {
+          boost::random::mt19937 rng(ran_seed + b);
+          Vint temp_vec = simulate_barcode_spots(
+            b,
+            bc_counts[b],
+            fr,
+            correction_table,
+            cb.barcodes,
+            rng
           );
-          if (n_read == 0) {
-            close(pipes[i][0]);
-            Rcpp::stop(
-              "Unexpected EOF while reading pipe. "
-              "Read " + std::to_string(total_read) +
-                " of " + std::to_string(nbytes) + " bytes."
-            );
-          }
-          if (n_read <= 0) {
-            close(pipes[i][0]);
-            Rcpp::stop("Pipe read failed");
-          }
-          total_read += static_cast<size_t>(n_read);
+          for (int j = 0; j < cache_size; ++j) {rch_counts_batch[j] += temp_vec[j];}
         }
-        
-        for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
-        close(pipes[i][0]);           // Close read end
-        int status;
-        waitpid(pids[i], &status, 0);
-        if (WIFSIGNALED(status)) {Rcpp::Rcout << "Child killed by signal " << WTERMSIG(status) << std::endl;}
-        if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {Rcpp::Rcout << "Child exited with code " << WEXITSTATUS(status) << std::endl;}
-      }
-      
-    } else {
-      // Run in serial
-      for (int b : barcode_batches[0]) {
-        boost::random::mt19937 rng(ran_seed + b);
-        Vint temp_vec = simulate_barcode_spots(
-          b, 
-          bc_counts[b], 
-          fr,
-          correction_table, 
-          cb.barcodes, 
-          rng
-        ); 
+        return rch_counts_batch;
+      },
+      // reduce_batch
+      [&](int /*i*/, const Vint& temp_vec) {
         for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
       }
-    }
-    
+    );
+
     // Resize vectors to count spots per barcode
     sim.read_counts.resize(N_barcodes, 0);
     sim.corrected_counts.resize(N_barcodes, 0);
@@ -3199,73 +2997,31 @@ SpotSim make_SpotSim_DG(
     int  cache_size = 3 * N_barcodes;
     Vint rch_counts(cache_size, 0);
    
-    if (n_use > 1) {
-      Vint pids(n_use);
-      std::vector<std::array<int, 2>> pipes(n_use);
-      for (int i = 0; i < n_use; ++i) {pipe(pipes[i].data());}
-     
-      for (int i = 0; i < n_use; i++) {
-        pid_t pid = fork();
-        if (pid == 0) { // child
-          for (int j = 0; j < n_use; ++j) {
-            if (j == i) {close(pipes[j][0]);} else {close(pipes[j][0]); close(pipes[j][1]);}
-          }
-          Vint rch_counts_child(cache_size, 0);
-          for (int b : barcode_batches[i]) {
-            auto                    pre = dg_precompute_barcode_noise(b, fr, cb.barcodes, N_bits);
-            boost::random::mt19937  rng(ran_seed + b);
-            Vint temp_vec = simulate_barcode_spots_DG(
-              b, true_counts[b], pre.first, pre.second, correction_table, cb.barcodes, N_bits, rng
-            );
-            for (int j = 0; j < cache_size; ++j) {rch_counts_child[j] += temp_vec[j];}
-          }
-          const char* buffer        = reinterpret_cast<const char*>(rch_counts_child.data());
-          size_t      nbytes        = sizeof(int) * cache_size;
-          size_t      total_written = 0;
-          while (total_written < nbytes) {
-            ssize_t n_written = write(pipes[i][1], buffer + total_written, nbytes - total_written);
-            if (n_written <= 0) {
-              if (errno == EINTR) continue;
-              close(pipes[i][1]); _exit(1);
-            }
-            total_written += static_cast<size_t>(n_written);
-          }
-          close(pipes[i][1]); _exit(0);
-        } else if (pid > 0) {
-          pids[i] = pid;
-          close(pipes[i][1]);
-        } else {
-          Rcpp::stop("Fork failed!");
+    // Run via run_forked_batches() (fork_utils.h): batches run in forked children when
+    // n_use > 1 (POSIX only), else serially in this process.
+    run_forked_batches<int>(
+      n_use,
+      // batch_payload_size
+      [&](int /*i*/) -> size_t {return static_cast<size_t>(cache_size);},
+      // compute_batch
+      [&](int i) -> Vint {
+        Vint rch_counts_batch(cache_size, 0);
+        for (int b : barcode_batches[i]) {
+          auto                    pre = dg_precompute_barcode_noise(b, fr, cb.barcodes, N_bits);
+          boost::random::mt19937  rng(ran_seed + b);
+          Vint temp_vec = simulate_barcode_spots_DG(
+            b, true_counts[b], pre.first, pre.second, correction_table, cb.barcodes, N_bits, rng
+          );
+          for (int j = 0; j < cache_size; ++j) {rch_counts_batch[j] += temp_vec[j];}
         }
-      }
-     
-      for (int i = 0; i < n_use; i++) {
-        Vint   temp_vec(cache_size, 0);
-        char*  buffer     = reinterpret_cast<char*>(temp_vec.data());
-        size_t nbytes     = sizeof(int) * cache_size;
-        size_t total_read = 0;
-        while (total_read < nbytes) {
-          ssize_t n_read = read(pipes[i][0], buffer + total_read, nbytes - total_read);
-          if (n_read == 0) {close(pipes[i][0]); Rcpp::stop("Unexpected EOF while reading pipe.");}
-          if (n_read <  0) {close(pipes[i][0]); Rcpp::stop("Pipe read failed");}
-          total_read += static_cast<size_t>(n_read);
-        }
-        for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
-        close(pipes[i][0]);
-        int status;
-        waitpid(pids[i], &status, 0);
-      }
-    } else {
-      for (int b : active) {
-        auto                    pre = dg_precompute_barcode_noise(b, fr, cb.barcodes, N_bits);
-        boost::random::mt19937  rng(ran_seed + b);
-        Vint temp_vec = simulate_barcode_spots_DG(
-          b, true_counts[b], pre.first, pre.second, correction_table, cb.barcodes, N_bits, rng
-        );
+        return rch_counts_batch;
+      },
+      // reduce_batch
+      [&](int /*i*/, const Vint& temp_vec) {
         for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
       }
-    }
-   
+    );
+
     sim.read_counts.resize(N_barcodes, 0);
     sim.corrected_counts.resize(N_barcodes, 0);
     sim.hit_counts.resize(N_barcodes, 0);
@@ -3563,7 +3319,7 @@ List mQC_DG(
     {
       Vdbl pt = lin_seq(1.0, static_cast<double>(n_steps), n_tracker_updates + 1);
       for (double p : pt) {progress_tracker.push_back(static_cast<int>(std::round(p)));}
-      progress_tracker[n_tracker_updates - 1] = n_steps;
+      progress_tracker.back() = n_steps;
     }
 
     while (step < n_steps) {
