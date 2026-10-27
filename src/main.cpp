@@ -1117,7 +1117,12 @@ ST_data load_STdata(
     // Load codebook as packed integers
     Codebook cb = pack_codebook(codebook, verbose);
     
-    // Check max_flips value 
+    // Check max_flips value: < 1 (e.g. an explicit 0, or a direct Rcpp-level call bypassing the R
+    // wrapper's own default) means "no limit", i.e. every misread the correction table admits gets
+    // a full TR() evaluation. This is almost always prohibitively slow on a real codebook -- cost
+    // grows steeply with max_flips (going from 4 to 8 on a 28-bit/819-barcode codebook was already a
+    // ~50x slowdown), which is why misread.qc()/sim.benchmark() in R now default max_flips to 6
+    // rather than relying on this fallback (see their own @param max_flips for the reasoning).
     if (max_flips < 1) {max_flips = cb.N_bits;}
     
     // Get info from bc_count_data

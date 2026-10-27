@@ -193,7 +193,7 @@ build_corr_priors <- function(
 #' @param codebook Numeric matrix with barcodes as row names and bits as columns. All entries should be 1 or 0, depending on whether an mRNA molecule of the species represented by the row is expected to luminescence in the bit represented by the column. All row names from \code{STdata} must be included in the row names for \code{codebook}.
 #' @param bit_org Optional data frame (or matrix) with one row per bit (columns \code{imagingRound} and \code{color}) giving the imaging-round plus color-channel structure of the codebook, used to enrich \code{fliprate_priors} with tiered correlations (\code{sdcorr_pairs}) via \code{build_corr_priors()}. Default \code{NULL} leaves \code{sdcorr_pairs} empty (no correlation structure). Tiered values for use with \code{bit_org} structure is set via entries \code{sd_round}, \code{sd_channel}, and \code{sd_other} in \code{fliprate_priors} (see the "Flip-rate priors" section below).
 #' @param n_forks Number of process forks to use for parallelizable computation (expected-count computation of \code{misread.qc()}, spot simulation in \code{misread.qc.DG()}). Default \code{NULL} resolves to half the detected cores (\code{parallel::detectCores()}, floored, minimum 1) on Mac/Linux, or 1 on Windows. Must be 1 on Windows; can be set higher than the default on Mac and Linux, up to the detected core count.
-#' @param max_flips When analytically computing expected counts per barcode, the function will ignore misreads larger than this Hamming distance. The default is 0, which is interpreted as no limit. Using all misreads will likely be prohibitively slow; a value between 6 and 10 is probably advisable. Values of 3 or 4 work well for initial trouble shooting and testing.
+#' @param max_flips When analytically computing expected counts per barcode, the function will ignore misreads larger than this Hamming distance. A value less than 1 is interpreted as no limit, which is almost always prohibitively slow -- profiling on a 28-bit/819-barcode codebook found the cost of each \code{expected_bc_counts()} evaluation grows steeply with \code{max_flips} (going from 4 to 8 was already a ~50x slowdown there), so this is a real speed/completeness trade-off, not just a safety valve. Default 6: empirically the lowest value that still gave informative (non-degenerate) fits on that same codebook, and within the range this package's own development notes called out as advisable (6 to 10 for production use, 3 or 4 for quick trouble-shooting). Lower it for faster, rougher exploratory runs; raise it (towards 10) if a fit seems to be missing real misread contributions, keeping in mind the cost grows fast as you do.
 #' @param report_freq Divisor specifying report frequency during optimization; will print updates every \code{report_freq} accepted calls, default 10.
 #' @param maxeval Maximum number of objective function evaluations for L-BFGS, default 500.
 #' @param n_restarts Number of L-BFGS multi-starts to run. Every restart's initial point is a random draw from \code{fliprate_priors}: the first restart always uses the same fixed seed (so a single run, the default, is reproducible across calls), while later restarts each use a different (but still deterministic, not system-random) seed. The best (lowest msle) result found across all restarts is kept. Default 1 (single, fixed-seed run).
@@ -230,7 +230,7 @@ misread.qc <- function(
     codebook,
     bit_org         = NULL,
     n_forks         = NULL,
-    max_flips       = 0,
+    max_flips       = 6, # lowest value found to still give informative fits; see @param max_flips -- cost grows steeply above it
     report_freq     = 10,
     maxeval         = 500, 
     n_restarts      = 1,
@@ -422,7 +422,7 @@ sim.benchmark <- function(
     bit_org              = NULL,
     n_sims               = 5,
     n_forks              = NULL,
-    max_flips            = 0,
+    max_flips            = 6, # lowest value found to still give informative fits; see misread.qc()'s @param max_flips -- cost grows steeply above it
     report_freq          = 10,
     maxeval              = 500,
     n_restarts           = 1,
