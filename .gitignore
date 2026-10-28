@@ -10,3 +10,6 @@ src/*.dll
 .DS_Store
 src/.DS_Store
 *.Rcheck/*
+*.tar.gz
+vignettes/*_cache/
+vignettes/articles/*_cache/

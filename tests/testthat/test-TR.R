@@ -20,7 +20,7 @@ no_corr <- function(N) rep(0, N * (N - 1) / 2)
 test_that("TR sums to 1 for 2 bits, zero correlations, bc = 00", {
   N <- 2
   expect_equal(
-    tr_sum_check(bc = 0L,
+    flipFISH:::tr_sum_check(bc = 0L,
                  rate10 = c(0.05, 0.08),
                  rate01 = c(0.03, 0.06),
                  corr1  = no_corr(N),
@@ -32,7 +32,7 @@ test_that("TR sums to 1 for 2 bits, zero correlations, bc = 00", {
 test_that("TR sums to 1 for 2 bits, zero correlations, bc = 11", {
   N <- 2
   expect_equal(
-    tr_sum_check(bc = 3L,
+    flipFISH:::tr_sum_check(bc = 3L,
                  rate10 = c(0.05, 0.08),
                  rate01 = c(0.03, 0.06),
                  corr1  = no_corr(N),
@@ -44,7 +44,7 @@ test_that("TR sums to 1 for 2 bits, zero correlations, bc = 11", {
 test_that("TR sums to 1 for 2 bits, non-zero correlations, bc = 00", {
   N <- 2
   expect_equal(
-    tr_sum_check(bc = 0L,
+    flipFISH:::tr_sum_check(bc = 0L,
                  rate10 = c(0.05, 0.08),
                  rate01 = c(0.03, 0.06),
                  corr1  = 0.3,
@@ -56,7 +56,7 @@ test_that("TR sums to 1 for 2 bits, non-zero correlations, bc = 00", {
 test_that("TR sums to 1 for 2 bits, non-zero correlations, bc = 11", {
   N <- 2
   expect_equal(
-    tr_sum_check(bc = 3L,
+    flipFISH:::tr_sum_check(bc = 3L,
                  rate10 = c(0.05, 0.08),
                  rate01 = c(0.03, 0.06),
                  corr1  = 0.3,
@@ -68,7 +68,7 @@ test_that("TR sums to 1 for 2 bits, non-zero correlations, bc = 11", {
 test_that("TR sums to 1 for 2 bits, non-zero correlations, bc = 01", {
   N <- 2
   expect_equal(
-    tr_sum_check(bc = 1L,
+    flipFISH:::tr_sum_check(bc = 1L,
                  rate10 = c(0.05, 0.08),
                  rate01 = c(0.03, 0.06),
                  corr1  = 0.3,
@@ -82,7 +82,7 @@ test_that("TR sums to 1 for 2 bits, non-zero correlations, bc = 01", {
 test_that("TR sums to 1 for 4 bits, zero correlations, bc = 0101", {
   N <- 4
   expect_equal(
-    tr_sum_check(bc = 5L,   # 0101 in binary
+    flipFISH:::tr_sum_check(bc = 5L,   # 0101 in binary
                  rate10 = c(0.05, 0.08, 0.04, 0.07),
                  rate01 = c(0.03, 0.06, 0.02, 0.05),
                  corr1  = no_corr(N),
@@ -95,7 +95,7 @@ test_that("TR sums to 1 for 4 bits, non-zero correlations, bc = 1111", {
   N <- 4
   # 6 lower-triangle entries for 4 bits
   expect_equal(
-    tr_sum_check(bc = 15L,
+    flipFISH:::tr_sum_check(bc = 15L,
                  rate10 = c(0.05, 0.08, 0.04, 0.07),
                  rate01 = c(0.03, 0.06, 0.02, 0.05),
                  corr1  = c(0.20, 0.15, 0.10, 0.25, 0.05, 0.18),
@@ -107,7 +107,7 @@ test_that("TR sums to 1 for 4 bits, non-zero correlations, bc = 1111", {
 test_that("TR sums to 1 for 4 bits, non-zero correlations, bc = 0000", {
   N <- 4
   expect_equal(
-    tr_sum_check(bc = 0L,
+    flipFISH:::tr_sum_check(bc = 0L,
                  rate10 = c(0.05, 0.08, 0.04, 0.07),
                  rate01 = c(0.03, 0.06, 0.02, 0.05),
                  corr1  = c(0.20, 0.15, 0.10, 0.25, 0.05, 0.18),
@@ -119,7 +119,7 @@ test_that("TR sums to 1 for 4 bits, non-zero correlations, bc = 0000", {
 test_that("TR sums to 1 for 4 bits, non-zero correlations, bc = 1010", {
   N <- 4
   expect_equal(
-    tr_sum_check(bc = 10L,
+    flipFISH:::tr_sum_check(bc = 10L,
                  rate10 = c(0.05, 0.08, 0.04, 0.07),
                  rate01 = c(0.03, 0.06, 0.02, 0.05),
                  corr1  = c(0.20, 0.15, 0.10, 0.25, 0.05, 0.18),
@@ -135,7 +135,7 @@ test_that("TR still sums to ~1 when large correlations trigger the clamp guard",
   # corr = 0.95 with rate01 = 0.07 would push adjusted rate to 0.07/0.05 = 1.4 > 1
   # The guard should clamp it and TR should still be close to 1
   expect_equal(
-    tr_sum_check(bc = 0L,
+    flipFISH:::tr_sum_check(bc = 0L,
                  rate10 = c(0.05, 0.08),
                  rate01 = c(0.07, 0.06),
                  corr1  = 0.0,

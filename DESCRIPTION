@@ -7,10 +7,11 @@ Author: Michael Barkasi
 Maintainer: Michael Barkasi <barkasi@wustl.edu>
 Description: Tools for estimating the proportion of barcodes correctly decoded (i.e., "precision") in FISH-based spatial transcriptomics runs, via estimating bit-flip rates using blank counts, conditional probabilities, and dichotomized Gaussians.
 License: GPL 3
+Encoding: UTF-8
 Suggests: testthat (>= 3.0.0), mvtnorm
 Config/testthat/edition: 3
-Imports: Rcpp (>= 1.0.13), RcppEigen, MASS, Matrix, gridExtra, grid, dplyr, parallel
-LinkingTo: Rcpp, RcppEigen, BH
+Imports: Rcpp (>= 1.0.13), RcppEigen, MASS, Matrix, gridExtra, grid, dplyr, parallel, nloptr
+LinkingTo: Rcpp, RcppEigen, BH, nloptr
 Depends: ggplot2
-SystemRequirements: NLopt
 Config/roxygen2/version: 8.1.1
+Config/Needs/website: rmarkdown

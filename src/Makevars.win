@@ -1,3 +1,0 @@
-CXX_STD = CXX14
-PKG_CXXFLAGS = -IC:/local/nlopt/include
-PKG_LIBS = -LC:/local/nlopt/lib -lnlopt

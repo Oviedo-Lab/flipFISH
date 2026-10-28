@@ -2,3 +2,11 @@
 ^\.Rproj\.user$
 ^\.positai$
 ^\.claude$
+^vignettes/articles$
+^docs$
+^pkgdown$
+^_pkgdown\.yml$
+^AGENTS\.md$
+^build_install\.sh$
+^requirements\.R$
+^flipFISH_.*\.tar\.gz$

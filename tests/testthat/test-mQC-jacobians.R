@@ -64,8 +64,8 @@ fd_jacobian <- function(column, eps = 1e-6) {
   for (k in seq_len(n_params)) {
     FRp <- FR0; FRp[k] <- FRp[k] + eps
     FRm <- FR0; FRm[k] <- FRm[k] - eps
-    cp <- mQC_counts_at(FRp, bc_counts, cb_mat, maxHam, n_forks, max_flips)
-    cm <- mQC_counts_at(FRm, bc_counts, cb_mat, maxHam, n_forks, max_flips)
+    cp <- flipFISH:::mQC_counts_at(FRp, bc_counts, cb_mat, maxHam, n_forks, max_flips)
+    cm <- flipFISH:::mQC_counts_at(FRm, bc_counts, cb_mat, maxHam, n_forks, max_flips)
     J[, k] <- (cp[, column] - cm[, column]) / (2 * eps)
   }
   J
@@ -74,7 +74,7 @@ fd_jacobian <- function(column, eps = 1e-6) {
 # ---- mQC_counts_at() itself ---------------------------------------------------------------------
 
 test_that("mQC_counts_at returns finite, non-negative erc/ecc/ehc with ehc <= ecc", {
-  counts <- mQC_counts_at(FR0, bc_counts, cb_mat, maxHam, n_forks, max_flips)
+  counts <- flipFISH:::mQC_counts_at(FR0, bc_counts, cb_mat, maxHam, n_forks, max_flips)
   expect_equal(colnames(counts), c("erc", "ecc", "ehc"))
   expect_equal(nrow(counts), nrow(bc_counts))
   expect_true(all(is.finite(counts)))
@@ -90,7 +90,7 @@ test_that("mQC_counts_at returns finite, non-negative erc/ecc/ehc with ehc <= ec
 # ---- finite-difference checks -------------------------------------------------------------------
 
 test_that("mQC_ecc_jacobian_at matches finite differences of mQC_counts_at's ecc column", {
-  J_analytic <- mQC_ecc_jacobian_at(FR0, bc_counts, cb_mat, maxHam, n_forks, max_flips)
+  J_analytic <- flipFISH:::mQC_ecc_jacobian_at(FR0, bc_counts, cb_mat, maxHam, n_forks, max_flips)
   J_numeric  <- fd_jacobian("ecc")
   expect_equal(dim(J_analytic), c(nrow(bc_counts), n_params))
   expect_true(max(abs(J_analytic)) > 1) # sanity: fixture isn't accidentally flat/uninformative
@@ -98,7 +98,7 @@ test_that("mQC_ecc_jacobian_at matches finite differences of mQC_counts_at's ecc
 })
 
 test_that("mQC_ehc_jacobian_at matches finite differences of mQC_counts_at's ehc column", {
-  J_analytic <- mQC_ehc_jacobian_at(FR0, bc_counts, cb_mat, maxHam, n_forks, max_flips)
+  J_analytic <- flipFISH:::mQC_ehc_jacobian_at(FR0, bc_counts, cb_mat, maxHam, n_forks, max_flips)
   J_numeric  <- fd_jacobian("ehc")
   expect_equal(dim(J_analytic), c(nrow(bc_counts), n_params))
   expect_true(max(abs(J_analytic)) > 1)

@@ -9,7 +9,13 @@
 #' @import ggplot2
 NULL
 
-.onLoad <- function(libname, pkgname) {}
+.onLoad <- function(libname, pkgname) {
+  # Our compiled code calls NLopt only through nloptr's registered C routines (nloptrAPI.h,
+  # resolved via R_GetCCallable() at first use) rather than linking a system libnlopt. Those
+  # routines are only registered once nloptr's own namespace has actually been loaded, which
+  # merely listing nloptr in Imports does not by itself trigger -- so force it here.
+  requireNamespace("nloptr", quietly = TRUE)
+}
 
 # Helper function to check STdata and codebook 
 check_data <- function(
@@ -416,6 +422,7 @@ misread.qc.DG <- function(
 #'    \item \code{sim_counts}: A matrix giving the actual simulated count per barcode (columns) for each simulation (rows).
 #'    }
 #' @inheritSection misread.qc Flip-rate priors
+#' @export
 sim.benchmark <- function(
     STdata,
     codebook,
@@ -480,17 +487,11 @@ sim.benchmark <- function(
 #'
 #' This function takes the results from the misread.qc function and makes a plot of the estimated positive predictive value (PPV) for each barcode, along with its 95\% confidence interval (\code{PPV_lower}/\code{PPV_upper} from \code{erctc_plus}) shown as error bars. Barcodes are sorted by PPV value, in decreasing order, and a dashed red line indicates the minimum PPV cutoff for "good" barcodes. Barcodes above the cutoff are colored blue, while those that are not are colored black.
 #'
-#' @name plot.PPV
-#' @rdname plot-PPV
-#' @usage plot.PPV(
-#'  qc,
-#'  min_PPV = 0.8
-#' )
 #' @param qc List, results from misread.qc function.
 #' @param min_PPV Numeric, PPV cutoff for "good" barcodes, defaults to 0.8.
 #' @return ggplot object showing estimated PPV, with its 95\% confidence interval, for each barcode with cutoff.
 #' @export
-plot.PPV <- function(
+plot_PPV <- function(
     qc,
     min_PPV = 0.8
   ) {
@@ -538,13 +539,10 @@ plot.PPV <- function(
 #' 
 #' This function takes the results from the misread.qc function and makes a plot comparing the predicted error-corrected counts (ecc) to the observed counts for each barcode. Both predicted and observed counts are plotted on a log scale for better visibility. Barcodes are sorted by decreasing observed count, with gene barcodes shown first and blank barcodes shown second. A dashed vertical line indicates the separation between gene and blank barcodes.
 #' 
-#' @name plot.counts 
-#' @rdname plot-counts
-#' @usage plot.counts(qc)
 #' @param qc List, results from misread.qc function.
 #' @return ggplot object showing predicted vs observed counts for each barcode.
 #' @export
-plot.counts <- function(
+plot_counts <- function(
     qc
   ) {
     
@@ -620,13 +618,10 @@ plot.counts <- function(
 #' 
 #' This function takes the results from either the \code{misread.qc} function (a single point estimate of the bit-flip rates) or the \code{sim.benchmark} function (bit-flip rates estimated across simulation replicates) and makes a plot showing the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1). When given \code{sim.benchmark} output, the plot shows the distribution (violin plots) of estimates across replicates; when given \code{misread.qc} output, it shows the single point estimate for each bit.
 #' 
-#' @name plot.fr
-#' @rdname plot-fr
-#' @usage plot.fr(qc)
 #' @param qc List, results from either the \code{misread.qc} function or the \code{sim.benchmark} function.
 #' @return ggplot object showing estimated flip rates for each bit and flip type; a distribution (violin plots) when \code{qc} comes from \code{sim.benchmark}, or point estimates when \code{qc} comes from \code{misread.qc}.
 #' @export
-plot.fr <- function(
+plot_fr <- function(
     qc
   ) {
     # Identify source and extract flip-rate/correlation matrix (rows = samples, 

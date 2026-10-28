@@ -2,6 +2,7 @@
 // Rcpp
 // [[Rcpp::depends(RcppEigen)]]
 // [[Rcpp::depends(BH)]]
+// [[Rcpp::depends(nloptr)]]
 #include <Rcpp.h>
 #include <RcppEigen.h>
 #include <cmath>
@@ -9,7 +10,12 @@
 #include <map>          // std::map, used by draw_structured_corr() to group bits by round/channel
 #include <numeric>      // std::accumulate
 #include "fork_utils.h" // run_forked_batches() -- shared fork/pipe map-reduce, Windows-guarded
-#include <nlopt.hpp>    // L-BFGS and other gradient-based optimizers
+#include <nloptrAPI.h>  // L-BFGS and other gradient-based optimizers, via nloptr's bundled NLopt --
+                         // plain C API only: nloptrAPI.h proxies each call through R's CCallable
+                         // registry (R_GetCCallable("nloptr", ...)) rather than linking a system
+                         // libnlopt, but nloptr does not register nlopt_set_munge, which the C++
+                         // nlopt.hpp wrapper needs -- see nlopt_msle_trampoline below for the hand
+                         // -rolled replacement for what that wrapper would otherwise do for us.
 #include <boost/math/distributions/normal.hpp>     // norm_cdf() -- native (no R callback) normal CDF/quantile
 #include <boost/math/special_functions/owens_t.hpp> // bvn_cdf_uppertail() -- native bivariate normal CDF
 #include <boost/math/distributions/poisson.hpp>     // dg_ppois_lower() -- native (no R callback) Poisson CDF
@@ -1804,6 +1810,51 @@ static double mQC_msle(
     return msle;
   }
 
+/*
+ * nlopt's C++ wrapper (nlopt.hpp) normally does two things for us around a std::vector-style
+ * objective like mQC_msle(): (1) a trampoline converting the raw nlopt_func(unsigned, const
+ * double*, double*, void*) callback to/from std::vector<double>, and (2) catching any exception
+ * thrown inside that callback, flagging a graceful nlopt_force_stop() instead of letting the
+ * exception unwind through nlopt's own (plain C) iteration loop, then re-throwing only once
+ * nlopt_optimize() has actually returned. We're driving the plain C API directly (see the
+ * <nloptrAPI.h> include note above), so both of those have to be reimplemented by hand here.
+ */
+namespace {
+  struct NloptObjectiveData {
+    nlopt_opt          opt;               // non-owning; for nlopt_force_stop() from inside the callback
+    void*              user_data;         // forwarded to mQC_msle() unchanged
+    std::exception_ptr pending_exception; // set if mQC_msle() throws; rethrown after nlopt_optimize() returns
+  };
+
+  double nlopt_msle_trampoline(unsigned n, const double* x, double* grad, void* data_) {
+    NloptObjectiveData* data = static_cast<NloptObjectiveData*>(data_);
+    try {
+      Vdbl x_vec(x, x + n);
+      Vdbl grad_vec;                 // empty signals "gradient not needed" to mQC_msle(), as nlopt.hpp's own trampoline does
+      if (grad) grad_vec.resize(n);
+      double val = mQC_msle(x_vec, grad_vec, data->user_data);
+      if (grad) std::copy(grad_vec.begin(), grad_vec.end(), grad);
+      return val;
+    } catch (...) {
+      data->pending_exception = std::current_exception();
+      nlopt_force_stop(data->opt);
+      return HUGE_VAL;
+    }
+  }
+
+  // RAII guard: guarantees nlopt_destroy() runs on every exit path (including exceptions thrown
+  // while setting up or running the optimizer), matching nlopt.hpp's own opt destructor.
+  struct NloptOptGuard {
+    nlopt_opt opt;
+    NloptOptGuard(nlopt_algorithm algorithm, unsigned n) : opt(nlopt_create(algorithm, n)) {
+      if (!opt) throw std::runtime_error("nlopt_create() failed");
+    }
+    ~NloptOptGuard() { nlopt_destroy(opt); }
+    NloptOptGuard(const NloptOptGuard&)            = delete;
+    NloptOptGuard& operator=(const NloptOptGuard&) = delete;
+  };
+}
+
 // Main misread quality control function
 // [[Rcpp::export]]
 List mQC(
@@ -1866,37 +1917,41 @@ List mQC(
     Vdbl         best_x;
     EvalResults  best_eval_results;
     bool         any_success = false;
-    Rcpp::Rcout << "\nRunning L-BFGS (nlopt::LD_LBFGS)" << ", maxeval=" << maxeval << ", ftol_rel=" << ftol_rel
+    Rcpp::Rcout << "\nRunning L-BFGS (NLOPT_LD_LBFGS)" << ", maxeval=" << maxeval << ", ftol_rel=" << ftol_rel
                 << ", xtol_rel=" << xtol_rel << ", n_restarts=" << n_restarts << std::endl;
-    
+
     // Run L-BFGS via nlopt, with optional multi-start
     for (int r = 0; r < n_restarts; ++r) {
-      
+
       // Set initial parameter (flip rate) values
       Vdbl x0_r = x0;
       if (r > 0) {
         unsigned int seed_r = restart_rng();
         x0_r = draw_random_fr(STdata, STdata.fr_priors, seed_r);
       }
-      
+
       // Reset per-restart tracking so eval_results/best_msle reflect only this restart
       STdata.best_msle    = std::numeric_limits<double>::infinity();
       STdata.eval_results = EvalResults();
       if (n_restarts > 1) Rcpp::Rcout << "\n-- Restart " << (r+1) << "/" << n_restarts << " --" << std::endl;
-      
+
       // Initialize and set optimizer
       double minf_r = std::numeric_limits<double>::quiet_NaN();
-      nlopt::opt opt_r(nlopt::LD_LBFGS, n);
-      opt_r.set_lower_bounds(lb);
-      opt_r.set_upper_bounds(ub);
-      opt_r.set_min_objective(mQC_msle, &STdata);
-      opt_r.set_ftol_rel(ftol_rel);
-      opt_r.set_xtol_rel(xtol_rel);
-      opt_r.set_maxeval(maxeval);
-      
+      NloptOptGuard opt_guard(NLOPT_LD_LBFGS, static_cast<unsigned>(n));
+      nlopt_opt     opt_r = opt_guard.opt;
+      nlopt_set_lower_bounds(opt_r, lb.data());
+      nlopt_set_upper_bounds(opt_r, ub.data());
+      NloptObjectiveData obj_data{opt_r, &STdata, nullptr};
+      nlopt_set_min_objective(opt_r, nlopt_msle_trampoline, &obj_data);
+      nlopt_set_ftol_rel(opt_r, ftol_rel);
+      nlopt_set_xtol_rel(opt_r, xtol_rel);
+      nlopt_set_maxeval(opt_r, maxeval);
+
       // Run optimizer
       try {
-        nlopt::result res = opt_r.optimize(x0_r, minf_r);
+        nlopt_result res = nlopt_optimize(opt_r, x0_r.data(), &minf_r);
+        if (obj_data.pending_exception) std::rethrow_exception(obj_data.pending_exception);
+        if (res < 0) throw std::runtime_error("nlopt failed with result code " + std::to_string(static_cast<int>(res)));
         Rcpp::Rcout << "  L-BFGS finished (result code " << (int)res << "), final msle: " << minf_r << std::endl;
       } catch (const std::exception& e) {
         Rcpp::Rcout << "  L-BFGS warning: " << e.what() << "\n  Using best value found so far this restart." << std::endl;

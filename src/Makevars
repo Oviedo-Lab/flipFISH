@@ -1,4 +1,3 @@
-CXX_STD = CXX14
-
-PKG_CPPFLAGS = $(shell pkg-config --cflags nlopt)
-PKG_LIBS = $(shell pkg-config --libs nlopt)
+# NLopt comes from the nloptr package (LinkingTo), not a system library: nloptrAPI.h resolves
+# every call through R's own CCallable registry at runtime, so no extra include/library flags
+# are needed here -- R already adds each LinkingTo package's include/ directory automatically.

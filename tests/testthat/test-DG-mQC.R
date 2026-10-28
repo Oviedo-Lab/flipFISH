@@ -33,7 +33,7 @@ test_that("bvn_cdf_uppertail matches R's mvtnorm::pmvnorm", {
       for (rho in rhos) {
         sigma    <- matrix(c(1, rho, rho, 1), 2, 2)
         expected <- as.numeric(mvtnorm::pmvnorm(lower = c(h, k), upper = c(Inf, Inf), sigma = sigma))
-        actual   <- bvn_cdf_uppertail_test(h, k, rho)
+        actual   <- flipFISH:::bvn_cdf_uppertail_test(h, k, rho)
         expect_equal(actual, expected, tolerance = 1e-6)
       }
     }
@@ -57,14 +57,14 @@ test_that("dg_find_sigma_RootBisection recovers the exact target correlation whe
   feasible_targets <- c(-0.5, -0.2, 0.0)
   for (rho_target in feasible_targets) {
     desired_cov   <- rho_target * sd_i * sd_j
-    rho_gauss     <- dg_find_sigma_RootBisection_test(t_i, t_j, desired_cov)
-    achieved_cov  <- bvn_cdf_uppertail_test(t_i, t_j, rho_gauss) - p_i * p_j
+    rho_gauss     <- flipFISH:::dg_find_sigma_RootBisection_test(t_i, t_j, desired_cov)
+    achieved_cov  <- flipFISH:::bvn_cdf_uppertail_test(t_i, t_j, rho_gauss) - p_i * p_j
     achieved_corr <- achieved_cov / (sd_i * sd_j)
     expect_equal(achieved_corr, rho_target, tolerance = 1e-6)
   }
 
   infeasible_cov <- 0.6 * sd_i * sd_j
-  expect_equal(dg_find_sigma_RootBisection_test(t_i, t_j, infeasible_cov), 0.0, tolerance = tol)
+  expect_equal(flipFISH:::dg_find_sigma_RootBisection_test(t_i, t_j, infeasible_cov), 0.0, tolerance = tol)
 })
 
 # ---- 2. misread.qc.DG() smoke test ------------------------------------------------------------

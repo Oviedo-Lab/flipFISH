@@ -31,12 +31,10 @@ if it doesn't. The real code is always there -- delete the cache and it will gen
 but you won't have to wait hours to re-knit this file.
 
 ```{r helpers}
-# Cache location: prefer the source tree (so regenerated results land in version control),
-# fall back to the installed package's copy otherwise.
-cache_dir <- normalizePath(file.path("..", "inst", "extdata", "vignette_cache"), mustWork = FALSE)
-if (!dir.exists(cache_dir)) {
-  cache_dir <- system.file("extdata", "vignette_cache", package = "flipFISH")
-}
+# Cache location: this article is rendered by pkgdown straight from the source tree (it is not
+# a package vignette, so there is no installed-package copy to fall back to -- see
+# vignettes/articles/ and the ^vignettes/articles$ entry in .Rbuildignore).
+cache_dir <- file.path("vignette_cache")
 
 run_cached <- function(name, expr) {
   path <- file.path(cache_dir, paste0(name, ".rds"))

@@ -16,7 +16,7 @@ tol <- 1e-8 # observed agreement during development was ~1e-14 (float roundoff);
 
 check_against_nearPD <- function(x) {
   ref <- as.matrix(Matrix::nearPD(x, corr = TRUE, keepDiag = TRUE, do2eigen = TRUE)$mat)
-  got <- dg_nearPD_native_test(x)
+  got <- flipFISH:::dg_nearPD_native_test(x)
   expect_equal(got, ref, tolerance = tol)
 }
 
