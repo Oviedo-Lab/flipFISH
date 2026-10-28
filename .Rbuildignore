@@ -3,6 +3,8 @@
 ^\.positai$
 ^\.claude$
 ^vignettes/articles$
+^LICENSE\.md$
+^cran-comments\.md$
 ^docs$
 ^pkgdown$
 ^_pkgdown\.yml$

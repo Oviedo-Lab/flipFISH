@@ -1,12 +1,11 @@
 Package: flipFISH
 Type: Package
-Title: Performs barcode-decoding quality control for FISH-based spatial transcriptomic runs
+Title: Performs Barcode-Decoding Quality Control for FISH-Based Spatial Transcriptomic Runs
 Version: 1.0
 Date: 2026-07-11
-Author: Michael Barkasi
-Maintainer: Michael Barkasi <barkasi@wustl.edu>
+Authors@R: person(given = "Michael", family = "Barkasi", role = c("aut", "cre", "cph"), email = "barkasi@wustl.edu")
 Description: Tools for estimating the proportion of barcodes correctly decoded (i.e., "precision") in FISH-based spatial transcriptomics runs, via estimating bit-flip rates using blank counts, conditional probabilities, and dichotomized Gaussians.
-License: GPL 3
+License: GPL-3
 Encoding: UTF-8
 Suggests: testthat (>= 3.0.0), mvtnorm
 Config/testthat/edition: 3

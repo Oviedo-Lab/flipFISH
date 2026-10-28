@@ -7,7 +7,7 @@
 
 ## R CMD check results
 
-`R CMD check --as-cran` currently reports 3 WARNINGs and 6 NOTEs. Notes on each:
+`R CMD check --as-cran` currently reports 3 WARNINGs and 5 NOTEs. Notes on each:
 
 ### WARNING: compiled code calls `_exit`
 
@@ -61,9 +61,10 @@ A `testthat` suite exists (`tests/testthat/`, 5 files) but is not yet wired up t
 under active revision) and no `@examples` have been added yet. Known outstanding work, not yet
 resolved.
 
-### NOTE: no `Authors@R`, Title not in title case, `License` field non-standard
+### NOTE: `Date` field is over a month old
 
-Known outstanding work as of this check run; being addressed.
+Will be bumped to the actual submission date right before submitting; left alone for now since
+this file is being updated mid-development, not at submission time.
 
 ### NOTE: `nloptr` listed in Imports but not imported from
 
@@ -79,10 +80,6 @@ linking a system `libnlopt`, so there is no R-level symbol to `importFrom`. `nlo
 registrations -- is guaranteed loaded before any compiled code needs it. `MASS`, `Matrix`,
 `dplyr`, `grid`, `gridExtra` are leftover/unused and will be removed or wired up in a follow-up
 pass.
-
-### NOTE: `LICENSE` file / license specification
-
-Known outstanding work as of this check run; being addressed.
 
 ### NOTE/INFO: `RcppEigen` in Imports should probably be LinkingTo-only; HTML tidy version
 
