@@ -7,7 +7,7 @@
 
 ## R CMD check results
 
-`R CMD check --as-cran` currently reports 3 WARNINGs and 3 NOTEs. Notes on each:
+`R CMD check --as-cran` currently reports 2 WARNINGs and 5 NOTEs. Notes on each:
 
 ### WARNING: compiled code calls `_exit`
 
@@ -53,13 +53,13 @@ these per-call differences compound across a full fit. The custom mechanism is a
 measured choice for this access pattern, not premature optimization, and the compiled-code WARNING
 above is understood and accepted as the tradeoff for it.
 
-### WARNING: no examples, no tests, no vignettes run during check
+### No `@examples` yet (not currently flagged, but worth noting)
 
-A `testthat` suite exists (`tests/testthat/`, 5 files) but is not yet wired up to run under
-`R CMD check` (missing `tests/testthat.R`); vignettes were deliberately moved to
-`vignettes/articles/` (pkgdown-only, not built as package vignettes, since their content is still
-under active revision) and no `@examples` have been added yet. Known outstanding work, not yet
-resolved.
+`tests/testthat.R` now wires the existing `testthat` suite (5 files) up to `R CMD check`
+("checking tests ... Running 'testthat.R' ... OK"), so that no longer shows as a WARNING.
+`@examples` have not been added yet, and vignettes were deliberately moved to
+`vignettes/articles/` (pkgdown-only, not built as package vignettes) since their content is still
+under active revision. Known outstanding work, not yet resolved.
 
 ### NOTE: `nloptr` listed in Imports but not imported from
 
@@ -83,9 +83,22 @@ the package's R code calls an RcppEigen R-level function; it is used purely as C
 `Date` field has been dropped rather than fixed, to stop it going stale again between now and
 actual submission -- it will be resolved by having no stale value to notice.)
 
-### HTML Tidy NOTE
+### NOTE: "New submission" / top-level files / HTML Tidy
 
-A limitation of the local check environment (no recent HTML Tidy installed), not the package.
+"New submission" (under "CRAN incoming feasibility") is expected and informational for a first
+submission. "Files 'README.md' or 'NEWS.md' cannot be checked without 'pandoc' being installed"
+and the HTML Tidy NOTE are both limitations of the local check environment (no pandoc / no recent
+HTML Tidy installed here), not the package.
+
+### NOTE: R code for possible problems
+
+Almost entirely `plot.MCMCsteps` (the unfinished function explicitly out of scope for this pass)
+-- its undefined globals (`.DG_title_size`, `sim_mse`, etc.) and missing `ggplot2`/`stats`
+bindings will be resolved when it is finished and exported like the other `plot_*` functions. The
+one unrelated item, `if (class(fliprate_priors) != "list")` in `build_corr_priors()`
+(`R/main.R`), is a real (if harmless here) style issue -- `class(x) == "list"` only works because
+a plain list's `class()` is always exactly `"list"` -- not yet fixed; `inherits(fliprate_priors,
+"list")` would be the correct form.
 
 ## Downstream dependencies
 
