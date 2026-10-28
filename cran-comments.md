@@ -7,7 +7,7 @@
 
 ## R CMD check results
 
-`R CMD check --as-cran` currently reports 3 WARNINGs and 5 NOTEs. Notes on each:
+`R CMD check --as-cran` currently reports 3 WARNINGs and 3 NOTEs. Notes on each:
 
 ### WARNING: compiled code calls `_exit`
 
@@ -61,30 +61,31 @@ A `testthat` suite exists (`tests/testthat/`, 5 files) but is not yet wired up t
 under active revision) and no `@examples` have been added yet. Known outstanding work, not yet
 resolved.
 
-### NOTE: `Date` field is over a month old
-
-Will be bumped to the actual submission date right before submitting; left alone for now since
-this file is being updated mid-development, not at submission time.
-
 ### NOTE: `nloptr` listed in Imports but not imported from
 
 ```
-Namespaces in Imports field not imported from:
-  'MASS' 'Matrix' 'dplyr' 'grid' 'gridExtra' 'nloptr'
+Namespace in Imports field not imported from: 'nloptr'
 ```
 
-Expected and intentional for `nloptr`: the package's C++ code calls NLopt only through nloptr's
-registered C routines (`nloptrAPI.h`, resolved via `R_GetCCallable()` at first use) rather than
-linking a system `libnlopt`, so there is no R-level symbol to `importFrom`. `nloptr` is listed in
-`Imports` (and force-loaded in `.onLoad()`) purely so its namespace -- and therefore its C-callable
-registrations -- is guaranteed loaded before any compiled code needs it. `MASS`, `Matrix`,
-`dplyr`, `grid`, `gridExtra` are leftover/unused and will be removed or wired up in a follow-up
-pass.
+Expected and intentional: the package's C++ code calls NLopt only through nloptr's registered C
+routines (`nloptrAPI.h`, resolved via `R_GetCCallable()` at first use) rather than linking a system
+`libnlopt`, so there is no R-level symbol to `importFrom`. `nloptr` is listed in `Imports` (and
+force-loaded in `.onLoad()`) purely so its namespace -- and therefore its C-callable registrations
+-- is guaranteed loaded before any compiled code needs it.
 
-### NOTE/INFO: `RcppEigen` in Imports should probably be LinkingTo-only; HTML tidy version
+(`MASS`, `Matrix`, `dplyr`, `grid`, and `gridExtra` were previously also listed in `Imports` without
+being used anywhere in the package's R or C++ code -- leftovers from code that no longer exists.
+Removed; `Matrix` moved to `Suggests` since it is still used, but only in
+`tests/testthat/test-nearPD.R`, as a reference implementation to check the package's native C++
+port of `Matrix::nearPD()` against -- guarded there with `skip_if_not_installed("Matrix")`.
+`RcppEigen` is likewise now `LinkingTo`-only rather than also `Imports`/`@import`, since nothing in
+the package's R code calls an RcppEigen R-level function; it is used purely as C++ headers. The
+`Date` field has been dropped rather than fixed, to stop it going stale again between now and
+actual submission -- it will be resolved by having no stale value to notice.)
 
-Pre-existing, not yet addressed (`RcppEigen`); the HTML Tidy NOTE is a limitation of the local
-check environment, not the package.
+### HTML Tidy NOTE
+
+A limitation of the local check environment (no recent HTML Tidy installed), not the package.
 
 ## Downstream dependencies
 

@@ -5,7 +5,6 @@
 
 #' @useDynLib flipFISH, .registration = TRUE
 #' @import Rcpp
-#' @import RcppEigen 
 #' @import ggplot2
 NULL
 

@@ -10,6 +10,11 @@ This package uses code from the following packages, which are distributed under 
 * Updated October 16, 2026, by Claude Sonnet 5, to add BH (new LinkingTo dependency), and to add
   parallel and mvtnorm, both already in use (parallel in R/main.R and R/dg_legacy.R; mvtnorm in
   tests/testthat/) but missing from this file until now; checked by MB
+* Updated October 27, 2026, by Claude Sonnet 5: switched the NLopt dependency from the system
+  library to the nloptr package (new LinkingTo/Imports dependency, entry added below); removed
+  MASS, gridExtra, grid, and dplyr (declared dependencies that turned out not to be used anywhere
+  in the current code); and reclassified Matrix as a test-only dependency (used only in
+  tests/testthat/test-nearPD.R, like mvtnorm) rather than a runtime one.
 
 <h1> Rcpp </h1>
 
@@ -45,13 +50,23 @@ https://www.boost.org/LICENSE_1_0.txt
 <h1> nlopt </h1>
 
 Steven G. Johnson  
-The NLopt nonlinear-optimization package 
+The NLopt nonlinear-optimization package
 
 http://github.com/stevengj/nlopt  
 https://nlopt.readthedocs.io/en/latest/
 
 GNU Lesser General Public License (LGPL)  
 https://nlopt.readthedocs.io/en/latest/NLopt_License_and_Copyright/
+
+<h1> nloptr </h1>
+
+by: Jelmer Ypma, Steven G. Johnson (author of the NLopt C library above), Aymeric Stamm, and contributors (R interface to NLopt; this package links against nloptr's bundled NLopt build rather than a system library, via LinkingTo)
+
+https://cran.r-project.org/web/packages/nloptr/index.html  
+https://github.com/astamm/nloptr
+
+LGPL (>= 3)  
+https://www.r-project.org/Licenses/LGPL-3
 
 <h1> ggplot2 </h1>
 
@@ -62,45 +77,15 @@ https://ggplot2.tidyverse.org/
 The MIT license  
 https://github.com/tidyverse/ggplot2
 
-<h1> MASS </h1>
-
-by: Brian Ripley and Bill Venables
-
-https://cran.r-project.org/web/packages/MASS/index.html  
-http://www.stats.ox.ac.uk/pub/MASS4/
-
-GPL-2 | GPL-3  
-https://www.r-project.org/Licenses/GPL-2  
-https://www.r-project.org/Licenses/GPL-3
-
 <h1> Matrix </h1>
 
-by: Douglas Bates, Martin Maechler, and Mikael Jagan
+by: Douglas Bates, Martin Maechler, and Mikael Jagan (test-only dependency, via Suggests -- not used by the package itself at runtime, only in tests/testthat/test-nearPD.R as a reference implementation to check against)
 
 https://cran.r-project.org/web/packages/Matrix/index.html  
 https://codeberg.org/jaganmn/Matrix
 
 GPL (>= 2) | file LICENCE  
 https://www.r-project.org/Licenses/GPL-2
-
-<h1> gridExtra </h1>
-
-by: Baptiste Auguie and Anton Antonov
-
-https://cran.r-project.org/web/packages/gridExtra/index.html  
-https://github.com/baptiste/gridextra
-
-GPL (>= 2)  
-https://www.r-project.org/Licenses/GPL-2
-
-<h1> grid </h1>
-
-by: Paul Murrell (part of the base R distribution; R Core Team)
-
-https://stat.ethz.ch/R-manual/R-devel/library/grid/html/00Index.html
-
-Part of R -- GPL-2 | GPL-3  
-https://www.r-project.org/Licenses/
 
 <h1> parallel </h1>
 
@@ -110,16 +95,6 @@ https://stat.ethz.ch/R-manual/R-devel/library/parallel/html/00Index.html
 
 Part of R -- GPL-2 | GPL-3  
 https://www.r-project.org/Licenses/
-
-<h1> dplyr </h1>
-
-by: Hadley Wickham, Romain François, Lionel Henry, Kirill Müller, Davis Vaughan, and Posit Software, PBC
-
-https://dplyr.tidyverse.org/  
-https://github.com/tidyverse/dplyr
-
-The MIT license  
-https://github.com/tidyverse/dplyr/blob/main/LICENSE.md
 
 <h1> mvtnorm </h1>
 
