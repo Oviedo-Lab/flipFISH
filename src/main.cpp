@@ -11,17 +11,17 @@
 #include <numeric>      // std::accumulate
 #include "fork_utils.h" // run_forked_batches() -- shared fork/pipe map-reduce, Windows-guarded
 #include <nloptrAPI.h>  // L-BFGS and other gradient-based optimizers, via nloptr's bundled NLopt --
-                         // plain C API only: nloptrAPI.h proxies each call through R's CCallable
-                         // registry (R_GetCCallable("nloptr", ...)) rather than linking a system
-                         // libnlopt, but nloptr does not register nlopt_set_munge, which the C++
-                         // nlopt.hpp wrapper needs -- see nlopt_msle_trampoline below for the hand
-                         // -rolled replacement for what that wrapper would otherwise do for us.
-#include <boost/math/distributions/normal.hpp>     // norm_cdf() -- native (no R callback) normal CDF/quantile
-#include <boost/math/special_functions/owens_t.hpp> // bvn_cdf_uppertail() -- native bivariate normal CDF
-#include <boost/math/distributions/poisson.hpp>     // dg_ppois_lower() -- native (no R callback) Poisson CDF
-#include <boost/random/mersenne_twister.hpp>        // boost::random::mt19937 -- portable RNG engine
-#include <boost/random/normal_distribution.hpp>     // boost::random::normal_distribution
-#include <boost/random/bernoulli_distribution.hpp>  // boost::random::bernoulli_distribution
+                        // plain C API only: nloptrAPI.h proxies each call through R's CCallable
+                        // registry (R_GetCCallable("nloptr", ...)) rather than linking a system
+                        // libnlopt, but nloptr does not register nlopt_set_munge, which the C++
+                        // nlopt.hpp wrapper needs -- see nlopt_msle_trampoline below for the hand
+                        // -rolled replacement for what that wrapper would otherwise do for us.
+#include <boost/math/distributions/normal.hpp>       // norm_cdf() -- native (no R callback) normal CDF/quantile
+#include <boost/math/special_functions/owens_t.hpp>  // bvn_cdf_uppertail() -- native bivariate normal CDF
+#include <boost/math/distributions/poisson.hpp>      // dg_ppois_lower() -- native (no R callback) Poisson CDF
+#include <boost/random/mersenne_twister.hpp>         // boost::random::mt19937 -- portable RNG engine
+#include <boost/random/normal_distribution.hpp>      // boost::random::normal_distribution
+#include <boost/random/bernoulli_distribution.hpp>   // boost::random::bernoulli_distribution
 #include <boost/random/gamma_distribution.hpp>       // boost::random::gamma_distribution
 #include <boost/random/poisson_distribution.hpp>     // boost::random::poisson_distribution
 #include <boost/random/uniform_01.hpp>               // boost::random::uniform_01
@@ -31,6 +31,20 @@ using namespace Eigen;
 
 // Hamming distance
 // int dist = __builtin_popcountll(a ^ b);
+
+/*
+ * Outline: 
+ *  1. Basic data structures 
+ *  2. Helper functions 
+ *  3. Dichotomized-Gaussian (DG) correlation-matrix helpers
+ *  4. Functions for spot decoding
+ *  5. Functions to analytically compute expected counts 
+ *  6. mQC and helpers (conditional probability model)
+ *  7. Diagnostic and benchmarking functions related to mQC
+ *  8. Bernoulli simulation functions (mQC)
+ *  9. DG simulation functions (mQC_DG)
+ *  10. testthat helpers
+ */
 
 // Define aliases for compact code
 using V64  = std::vector<uint64_t>;
@@ -192,13 +206,13 @@ struct SpotSim {
 
 // One MCMCSA step's simulation-fit result
 struct DGStepResult {
-    double sim_mse;
+    double sim_msle;
     Vdbl   PPV_genes;        // length N_genes, may contain NaN
     Vdbl   read_counts;      // length N_barcodes, natural order (genes then blanks)
     Vdbl   corrected_counts; // length N_barcodes, natural order
     Vdbl   hit_counts;       // length N_barcodes, natural order
     /*
-     * This is the scalar sim-mse objective that drives MCMCSA acceptance (and is reported out as misread.qc.DG()'s 
+     * This is the scalar sim-msle objective that drives MCMCSA acceptance (and is reported out as misread.qc.DG()'s 
      * "msle"), this step's per-gene PPV (reported out as "PPV_by_step"), and this step's per-barcode read, corrected, 
      * and hit counts in natural STdata row order (genes and blanks, consumed by mQC_DG() to build "erctc_plus" -- never 
      * themselves returned to R, so the only things crossing the R/C++ boundary per step stay small). PPV_genes is NaN 
@@ -231,8 +245,7 @@ double compute_msle(
     return msle;
   }
 
-// Linearly spaced sequence of n values from `from` to `to`, inclusive -- same semantics as R's
-// seq(from, to, length.out = n), including returning `from` (not `to`) when n == 1.
+// Linearly spaced sequence of n values from `from` to `to`, inclusive
 Vdbl lin_seq(
     double from,
     double to,
@@ -241,6 +254,7 @@ Vdbl lin_seq(
     Vdbl out(n);
     if (n == 1) {out[0] = from; return out;}
     for (int i = 0; i < n; ++i) {out[i] = from + (to - from) * static_cast<double>(i) / static_cast<double>(n - 1);}
+    // ^ ... same semantics as R's seq(from, to, length.out = n), including returning `from` (not `to`) when n == 1.
     return out;
   }
 
@@ -256,9 +270,7 @@ Vint lin_seq_int(
     return out;
   }
 
-// Two-phase (FR_search-then-burn-in) annealing schedule: lin_seq() from max_val to min_val over
-// FR_search steps, the same ramp repeated over burnin steps, then held at min_val for resamples
-// steps. Used by mQC_DG() to build its step-size/temperature/blank-weight schedules.
+// Two-phase (FR_search-then-burn-in) annealing schedule
 Vdbl build_annealing_schedule(
     double max_val,
     double min_val,
@@ -271,6 +283,11 @@ Vdbl build_annealing_schedule(
     schedule.insert(schedule.end(), burn_in.begin(), burn_in.end());
     schedule.insert(schedule.end(), resamples, min_val);
     return schedule;
+    /*
+     * lin_seq() from max_val to min_val over FR_search steps, the same ramp repeated over burnin steps, 
+     * then held at min_val for resamples steps. Used by mQC_DG() to build its step-size, temperature, 
+     * and blank-weight schedules.
+     */
   }
 
 // Integer version of build_annealing_schedule(), for mQC_DG()'s bit/pair-retention schedules.
@@ -375,18 +392,20 @@ IntegerMatrix lower_tri_pairs(
      */
   }
 
-// Precompute log(rate10)/log(rate01) on a FlipRates whose rate10/rate01 are already set -- used by
-// TR(). Shared by pack_fr() (building a FlipRates from a flat parameter vector) and by mQC_DG()
-// (building one directly from its own already-structured per-bit/per-pair proposal vectors).
+// Precompute log(rate10) and log(rate01) on a FlipRates whose rate10 and rate01 are already set
 void fill_log_rates(FlipRates& fr) {
-  int N_bits = fr.rate10.size();
-  fr.log_rate10.assign(N_bits, 0.0);
-  fr.log_rate01.assign(N_bits, 0.0);
-  for (int i = 0; i < N_bits; ++i) {
-    fr.log_rate10[i] = std::log(fr.rate10[i]);
-    fr.log_rate01[i] = std::log(fr.rate01[i]);
+    int N_bits = fr.rate10.size();
+    fr.log_rate10.assign(N_bits, 0.0);
+    fr.log_rate01.assign(N_bits, 0.0);
+    for (int i = 0; i < N_bits; ++i) {
+      fr.log_rate10[i] = std::log(fr.rate10[i]);
+      fr.log_rate01[i] = std::log(fr.rate01[i]);
+    }
+    /*
+     * used by TR(). Shared by pack_fr() (building a FlipRates from a flat parameter vector) and by mQC_DG() 
+     * (building one directly from its own already-structured per-bit/per-pair proposal vectors).
+     */
   }
-}
 
 // Convert flip rate vector into structured FR object
 FlipRates pack_fr(
@@ -745,10 +764,10 @@ Eigen::MatrixXd dg_nearPD_native(
     }
     if (do2eigen) {
       Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es2(X);
-      Eigen::VectorXd d = es2.eigenvalues(); // ascending
+      Eigen::VectorXd d = es2.eigenvalues();       // ascending
       Eigen::MatrixXd Q = es2.eigenvectors();
       double Eps = posd_tol * std::fabs(d(n - 1)); // d(n-1) here == R's d[1] (largest)
-      if (d(0) < Eps) { // d(0) here == R's d[n] (smallest)
+      if (d(0) < Eps) {                            // d(0) here == R's d[n] (smallest)
         Eigen::VectorXd dclipped = d;
         for (int k = 0; k < n; ++k) {if (dclipped(k) < Eps) {dclipped(k) = Eps;}}
         Eigen::VectorXd o_diag = X.diagonal();
@@ -1003,7 +1022,7 @@ LUT build_correction_table(
 
 /*
  * *********************************************************************************************************************
- * Functions to analytically (conditional probability) compute expected counts from flip rates and true counts
+ * Functions to analytically compute expected counts
  */
 
 // Draw one set of bit-flip correlations
@@ -1675,7 +1694,7 @@ static ST_data prepare_STdata_for_mQC(
 
 /*
  * *********************************************************************************************************************
- * Functions to estimate flip rates, PPV, and CR
+ * mQC and helpers (conditional probability model)
  */
 
 // Gaussian-prior + dispersion penalty on flip rates and bit-flip correlations.
@@ -1875,16 +1894,20 @@ static double mQC_msle(
     return msle;
   }
 
-/*
- * nlopt's C++ wrapper (nlopt.hpp) normally does two things for us around a std::vector-style
- * objective like mQC_msle(): (1) a trampoline converting the raw nlopt_func(unsigned, const
- * double*, double*, void*) callback to/from std::vector<double>, and (2) catching any exception
- * thrown inside that callback, flagging a graceful nlopt_force_stop() instead of letting the
- * exception unwind through nlopt's own (plain C) iteration loop, then re-throwing only once
- * nlopt_optimize() has actually returned. We're driving the plain C API directly (see the
- * <nloptrAPI.h> include note above), so both of those have to be reimplemented by hand here.
- */
+// Setup C++ nlopt namespace
+// ... must come after mQC_msle
 namespace {
+  
+  /*
+   * nlopt's C++ wrapper (nlopt.hpp) normally does two things for us around a std::vector-style
+   * objective like mQC_msle(): (1) a trampoline converting the raw nlopt_func(unsigned, const
+   * double*, double*, void*) callback to/from std::vector<double>, and (2) catching any exception
+   * thrown inside that callback, flagging a graceful nlopt_force_stop() instead of letting the
+   * exception unwind through nlopt's own (plain C) iteration loop, then re-throwing only once
+   * nlopt_optimize() has actually returned. We're driving the plain C API directly (see the
+   * <nloptrAPI.h> include note above), so both of those have to be reimplemented by hand here.
+   */
+  
   struct NloptObjectiveData {
     nlopt_opt          opt;               // non-owning; for nlopt_force_stop() from inside the callback
     void*              user_data;         // forwarded to mQC_msle() unchanged
@@ -2378,7 +2401,7 @@ NumericMatrix mQC_ehc_jacobian_at(
 
 /*
  * *********************************************************************************************************************
- * Simulation functions
+ * Bernoulli simulation functions (mQC)
  */
 
 Vint simulate_barcode_spots(
@@ -3072,8 +3095,8 @@ DGStepResult dg_simulation_step(
       }
     }
     
-    // 3. Sorted-count comparison (observed vs. simulated corrected counts), weighted log-MSE --
-    // drives the MCMCSA acceptance criterion (sim_mse); the sorted arrays themselves aren't kept.
+    // 3. Sorted-count comparison (observed vs. simulated corrected counts), weighted msle --
+    // drives the MCMCSA acceptance criterion (sim_msle); the sorted arrays themselves aren't kept.
     Vdbl obs_counts_genes(N_genes), obs_counts_blanks(N_blanks);
     for (int g = 0; g < N_genes;  ++g) {obs_counts_genes[g]  = STdata.bc_rates[cb.genes[g]]  * N_cells;}
     for (int b = 0; b < N_blanks; ++b) {obs_counts_blanks[b] = STdata.bc_rates[cb.blanks[b]] * N_cells;}
@@ -3105,16 +3128,18 @@ DGStepResult dg_simulation_step(
     }
    
     double gene_weight = 1.0 + (static_cast<double>(N_blanks) / static_cast<double>(N_genes)) * (1.0 - blank_weight);
-    double sim_mse = 0.0;
+    double sim_msle = 0.0;
     for (int i = 0; i < N_genes + N_blanks; ++i) {
-      double w  = i < N_genes ? gene_weight : blank_weight;
-      double se = std::pow(std::log(counts_sorted[i] + 1.0) - std::log(obs_counts_sorted[i] + 1.0), 2.0);
-      sim_mse  += se * w;
+      double w   = i < N_genes ? gene_weight : blank_weight;
+      double le  = std::log((counts_sorted[i] + 1.0) / (obs_counts_sorted[i] + 1.0)); // log(A) - log(B) = log(A/B)
+      double sle = std::pow(le, 2.0);
+      
+      sim_msle  += sle * w;
     }
-    sim_mse /= static_cast<double>(N_genes + N_blanks);
+    sim_msle /= static_cast<double>(N_genes + N_blanks);
    
     DGStepResult out;
-    out.sim_mse          = sim_mse;
+    out.sim_msle          = sim_msle;
     out.PPV_genes        = PPV_genes;
     out.read_counts      = Vdbl(sim.read_counts.begin(), sim.read_counts.end());
     out.corrected_counts = Vdbl(sim.corrected_counts.begin(), sim.corrected_counts.end());
@@ -3147,24 +3172,26 @@ Vint dg_sample_without_replacement(
      */
   }
 
-// dg_simulation_step()'s sim_mse, plus mQC_DG()'s optional prior/dispersion and feasibility penalty
+// dg_simulation_step()'s sim_msle, plus mQC_DG()'s optional prior/dispersion and feasibility penalty
 // terms (each only added when its weight is > 0) -- the full per-step/initial MCMCSA objective.
-double dg_total_mse(
-    double                 base_mse,
+double dg_penalized_msle(
+    double                 base_msle,
     const FlipRates&       fr,
     const FlipRatePriors&  fr_priors,
     const Weights&         w,
     const Codebook&        cb,
     int                    max_fs_bc
   ) {
-    double mse = base_mse;
+    double msle = base_msle;
     if (w.prior > 0.0 || w.dispersion > 0.0) {
-      mse += fr_prior_penalty(fr, fr_priors, w.prior, w.dispersion, false, nullptr);
+      msle += fr_prior_penalty(fr, fr_priors, w.prior, w.dispersion, false, nullptr);
+      // ^ ... shared with the objective function in mQC
     }
     if (w.feasibility > 0.0) {
-      mse += w.feasibility * dg_feasibility_penalty(fr, cb, max_fs_bc);
+      msle += w.feasibility * dg_feasibility_penalty(fr, cb, max_fs_bc);
+      // ^ ... also shared with the objective function in mQC
     }
-    return mse;
+    return msle;
   }
 
 // C++ engine behind misread.qc.DG(): fits FlipRates via Markov Chain Monte Carlo Simulated Annealing over dichotomized Gaussians.
@@ -3183,15 +3210,15 @@ List mQC_DG(
     int           n_tracker_updates,
     int           n_forks,
     int           N_cells,
-    List          fliprate_priors          = List(),
-    List          weights                  = List(),
-    int           max_fs_bc                = 40,
-    int           max_calls_per_step       = 0,
-    unsigned int  seed                     = 726354819
+    List          fliprate_priors        = List(),
+    List          weights                = List(),
+    int           max_fs_bc              = 40,
+    int           max_calls_per_step     = 0,
+    unsigned int  seed                   = 726354819
   ) {
    
-    // Load data. max_flips (3rd arg) only matters to misread.qc()'s TR()-based engine and is never
-    // read anywhere on the DG/MCMCSA path below; 0 lets load_STdata() resolve its own "no cap" default.
+    // Load data. 
+    // ... max_flips (3rd arg) is never read anywhere on the DG/MCMCSA path below
     ST_data STdata = load_STdata(bc_counts, codebook, 0, maxHam, true);
     STdata.n_forks = n_forks;
     FlipRatePriors fr_priors = pack_fr_priors(fliprate_priors);
@@ -3203,84 +3230,95 @@ List mQC_DG(
     int N_blanks   = STdata.cb.blanks.size();
     int corr_free  = N_bits * (N_bits - 1) / 2;
     int n_params   = 2*N_bits + 2*corr_free;
+    int N_barcodes = STdata.cb.barcodes.size();
+    int n_steps    = FR_search + burnin + resamples;
+    int resample_window_start = FR_search + burnin; // 1-indexed step count at which the window begins
+    
+    // Check codebook
     if (N_genes == 0 || N_blanks == 0) {Rcpp::stop("Codebook must contain at least one gene and one blank barcode.");}
    
-    // Extract annealing schedule
+    // Set up annealing schedule
     double min_step_size         = max_step_size / min_step_size_divider;
     double min_temperature       = max_temperature / (min_step_size_divider / min_temperature_scale);
-    Vdbl   step_size_schedule    = build_annealing_schedule(max_step_size, min_step_size, FR_search, burnin, resamples);
-    Vdbl   temperature_schedule  = build_annealing_schedule(max_temperature, min_temperature, FR_search, burnin, resamples);
-    Vdbl   blank_weight_schedule = build_annealing_schedule(w.max_blank, w.min_blank, FR_search, burnin, resamples);
-    Vint   n_retained_bits       = build_annealing_schedule_int(N_bits - 1, 0, FR_search, burnin, resamples);
-    Vint   n_retained_corrs      = build_annealing_schedule_int(corr_free - 1, 0, FR_search, burnin, resamples);
+    Vdbl   step_size_schedule    = build_annealing_schedule(    max_step_size,   min_step_size,   FR_search, burnin, resamples);
+    Vdbl   temperature_schedule  = build_annealing_schedule(    max_temperature, min_temperature, FR_search, burnin, resamples);
+    Vdbl   blank_weight_schedule = build_annealing_schedule(    w.max_blank,     w.min_blank,     FR_search, burnin, resamples);
+    Vint   n_retained_bits       = build_annealing_schedule_int(N_bits - 1,      0,               FR_search, burnin, resamples);
+    Vint   n_retained_corrs      = build_annealing_schedule_int(corr_free - 1,   0,               FR_search, burnin, resamples);
    
-    // Per-pair proposal-step-size tiering: tightly-pinned prior tiers (small sdcorr_pairs) get
-    // smaller per-step Gaussian proposals, not just a bigger acceptance penalty.
-    Vdbl corr_step_scale(corr_free, 1.0);
-    if (!fr_priors.sdcorr_pairs.empty() && fr_priors.sdcorr > 0.0) {
-      for (int k = 0; k < corr_free; ++k) {corr_step_scale[k] = fr_priors.sdcorr_pairs[k] / fr_priors.sdcorr;}
-    }
-   
-    int N_barcodes = STdata.cb.barcodes.size();
-    int n_steps = FR_search + burnin + resamples;
+    // Setup containers to track across entire walk
     NumericVector msle(n_steps);
     NumericMatrix PPV_genes_mat(n_steps, N_genes);
     Vdbl stip_rate10_hist(n_steps, NA_REAL), stip_rate01_hist(n_steps, NA_REAL);
    
-    // Per-barcode read/corrected/hit counts, kept only for accepted steps in the post-burn-in
-    // resamples window and never themselves sent to R -- collapsed into the small erctc_plus matrix
-    // (N_barcodes x 7) once the walk finishes, so the only large structure ever built here stays
-    // internal to C++.
-    int resample_window_start = FR_search + burnin; // 1-indexed step count at which the window begins
+    // Setup containers to track across resamples: 
+    // ... Per-barcode read/corrected/hit counts, kept only for accepted steps in the post-burn-in
+    //     resamples window and never themselves sent to R -- collapsed into the small erctc_plus matrix
+    //     (N_barcodes x 7) once the walk finishes, so the only large structure ever built here stays
+    //     internal to C++.
     std::vector<Vdbl> resample_read, resample_corrected, resample_hit;
     resample_read.reserve(resamples + 1);
     resample_corrected.reserve(resamples + 1);
     resample_hit.reserve(resamples + 1);
-   
-    // Per-bit/per-pair flip-rate and correlation state, same resamples window, collapsed to a single
-    // "fliprates" vector (median per parameter) once the walk finishes -- misread.qc.DG()'s analogue
-    // of misread.qc()'s own point-estimate fliprates vector, same length/layout (2*N_bits rates then
-    // 2*corr_free correlations), just a posterior median across the chain instead of an L-BFGS optimum.
+    // ... Per-bit/per-pair flip-rate and correlation state, same resamples window, collapsed to a single
+    //     "fliprates" vector (median per parameter) once the walk finishes -- misread.qc.DG()'s analogue
+    //     of misread.qc()'s own point-estimate fliprates vector, same length/layout (2*N_bits rates then
+    //     2*corr_free correlations), just a posterior median across the chain instead of an L-BFGS optimum.
     std::vector<Vdbl> resample_rate10, resample_rate01, resample_corr1, resample_corr0;
     resample_rate10.reserve(resamples + 1);
     resample_rate01.reserve(resamples + 1);
     resample_corr1.reserve(resamples + 1);
     resample_corr0.reserve(resamples + 1);
    
+    // Set up RNG
     boost::random::mt19937 rng(seed);
     boost::random::normal_distribution<double>            std_normal(0.0, 1.0);
     boost::random::uniform_01<double>                     unif01;
     boost::random::uniform_int_distribution<unsigned int> seed_draw;
     auto fresh_seed = [&rng, &seed_draw]() {return seed_draw(rng);};
     auto round3     = [](double x) {return std::round(x * 1000.0) / 1000.0;}; // 3 decimals, for Rcout only
-
-    Vdbl FR_current = draw_random_fr(STdata, fr_priors, fresh_seed());
+    
+    // Per-pair proposal-step-size tiering: 
+    // ... tightly-pinned prior tiers (small sdcorr_pairs) get smaller per-step Gaussian proposals
+    Vdbl corr_step_scale(corr_free, 1.0);
+    if (!fr_priors.sdcorr_pairs.empty() && fr_priors.sdcorr > 0.0) {
+      for (int k = 0; k < corr_free; ++k) {corr_step_scale[k] = fr_priors.sdcorr_pairs[k] / fr_priors.sdcorr;}
+    }
+    
+    // Draw initial flip rates and bit-flip correlations from priors
+    Vdbl      FR_current = draw_random_fr(STdata, fr_priors, fresh_seed());
     FlipRates fr_current = pack_fr(FR_current, N_bits);
-
+   
+    // Run initial simulation (first step of MCMC walk)
     Rcpp::Rcout << "\n\nRunning initial simulation with structured-prior-drawn flip rates and correlations" << std::endl;
-    DGStepResult init_result = dg_simulation_step(STdata, fr_current, N_cells, w.max_blank, false, (int)fresh_seed(), n_forks, rng);
-    double sim_mse_current = dg_total_mse(init_result.sim_mse, fr_current, fr_priors, w, STdata.cb, max_fs_bc);
-    Rcpp::Rcout << "\nInitial mse: " << round3(sim_mse_current) << std::endl;
-
+    DGStepResult init_result      = dg_simulation_step(STdata, fr_current, N_cells, w.max_blank, false, (int)fresh_seed(), n_forks, rng);
+    double       sim_msle_current = dg_penalized_msle(init_result.sim_msle, fr_current, fr_priors, w, STdata.cb, max_fs_bc);
+    Rcpp::Rcout << "\nInitial msle: " << round3(sim_msle_current) << std::endl;
+   
+    // Set up for walk
     Rcpp::Rcout << "\n\nRunning Markov chain steps: \n\nRunning initial steps ..." << std::endl;
-    int    step = 0, ctr = 0, last_step = 0, last_ctr = 0;
-    int    attempts_this_step = 0; // resets whenever step advances; see max_calls_per_step above
-    bool   maintain_gene_identity = false;
-    double rate10_mean = NA_REAL, rate01_mean = NA_REAL;
-    const double FR_sample_fraction = 0.8; // last 20% of the flip-rate search window feeds the burn-in reset means
-    int    FR_sample_start = static_cast<int>(FR_search * FR_sample_fraction);
-    Vint   progress_tracker = Vint();
-    {
+    int          step = 0, ctr = 0, last_step = 0, last_ctr = 0; // Initialize counters
+    int          attempts_this_step     = 0;                     // resets whenever step advances; see max_calls_per_step above
+    bool         maintain_gene_identity = false;                 // NEED DESCRIPTION
+    double       rate10_mean            = NA_REAL; 
+    double       rate01_mean            = NA_REAL;
+    const double FR_sample_fraction     = 0.8;                   // last 20% of the flip-rate search window feeds the burn-in reset means
+    int          FR_sample_start        = static_cast<int>(FR_search * FR_sample_fraction);
+    Vint         progress_tracker       = Vint();
+    { // ... set up progress tracker
       Vdbl pt = lin_seq(1.0, static_cast<double>(n_steps), n_tracker_updates + 1);
       for (double p : pt) {progress_tracker.push_back(static_cast<int>(std::round(p)));}
       progress_tracker.back() = n_steps;
     }
    
+    // MCMC walk
     while (step < n_steps) {
-   
+     
+      // Advance counters
       ctr++;
       attempts_this_step++;
      
+      // Draw new flip rates and bit-flip correlations for this step
       Vdbl rate10_next(N_bits), rate01_next(N_bits);
       for (int i = 0; i < N_bits; ++i) {
         rate10_next[i] = fr_current.rate10[i] + std_normal(rng) * step_size_schedule[step];
@@ -3299,9 +3337,11 @@ List mQC_DG(
       for (int i : retained_bits) {rate10_next[i] = fr_current.rate10[i]; rate01_next[i] = fr_current.rate01[i];}
       for (int k : retained_corrs) {corr1_next[k] = fr_current.corr1[k]; corr0_next[k] = fr_current.corr0[k];}
      
+      // Check walk stage
       bool in_burnin = step > FR_search && step <= resample_window_start;
       bool have_means = !std::isnan(rate10_mean) && !std::isnan(rate01_mean);
-
+     
+      // Hold fr means constant, if burn-in stage
       if (in_burnin && have_means) {
         double m10 = dg_mean(rate10_next);
         double m01 = dg_mean(rate01_next);
@@ -3310,48 +3350,48 @@ List mQC_DG(
           rate01_next[i] += rate01_mean - m01;
         }
       }
+      
+      // Enforce bounds
       for (int i = 0; i < N_bits; ++i) {
-        bool oob10 = rate10_next[i] < 0.0 || rate10_next[i] > 1.0;
-        bool oob01 = rate01_next[i] < 0.0 || rate01_next[i] > 1.0;
-        if (in_burnin && have_means) {
-          if (oob10) {rate10_next[i] = rate10_mean;}
-          if (oob01) {rate01_next[i] = rate01_mean;}
-        } else {
-          if (oob10) {rate10_next[i] = fr_current.rate10[i];}
-          if (oob01) {rate01_next[i] = fr_current.rate01[i];}
-        }
+        if (rate10_next[i] < 0.0 || rate10_next[i] > 1.0) {rate10_next[i] = fr_current.rate10[i];}
+        if (rate01_next[i] < 0.0 || rate01_next[i] > 1.0) {rate01_next[i] = fr_current.rate01[i];}
       }
       for (int k = 0; k < corr_free; ++k) {
         if (corr1_next[k] < -1.0 || corr1_next[k] > 1.0) {corr1_next[k] = fr_current.corr1[k];}
         if (corr0_next[k] < -1.0 || corr0_next[k] > 1.0) {corr0_next[k] = fr_current.corr0[k];}
       }
      
-      // Build fr_next directly from the proposal vectors above. log_rate10/log_rate01 are left unset
-      // here -- they're TR()-only fields (see FlipRates), and nothing on the DG path
-      // (dg_simulation_step(), fr_prior_penalty(), dg_feasibility_penalty()) ever reads them, so
-      // computing them on every single attempt would be 2*N_bits wasted log() calls for no consumer.
+      // Build fr_next directly from the proposal vectors above
       FlipRates fr_next;
       fr_next.rate10 = std::move(rate10_next);
       fr_next.rate01 = std::move(rate01_next);
       fr_next.corr1  = std::move(corr1_next);
       fr_next.corr0  = std::move(corr0_next);
-
+     
+      // Run simulation with these flip rates
       DGStepResult result = dg_simulation_step(
         STdata, fr_next, N_cells, blank_weight_schedule[step], maintain_gene_identity, (int)fresh_seed(), n_forks, rng
       );
-      double sim_mse_next = dg_total_mse(result.sim_mse, fr_next, fr_priors, w, STdata.cb, max_fs_bc);
-
-      double acceptance_prob = std::min(1.0, std::exp(-(sim_mse_next - sim_mse_current) / temperature_schedule[step]));
-      double draw = unif01(rng);
+      
+      // Compute penalized msle
+      double sim_msle_next = dg_penalized_msle(result.sim_msle, fr_next, fr_priors, w, STdata.cb, max_fs_bc);
+     
+      // Compute step-acceptance probability
+      double acceptance_prob = std::min(1.0, std::exp(-(sim_msle_next - sim_msle_current) / temperature_schedule[step]));
+      
+      // Make random draw (decide if accepting step)
+      double draw          = unif01(rng);
       bool   forced_accept = max_calls_per_step > 0 && attempts_this_step >= max_calls_per_step;
       if (draw < acceptance_prob || step == FR_search || forced_accept) {
        
-        fr_current      = fr_next;
-        sim_mse_current = sim_mse_next;
+        // Update flip rates, msle, steps, and attempts
+        fr_current       = fr_next;
+        sim_msle_current = sim_msle_next;
         step++;
         attempts_this_step = 0;
        
-        msle[step - 1]             = sim_mse_current;
+        // Save run data
+        msle[step - 1]             = sim_msle_current;
         stip_rate10_hist[step - 1] = dg_mean(fr_next.rate10);
         stip_rate01_hist[step - 1] = dg_mean(fr_next.rate01);
         for (int g = 0; g < N_genes; ++g) {PPV_genes_mat(step - 1, g) = result.PPV_genes[g];}
@@ -3366,7 +3406,8 @@ List mQC_DG(
           resample_corr1.push_back(std::move(fr_next.corr1));
           resample_corr0.push_back(std::move(fr_next.corr0));
         }
-
+       
+        // If FR_search complete and entering burn-in stage, compute mean FR and reset
         if (step == FR_search) {
           maintain_gene_identity = true;
           int lo = std::max(1, FR_sample_start), hi = FR_search;
@@ -3382,11 +3423,8 @@ List mQC_DG(
           Vdbl FR_reset = draw_random_fr(STdata, fr_priors, fresh_seed());
           fr_current = pack_fr(FR_reset, N_bits);
         }
-
-        // Progress/acceptance-rate check: step has just advanced to a value it can never revisit
-        // again, so this now runs (and logs) exactly once per step reached. Previously this same
-        // check ran on every rejected attempt too (step unchanged), which needed a linear std::find()
-        // plus a last-logged-step guard to avoid repeat-logging the same step; neither is needed here.
+       
+        // Progress/acceptance-rate check
         bool at_tracker = std::binary_search(progress_tracker.begin(), progress_tracker.end(), step);
         if (at_tracker || step == 10 || step == FR_search) {
           double acceptance_rate = static_cast<double>(step - last_step) / static_cast<double>(ctr - last_ctr);
@@ -3397,13 +3435,14 @@ List mQC_DG(
             for (int s = step; s < n_steps; ++s) {temperature_schedule[s] *= 0.9; step_size_schedule[s] *= 1.1;}
           }
           Rcpp::Rcout << "\n\nStep " << step << " / " << n_steps << " complete"
-                      << "\n\tCurrent mse: " << round3(sim_mse_current)
+                      << "\n\tCurrent msle: " << round3(sim_msle_current)
                       << "\n\tAcceptance rate (this batch): " << round3(acceptance_rate)
                       << "\n\tAcceptance rate (overall): " << round3(static_cast<double>(step) / ctr)
                       << "\n\tCalls: " << ctr << std::endl;
         }
+        
       }
-
+     
     }
    
     // Collapse the resamples-window history into misread.qc()'s own erctc_plus shape: one row per
@@ -3411,19 +3450,16 @@ List mQC_DG(
     // the window, CR/PPV from those medians, and PPV_lower/PPV_upper as the window's own 2.5%/97.5%
     // empirical quantiles of the per-step PPV ratio -- the direct analogue of misread.qc()'s delta-
     // method CI, but read straight off the chain's actual sampling distribution instead of a local
-    // Gaussian approximation. Blanks get a real erc/ecc/CR (other barcodes misread into them), but
-    // ehc/PPV for blanks will be ~0 by construction: dg_draw_true_counts() always draws 0 true counts
-    // for blanks, so there's never a true blank spot to be a "hit" -- matching misread.qc()'s own
-    // analytic model, which zeroes blanks' ground-truth count the same way.
+    // Gaussian approximation. 
     NumericMatrix erctc_plus(N_barcodes, 7);
     colnames(erctc_plus) = CharacterVector({"erc", "ecc", "ehc", "CR", "PPV", "PPV_lower", "PPV_upper"});
     int n_resample_steps = resample_corrected.size();
     for (int b = 0; b < N_barcodes; ++b) {
       Vdbl erc_vals(n_resample_steps), ecc_vals(n_resample_steps), ehc_vals(n_resample_steps), ppv_ratio(n_resample_steps);
       for (int s = 0; s < n_resample_steps; ++s) {
-        erc_vals[s] = resample_read[s][b];
-        ecc_vals[s] = resample_corrected[s][b];
-        ehc_vals[s] = resample_hit[s][b];
+        erc_vals[s]  = resample_read[s][b];
+        ecc_vals[s]  = resample_corrected[s][b];
+        ehc_vals[s]  = resample_hit[s][b];
         ppv_ratio[s] = resample_corrected[s][b] > 0.0
           ? resample_hit[s][b] / resample_corrected[s][b]
           : std::numeric_limits<double>::quiet_NaN();
@@ -3498,7 +3534,7 @@ List mQC_DG(
 
 /*
  * *********************************************************************************************************************
- * Test helpers (exported for use in testthat only)
+ * testthat helpers
  */
 
 // Sum TR(bc, flips, fr) over all 2^N_bits flip patterns; must equal 1.0 for every valid parameter set.
