@@ -231,6 +231,63 @@ double compute_msle(
     return msle;
   }
 
+// Linearly spaced sequence of n values from `from` to `to`, inclusive -- same semantics as R's
+// seq(from, to, length.out = n), including returning `from` (not `to`) when n == 1.
+Vdbl lin_seq(
+    double from,
+    double to,
+    int    n
+  ) {
+    Vdbl out(n);
+    if (n == 1) {out[0] = from; return out;}
+    for (int i = 0; i < n; ++i) {out[i] = from + (to - from) * static_cast<double>(i) / static_cast<double>(n - 1);}
+    return out;
+  }
+
+// Integer version of lin_seq(): the same linear sequence, rounded to the nearest integer.
+Vint lin_seq_int(
+    int from,
+    int to,
+    int n
+  ) {
+    Vdbl seq = lin_seq(static_cast<double>(from), static_cast<double>(to), n);
+    Vint out(n);
+    std::transform(seq.begin(), seq.end(), out.begin(), [](double x) {return static_cast<int>(std::lround(x));});
+    return out;
+  }
+
+// Two-phase (FR_search-then-burn-in) annealing schedule: lin_seq() from max_val to min_val over
+// FR_search steps, the same ramp repeated over burnin steps, then held at min_val for resamples
+// steps. Used by mQC_DG() to build its step-size/temperature/blank-weight schedules.
+Vdbl build_annealing_schedule(
+    double max_val,
+    double min_val,
+    int    FR_search,
+    int    burnin,
+    int    resamples
+  ) {
+    Vdbl schedule = lin_seq(max_val, min_val, FR_search);
+    Vdbl burn_in  = lin_seq(max_val, min_val, burnin);
+    schedule.insert(schedule.end(), burn_in.begin(), burn_in.end());
+    schedule.insert(schedule.end(), resamples, min_val);
+    return schedule;
+  }
+
+// Integer version of build_annealing_schedule(), for mQC_DG()'s bit/pair-retention schedules.
+Vint build_annealing_schedule_int(
+    int max_val,
+    int min_val,
+    int FR_search,
+    int burnin,
+    int resamples
+  ) {
+    Vint schedule = lin_seq_int(max_val, min_val, FR_search);
+    Vint burn_in  = lin_seq_int(max_val, min_val, burnin);
+    schedule.insert(schedule.end(), burn_in.begin(), burn_in.end());
+    schedule.insert(schedule.end(), resamples, min_val);
+    return schedule;
+  }
+
 // String search returning indexes
 Vint grep_idx(
     CharacterVector x,
@@ -318,6 +375,19 @@ IntegerMatrix lower_tri_pairs(
      */
   }
 
+// Precompute log(rate10)/log(rate01) on a FlipRates whose rate10/rate01 are already set -- used by
+// TR(). Shared by pack_fr() (building a FlipRates from a flat parameter vector) and by mQC_DG()
+// (building one directly from its own already-structured per-bit/per-pair proposal vectors).
+void fill_log_rates(FlipRates& fr) {
+  int N_bits = fr.rate10.size();
+  fr.log_rate10.assign(N_bits, 0.0);
+  fr.log_rate01.assign(N_bits, 0.0);
+  for (int i = 0; i < N_bits; ++i) {
+    fr.log_rate10[i] = std::log(fr.rate10[i]);
+    fr.log_rate01[i] = std::log(fr.rate01[i]);
+  }
+}
+
 // Convert flip rate vector into structured FR object
 FlipRates pack_fr(
     const Vdbl& rates_plus_corr,
@@ -334,12 +404,7 @@ FlipRates pack_fr(
     fr.corr1.assign(rates_plus_corr.begin() + 2*N_bits, rates_plus_corr.begin() + 2*N_bits + N_corrs);
     fr.corr0.assign(rates_plus_corr.begin() + 2*N_bits + N_corrs, rates_plus_corr.end());
     // Precompute log flip rates used in TR
-    fr.log_rate10 = Vdbl(N_bits, 0.0);
-    fr.log_rate01 = Vdbl(N_bits, 0.0);
-    for (int i = 0; i < N_bits; ++i) {
-      fr.log_rate10[i] = std::log(fr.rate10[i]);
-      fr.log_rate01[i] = std::log(fr.rate01[i]);
-    }
+    fill_log_rates(fr);
     return fr;
   }
 
@@ -2946,6 +3011,11 @@ SpotSim make_SpotSim_DG(
      */
   }
 
+// Mean of x (no NaN handling -- see dg_median_skipna()/dg_quantile_skipna() when that's needed).
+double dg_mean(const Vdbl& x) {
+  return std::accumulate(x.begin(), x.end(), 0.0) / static_cast<double>(x.size());
+}
+
 // Median of x, skipping NaN entries (NA_REAL if nothing finite is left), matching R's median().
 double dg_median_skipna(Vdbl x) {
   Vdbl finite;
@@ -3077,7 +3147,27 @@ Vint dg_sample_without_replacement(
      */
   }
 
-// C++ engine behind misread.qc.DG(): fits FlipRates via Markov Chain Monte Carlo Simulated Annealing.
+// dg_simulation_step()'s sim_mse, plus mQC_DG()'s optional prior/dispersion and feasibility penalty
+// terms (each only added when its weight is > 0) -- the full per-step/initial MCMCSA objective.
+double dg_total_mse(
+    double                 base_mse,
+    const FlipRates&       fr,
+    const FlipRatePriors&  fr_priors,
+    const Weights&         w,
+    const Codebook&        cb,
+    int                    max_fs_bc
+  ) {
+    double mse = base_mse;
+    if (w.prior > 0.0 || w.dispersion > 0.0) {
+      mse += fr_prior_penalty(fr, fr_priors, w.prior, w.dispersion, false, nullptr);
+    }
+    if (w.feasibility > 0.0) {
+      mse += w.feasibility * dg_feasibility_penalty(fr, cb, max_fs_bc);
+    }
+    return mse;
+  }
+
+// C++ engine behind misread.qc.DG(): fits FlipRates via Markov Chain Monte Carlo Simulated Annealing over dichotomized Gaussians.
 // [[Rcpp::export]]
 List mQC_DG(
     NumericMatrix bc_counts,
@@ -3095,79 +3185,48 @@ List mQC_DG(
     int           N_cells,
     List          fliprate_priors          = List(),
     List          weights                  = List(),
-    int           max_fs_bc = 40,
-    int           max_calls_per_step = 0,
-    unsigned int  seed = 726354819
+    int           max_fs_bc                = 40,
+    int           max_calls_per_step       = 0,
+    unsigned int  seed                     = 726354819
   ) {
-
-    ST_data STdata = load_STdata(bc_counts, codebook, codebook.ncol(), maxHam, true);
+   
+    // Load data. max_flips (3rd arg) only matters to misread.qc()'s TR()-based engine and is never
+    // read anywhere on the DG/MCMCSA path below; 0 lets load_STdata() resolve its own "no cap" default.
+    ST_data STdata = load_STdata(bc_counts, codebook, 0, maxHam, true);
     STdata.n_forks = n_forks;
     FlipRatePriors fr_priors = pack_fr_priors(fliprate_priors);
     Weights        w         = pack_weights(weights);
-
+   
+    // Extract key consants
     int N_bits     = STdata.cb.N_bits;
     int N_genes    = STdata.cb.genes.size();
     int N_blanks   = STdata.cb.blanks.size();
     int corr_free  = N_bits * (N_bits - 1) / 2;
     int n_params   = 2*N_bits + 2*corr_free;
-    if (N_genes == 0 || N_blanks == 0) {
-      Rcpp::stop("Codebook must contain at least one gene and one blank barcode.");
-    }
-
-    double min_step_size   = max_step_size / min_step_size_divider;
-    double min_temperature = max_temperature / (min_step_size_divider / min_temperature_scale);
-
-    auto lin_seq = [](double from, double to, int n) {
-      Vdbl out(n);
-      if (n == 1) {out[0] = from; return out;}
-      for (int i = 0; i < n; ++i) {out[i] = from + (to - from) * static_cast<double>(i) / static_cast<double>(n - 1);}
-      return out;
-    };
-    auto lin_seq_int = [](int from, int to, int n) {
-      Vint out(n);
-      if (n == 1) {out[0] = from; return out;}
-      for (int i = 0; i < n; ++i) {
-        out[i] = static_cast<int>(std::round(from + (to - from) * static_cast<double>(i) / static_cast<double>(n - 1)));
-      }
-      return out;
-    };
-
-    Vdbl step_size_schedule   = lin_seq(max_step_size, min_step_size, FR_search);
-    Vdbl temperature_schedule = lin_seq(max_temperature, min_temperature, FR_search);
-    Vdbl blank_weight_schedule = lin_seq(w.max_blank, w.min_blank, FR_search);
-    Vint n_retained_bits       = lin_seq_int(N_bits - 1, 0, FR_search);
-    Vint n_retained_corrs      = lin_seq_int(corr_free - 1, 0, FR_search);
-    {
-      Vdbl s2 = lin_seq(max_step_size, min_step_size, burnin);
-      Vdbl t2 = lin_seq(max_temperature, min_temperature, burnin);
-      Vdbl b2 = lin_seq(w.max_blank, w.min_blank, burnin);
-      Vint rb2 = lin_seq_int(N_bits - 1, 0, burnin);
-      Vint rc2 = lin_seq_int(corr_free - 1, 0, burnin);
-      step_size_schedule.insert(step_size_schedule.end(), s2.begin(), s2.end());
-      temperature_schedule.insert(temperature_schedule.end(), t2.begin(), t2.end());
-      blank_weight_schedule.insert(blank_weight_schedule.end(), b2.begin(), b2.end());
-      n_retained_bits.insert(n_retained_bits.end(), rb2.begin(), rb2.end());
-      n_retained_corrs.insert(n_retained_corrs.end(), rc2.begin(), rc2.end());
-    }
-    step_size_schedule.insert(step_size_schedule.end(), resamples, min_step_size);
-    temperature_schedule.insert(temperature_schedule.end(), resamples, min_temperature);
-    blank_weight_schedule.insert(blank_weight_schedule.end(), resamples, w.min_blank);
-    n_retained_bits.insert(n_retained_bits.end(), resamples, 0);
-    n_retained_corrs.insert(n_retained_corrs.end(), resamples, 0);
-
+    if (N_genes == 0 || N_blanks == 0) {Rcpp::stop("Codebook must contain at least one gene and one blank barcode.");}
+   
+    // Extract annealing schedule
+    double min_step_size         = max_step_size / min_step_size_divider;
+    double min_temperature       = max_temperature / (min_step_size_divider / min_temperature_scale);
+    Vdbl   step_size_schedule    = build_annealing_schedule(max_step_size, min_step_size, FR_search, burnin, resamples);
+    Vdbl   temperature_schedule  = build_annealing_schedule(max_temperature, min_temperature, FR_search, burnin, resamples);
+    Vdbl   blank_weight_schedule = build_annealing_schedule(w.max_blank, w.min_blank, FR_search, burnin, resamples);
+    Vint   n_retained_bits       = build_annealing_schedule_int(N_bits - 1, 0, FR_search, burnin, resamples);
+    Vint   n_retained_corrs      = build_annealing_schedule_int(corr_free - 1, 0, FR_search, burnin, resamples);
+   
     // Per-pair proposal-step-size tiering: tightly-pinned prior tiers (small sdcorr_pairs) get
     // smaller per-step Gaussian proposals, not just a bigger acceptance penalty.
     Vdbl corr_step_scale(corr_free, 1.0);
     if (!fr_priors.sdcorr_pairs.empty() && fr_priors.sdcorr > 0.0) {
       for (int k = 0; k < corr_free; ++k) {corr_step_scale[k] = fr_priors.sdcorr_pairs[k] / fr_priors.sdcorr;}
     }
-
+   
     int N_barcodes = STdata.cb.barcodes.size();
     int n_steps = FR_search + burnin + resamples;
     NumericVector msle(n_steps);
     NumericMatrix PPV_genes_mat(n_steps, N_genes);
     Vdbl stip_rate10_hist(n_steps, NA_REAL), stip_rate01_hist(n_steps, NA_REAL);
-
+   
     // Per-barcode read/corrected/hit counts, kept only for accepted steps in the post-burn-in
     // resamples window and never themselves sent to R -- collapsed into the small erctc_plus matrix
     // (N_barcodes x 7) once the walk finishes, so the only large structure ever built here stays
@@ -3177,7 +3236,7 @@ List mQC_DG(
     resample_read.reserve(resamples + 1);
     resample_corrected.reserve(resamples + 1);
     resample_hit.reserve(resamples + 1);
-
+   
     // Per-bit/per-pair flip-rate and correlation state, same resamples window, collapsed to a single
     // "fliprates" vector (median per parameter) once the walk finishes -- misread.qc.DG()'s analogue
     // of misread.qc()'s own point-estimate fliprates vector, same length/layout (2*N_bits rates then
@@ -3187,43 +3246,41 @@ List mQC_DG(
     resample_rate01.reserve(resamples + 1);
     resample_corr1.reserve(resamples + 1);
     resample_corr0.reserve(resamples + 1);
-
+   
     boost::random::mt19937 rng(seed);
-    boost::random::normal_distribution<double> std_normal(0.0, 1.0);
-    auto fresh_seed = [&rng]() {return boost::random::uniform_int_distribution<unsigned int>()(rng);};
+    boost::random::normal_distribution<double>            std_normal(0.0, 1.0);
+    boost::random::uniform_01<double>                     unif01;
+    boost::random::uniform_int_distribution<unsigned int> seed_draw;
+    auto fresh_seed = [&rng, &seed_draw]() {return seed_draw(rng);};
+    auto round3     = [](double x) {return std::round(x * 1000.0) / 1000.0;}; // 3 decimals, for Rcout only
 
     Vdbl FR_current = draw_random_fr(STdata, fr_priors, fresh_seed());
     FlipRates fr_current = pack_fr(FR_current, N_bits);
 
     Rcpp::Rcout << "\n\nRunning initial simulation with structured-prior-drawn flip rates and correlations" << std::endl;
     DGStepResult init_result = dg_simulation_step(STdata, fr_current, N_cells, w.max_blank, false, (int)fresh_seed(), n_forks, rng);
-    double sim_mse_current = init_result.sim_mse;
-    if (w.prior > 0.0 || w.dispersion > 0.0) {
-      sim_mse_current += fr_prior_penalty(fr_current, fr_priors, w.prior, w.dispersion, false, nullptr);
-    }
-    if (w.feasibility > 0.0) {
-      sim_mse_current += w.feasibility * dg_feasibility_penalty(fr_current, STdata.cb, max_fs_bc);
-    }
-    Rcpp::Rcout << "\nInitial mse: " << std::round(sim_mse_current * 1000.0) / 1000.0 << std::endl;
+    double sim_mse_current = dg_total_mse(init_result.sim_mse, fr_current, fr_priors, w, STdata.cb, max_fs_bc);
+    Rcpp::Rcout << "\nInitial mse: " << round3(sim_mse_current) << std::endl;
 
     Rcpp::Rcout << "\n\nRunning Markov chain steps: \n\nRunning initial steps ..." << std::endl;
-    int    step = 0, ctr = 0, last_step = 0, last_ctr = 0, last_message = 0;
+    int    step = 0, ctr = 0, last_step = 0, last_ctr = 0;
     int    attempts_this_step = 0; // resets whenever step advances; see max_calls_per_step above
     bool   maintain_gene_identity = false;
     double rate10_mean = NA_REAL, rate01_mean = NA_REAL;
-    int    FR_sample_start = static_cast<int>(FR_search * 0.8);
+    const double FR_sample_fraction = 0.8; // last 20% of the flip-rate search window feeds the burn-in reset means
+    int    FR_sample_start = static_cast<int>(FR_search * FR_sample_fraction);
     Vint   progress_tracker = Vint();
     {
       Vdbl pt = lin_seq(1.0, static_cast<double>(n_steps), n_tracker_updates + 1);
       for (double p : pt) {progress_tracker.push_back(static_cast<int>(std::round(p)));}
       progress_tracker.back() = n_steps;
     }
-
+   
     while (step < n_steps) {
-
+   
       ctr++;
       attempts_this_step++;
-
+     
       Vdbl rate10_next(N_bits), rate01_next(N_bits);
       for (int i = 0; i < N_bits; ++i) {
         rate10_next[i] = fr_current.rate10[i] + std_normal(rng) * step_size_schedule[step];
@@ -3235,19 +3292,19 @@ List mQC_DG(
         corr1_next[k] = fr_current.corr1[k] + std_normal(rng) * sd;
         corr0_next[k] = fr_current.corr0[k] + std_normal(rng) * sd;
       }
-
+     
       // Stochastic pruning: retain current values at a randomly chosen subset of bits/pairs
       Vint retained_bits  = dg_sample_without_replacement(N_bits, n_retained_bits[step], rng);
       Vint retained_corrs = dg_sample_without_replacement(corr_free, n_retained_corrs[step], rng);
       for (int i : retained_bits) {rate10_next[i] = fr_current.rate10[i]; rate01_next[i] = fr_current.rate01[i];}
       for (int k : retained_corrs) {corr1_next[k] = fr_current.corr1[k]; corr0_next[k] = fr_current.corr0[k];}
-
-      bool in_burnin = step > FR_search && step <= FR_search + burnin;
+     
+      bool in_burnin = step > FR_search && step <= resample_window_start;
       bool have_means = !std::isnan(rate10_mean) && !std::isnan(rate01_mean);
 
       if (in_burnin && have_means) {
-        double m10 = std::accumulate(rate10_next.begin(), rate10_next.end(), 0.0) / N_bits;
-        double m01 = std::accumulate(rate01_next.begin(), rate01_next.end(), 0.0) / N_bits;
+        double m10 = dg_mean(rate10_next);
+        double m01 = dg_mean(rate01_next);
         for (int i = 0; i < N_bits; ++i) {
           rate10_next[i] += rate10_mean - m10;
           rate01_next[i] += rate01_mean - m01;
@@ -3268,45 +3325,46 @@ List mQC_DG(
         if (corr1_next[k] < -1.0 || corr1_next[k] > 1.0) {corr1_next[k] = fr_current.corr1[k];}
         if (corr0_next[k] < -1.0 || corr0_next[k] > 1.0) {corr0_next[k] = fr_current.corr0[k];}
       }
-
-      Vdbl FR_next(n_params);
-      for (int i = 0; i < N_bits; ++i) {FR_next[i] = rate10_next[i]; FR_next[N_bits + i] = rate01_next[i];}
-      for (int k = 0; k < corr_free; ++k) {FR_next[2*N_bits + k] = corr1_next[k]; FR_next[2*N_bits + corr_free + k] = corr0_next[k];}
-      FlipRates fr_next = pack_fr(FR_next, N_bits);
+     
+      // Build fr_next directly from the proposal vectors above. log_rate10/log_rate01 are left unset
+      // here -- they're TR()-only fields (see FlipRates), and nothing on the DG path
+      // (dg_simulation_step(), fr_prior_penalty(), dg_feasibility_penalty()) ever reads them, so
+      // computing them on every single attempt would be 2*N_bits wasted log() calls for no consumer.
+      FlipRates fr_next;
+      fr_next.rate10 = std::move(rate10_next);
+      fr_next.rate01 = std::move(rate01_next);
+      fr_next.corr1  = std::move(corr1_next);
+      fr_next.corr0  = std::move(corr0_next);
 
       DGStepResult result = dg_simulation_step(
         STdata, fr_next, N_cells, blank_weight_schedule[step], maintain_gene_identity, (int)fresh_seed(), n_forks, rng
       );
-      double sim_mse_next = result.sim_mse;
-      if (w.prior > 0.0 || w.dispersion > 0.0) {
-        sim_mse_next += fr_prior_penalty(fr_next, fr_priors, w.prior, w.dispersion, false, nullptr);
-      }
-      if (w.feasibility > 0.0) {
-        sim_mse_next += w.feasibility * dg_feasibility_penalty(fr_next, STdata.cb, max_fs_bc);
-      }
+      double sim_mse_next = dg_total_mse(result.sim_mse, fr_next, fr_priors, w, STdata.cb, max_fs_bc);
 
       double acceptance_prob = std::min(1.0, std::exp(-(sim_mse_next - sim_mse_current) / temperature_schedule[step]));
-      double draw = boost::random::uniform_01<double>()(rng);
+      double draw = unif01(rng);
       bool   forced_accept = max_calls_per_step > 0 && attempts_this_step >= max_calls_per_step;
       if (draw < acceptance_prob || step == FR_search || forced_accept) {
-
+       
         fr_current      = fr_next;
         sim_mse_current = sim_mse_next;
         step++;
         attempts_this_step = 0;
-
+       
         msle[step - 1]             = sim_mse_current;
-        stip_rate10_hist[step - 1] = std::accumulate(fr_next.rate10.begin(), fr_next.rate10.end(), 0.0) / N_bits;
-        stip_rate01_hist[step - 1] = std::accumulate(fr_next.rate01.begin(), fr_next.rate01.end(), 0.0) / N_bits;
+        stip_rate10_hist[step - 1] = dg_mean(fr_next.rate10);
+        stip_rate01_hist[step - 1] = dg_mean(fr_next.rate01);
         for (int g = 0; g < N_genes; ++g) {PPV_genes_mat(step - 1, g) = result.PPV_genes[g];}
         if (step >= resample_window_start) {
-          resample_read.push_back(result.read_counts);
-          resample_corrected.push_back(result.corrected_counts);
-          resample_hit.push_back(result.hit_counts);
-          resample_rate10.push_back(fr_next.rate10);
-          resample_rate01.push_back(fr_next.rate01);
-          resample_corr1.push_back(fr_next.corr1);
-          resample_corr0.push_back(fr_next.corr0);
+          // result/fr_next are loop-local and unread again after this point this iteration, so hand
+          // their buffers to the resamples-window history instead of copying them.
+          resample_read.push_back(std::move(result.read_counts));
+          resample_corrected.push_back(std::move(result.corrected_counts));
+          resample_hit.push_back(std::move(result.hit_counts));
+          resample_rate10.push_back(std::move(fr_next.rate10));
+          resample_rate01.push_back(std::move(fr_next.rate01));
+          resample_corr1.push_back(std::move(fr_next.corr1));
+          resample_corr0.push_back(std::move(fr_next.corr0));
         }
 
         if (step == FR_search) {
@@ -3319,32 +3377,35 @@ List mQC_DG(
           }
           if (n_samp > 0) {rate10_mean = sum10 / n_samp; rate01_mean = sum01 / n_samp;}
           Rcpp::Rcout << "\n\nFlip-rate search complete, mean flip rates:"
-                      << "\n\t1->0: " << std::round(rate10_mean * 1000.0) / 1000.0
-                      << "\n\t0->1: " << std::round(rate01_mean * 1000.0) / 1000.0 << std::endl;
+                      << "\n\t1->0: " << round3(rate10_mean)
+                      << "\n\t0->1: " << round3(rate01_mean) << std::endl;
           Vdbl FR_reset = draw_random_fr(STdata, fr_priors, fresh_seed());
           fr_current = pack_fr(FR_reset, N_bits);
         }
-      }
 
-      bool at_tracker = std::find(progress_tracker.begin(), progress_tracker.end(), step) != progress_tracker.end();
-      if ((at_tracker || step == 10 || step == FR_search) && step != 0 && step != last_message) {
-        double acceptance_rate = static_cast<double>(step - last_step) / static_cast<double>(ctr - last_ctr);
-        last_step = step; last_ctr = ctr;
-        if (acceptance_rate < 0.2) {
-          for (int s = step; s < n_steps; ++s) {temperature_schedule[s] *= 1.1; step_size_schedule[s] *= 0.9;}
-        } else if (acceptance_rate > 0.3) {
-          for (int s = step; s < n_steps; ++s) {temperature_schedule[s] *= 0.9; step_size_schedule[s] *= 1.1;}
+        // Progress/acceptance-rate check: step has just advanced to a value it can never revisit
+        // again, so this now runs (and logs) exactly once per step reached. Previously this same
+        // check ran on every rejected attempt too (step unchanged), which needed a linear std::find()
+        // plus a last-logged-step guard to avoid repeat-logging the same step; neither is needed here.
+        bool at_tracker = std::binary_search(progress_tracker.begin(), progress_tracker.end(), step);
+        if (at_tracker || step == 10 || step == FR_search) {
+          double acceptance_rate = static_cast<double>(step - last_step) / static_cast<double>(ctr - last_ctr);
+          last_step = step; last_ctr = ctr;
+          if (acceptance_rate < 0.2) {
+            for (int s = step; s < n_steps; ++s) {temperature_schedule[s] *= 1.1; step_size_schedule[s] *= 0.9;}
+          } else if (acceptance_rate > 0.3) {
+            for (int s = step; s < n_steps; ++s) {temperature_schedule[s] *= 0.9; step_size_schedule[s] *= 1.1;}
+          }
+          Rcpp::Rcout << "\n\nStep " << step << " / " << n_steps << " complete"
+                      << "\n\tCurrent mse: " << round3(sim_mse_current)
+                      << "\n\tAcceptance rate (this batch): " << round3(acceptance_rate)
+                      << "\n\tAcceptance rate (overall): " << round3(static_cast<double>(step) / ctr)
+                      << "\n\tCalls: " << ctr << std::endl;
         }
-        Rcpp::Rcout << "\n\nStep " << step << " / " << n_steps << " complete"
-                    << "\n\tCurrent mse: " << std::round(sim_mse_current * 1000.0) / 1000.0
-                    << "\n\tAcceptance rate (this batch): " << std::round(acceptance_rate * 1000.0) / 1000.0
-                    << "\n\tAcceptance rate (overall): " << std::round(static_cast<double>(step) / ctr * 1000.0) / 1000.0
-                    << "\n\tCalls: " << ctr << std::endl;
-        last_message = step;
       }
 
     }
-
+   
     // Collapse the resamples-window history into misread.qc()'s own erctc_plus shape: one row per
     // barcode (genes and blanks), erc/ecc/ehc as the median simulated read/corrected/hit count over
     // the window, CR/PPV from those medians, and PPV_lower/PPV_upper as the window's own 2.5%/97.5%
@@ -3378,7 +3439,7 @@ List mQC_DG(
       erctc_plus(b, 5) = dg_quantile_skipna(ppv_ratio, 0.025);
       erctc_plus(b, 6) = dg_quantile_skipna(ppv_ratio, 0.975);
     }
-
+   
     // Collapse the same resamples window into a single "fliprates" vector -- misread.qc()'s own
     // point-estimate layout (rate10 x N_bits, rate01 x N_bits, corr1 then corr0 x corr_free), but each
     // entry the posterior median over the window rather than an L-BFGS optimum. R applies
@@ -3396,7 +3457,7 @@ List mQC_DG(
       fliprates[2*N_bits + k]            = dg_median_skipna(c1);
       fliprates[2*N_bits + corr_free + k] = dg_median_skipna(c0);
     }
-
+   
     return List::create(
       _["msle"]        = msle,
       _["PPV_by_step"] = PPV_genes_mat,
@@ -3405,7 +3466,7 @@ List mQC_DG(
       _["gene_idx"]    = IntegerVector(STdata.cb.genes.begin(), STdata.cb.genes.end()),
       _["blank_idx"]   = IntegerVector(STdata.cb.blanks.begin(), STdata.cb.blanks.end())
     );
-
+   
     /*
      * Literal correlated-Gaussian-noise spot simulation (see the DG correlation-matrix helpers
      * above, and make_SpotSim_DG()) -- schedules, two-phase FR_search-then-burnin design,
