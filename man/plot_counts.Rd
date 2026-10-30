@@ -15,3 +15,22 @@ ggplot object showing predicted vs observed counts for each barcode.
 \description{
 This function takes the results from the misread.qc function and makes a plot comparing the predicted error-corrected counts (ecc) to the observed counts for each barcode. Both predicted and observed counts are plotted on a log scale for better visibility. Barcodes are sorted by decreasing observed count, with gene barcodes shown first and blank barcodes shown second. A dashed vertical line indicates the separation between gene and blank barcodes.
 }
+\examples{
+codebook <- matrix(c(
+  0, 0, 1, 0, 1, 1,
+  0, 1, 0, 1, 0, 1,
+  1, 0, 0, 1, 1, 0,
+  1, 1, 1, 0, 0, 0
+), nrow = 4, byrow = TRUE)
+rownames(codebook) <- c("Gene1", "Gene2", "Blank1", "Blank2")
+
+STdata <- data.frame(
+  rates     = c(500, 800, 50, 30),
+  variance  = c(25, 25, 10, 10),
+  counts    = c(480, 790, 55, 25),
+  row.names = rownames(codebook)
+)
+
+qc <- misread.qc(STdata, codebook, n_forks = 1, max_flips = 2, maxeval = 20)
+plot_counts(qc)
+}

@@ -17,3 +17,22 @@ ggplot object showing estimated PPV, with its 95\% confidence interval, for each
 \description{
 This function takes the results from the misread.qc function and makes a plot of the estimated positive predictive value (PPV) for each barcode, along with its 95\% confidence interval (\code{PPV_lower}/\code{PPV_upper} from \code{erctc_plus}) shown as error bars. Barcodes are sorted by PPV value, in decreasing order, and a dashed red line indicates the minimum PPV cutoff for "good" barcodes. Barcodes above the cutoff are colored blue, while those that are not are colored black.
 }
+\examples{
+codebook <- matrix(c(
+  0, 0, 1, 0, 1, 1,
+  0, 1, 0, 1, 0, 1,
+  1, 0, 0, 1, 1, 0,
+  1, 1, 1, 0, 0, 0
+), nrow = 4, byrow = TRUE)
+rownames(codebook) <- c("Gene1", "Gene2", "Blank1", "Blank2")
+
+STdata <- data.frame(
+  rates     = c(500, 800, 50, 30),
+  variance  = c(25, 25, 10, 10),
+  counts    = c(480, 790, 55, 25),
+  row.names = rownames(codebook)
+)
+
+qc <- misread.qc(STdata, codebook, n_forks = 1, max_flips = 2, maxeval = 20)
+plot_PPV(qc)
+}

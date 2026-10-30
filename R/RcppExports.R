@@ -33,6 +33,10 @@ test_fr_recovery <- function(bc_counts, codebook, n_sims, maxHam, n_forks, max_f
     .Call(`_flipFISH_test_fr_recovery`, bc_counts, codebook, n_sims, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, stip_fliprate_priors, weights, n_restarts)
 }
 
+mQC_DG <- function(bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc = 40L, max_calls_per_step = 0L, seed = 726354819L) {
+    .Call(`_flipFISH_mQC_DG`, bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc, max_calls_per_step, seed)
+}
+
 tr_sum_check <- function(bc, rate10, rate01, corr1, corr0) {
     .Call(`_flipFISH_tr_sum_check`, bc, rate10, rate01, corr1, corr0)
 }
@@ -75,9 +79,5 @@ rng_normal_paramtype_draw_test <- function(seed, mean1, sd1, mean2, sd2) {
 
 dg_ppois_lower_test <- function(x, lambda) {
     .Call(`_flipFISH_dg_ppois_lower_test`, x, lambda)
-}
-
-mQC_DG <- function(bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc = 40L, max_calls_per_step = 0L, seed = 726354819L) {
-    .Call(`_flipFISH_mQC_DG`, bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc, max_calls_per_step, seed)
 }
 

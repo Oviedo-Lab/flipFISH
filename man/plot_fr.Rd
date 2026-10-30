@@ -15,3 +15,27 @@ ggplot object showing estimated flip rates for each bit and flip type; a distrib
 \description{
 This function takes the results from either the \code{misread.qc} function (a single point estimate of the bit-flip rates) or the \code{sim.benchmark} function (bit-flip rates estimated across simulation replicates) and makes a plot showing the estimated bit-flip rates for each bit, separated by flip type (1>0 vs 0>1). When given \code{sim.benchmark} output, the plot shows the distribution (violin plots) of estimates across replicates; when given \code{misread.qc} output, it shows the single point estimate for each bit.
 }
+\examples{
+codebook <- matrix(c(
+  0, 0, 1, 0, 1, 1,
+  0, 1, 0, 1, 0, 1,
+  1, 0, 0, 1, 1, 0,
+  1, 1, 1, 0, 0, 0
+), nrow = 4, byrow = TRUE)
+rownames(codebook) <- c("Gene1", "Gene2", "Blank1", "Blank2")
+
+STdata <- data.frame(
+  rates     = c(500, 800, 50, 30),
+  variance  = c(25, 25, 10, 10),
+  counts    = c(480, 790, 55, 25),
+  row.names = rownames(codebook)
+)
+
+# Point estimates from a single misread.qc fit
+qc <- misread.qc(STdata, codebook, n_forks = 1, max_flips = 2, maxeval = 20)
+plot_fr(qc)
+
+# Distribution across replicates from sim.benchmark
+bm <- sim.benchmark(STdata, codebook, n_sims = 2, n_forks = 1, max_flips = 2, maxeval = 20)
+plot_fr(bm)
+}

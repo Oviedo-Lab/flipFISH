@@ -33,7 +33,18 @@ Helper function to build a tiered Gaussian prior on bit-flip correlations from i
    \item \code{sd_round}: For use with bit_org; Prior sd for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).
    \item \code{sd_channel}: For use with bit_org; Prior sd for bit pairs sharing a color channel but not a round (tier 2), default 0.1.
    \item \code{sd_other}: For use with bit_org; Prior sd for all remaining bit pairs (tier 3, pinned near \code{expectedcorr}), default 0.01.
-} 
+}
 Any element omitted from the supplied list falls back to its default. These values are used as the Gaussian prior-penalty term (when \code{weights$prior} or \code{weights$dispersion} are non-zero) and to draw the initial parameter point(s) before fitting begins. When \code{bit_org} is also supplied, \code{latent_bit_round} and \code{latent_bit_channel} will be extracted automatically and \code{sdcorr_pairs} will be automatically built from these two factors plus the values for \code{sd_round}, \code{sd_channel}, and \code{sd_other} (see \code{build_corr_priors()}).
 }
 
+\examples{
+# Minimal three-round, two-channel bit organization for a 6-bit codebook
+bit_org <- data.frame(
+  imagingRound = c(0, 0, 1, 1, 2, 2),
+  color        = c("A", "B", "A", "B", "A", "B")
+)
+build_corr_priors(
+  bit_org         = bit_org,
+  fliprate_priors = list(w_round = 0.6, w_channel = 0.2)
+)
+}

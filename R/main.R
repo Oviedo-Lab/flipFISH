@@ -117,6 +117,16 @@ check_forks <- function(
 #' @param fliprate_priors A \code{fliprate_priors} list (see the "Flip-rate priors" section below for the full element list). If it does not contain \code{sd_round}, \code{sd_channel}, or \code{sd_other}, default values (of 0.2, 0.1, and 0.01, respectively) are provided.
 #' @return The original input \code{fliprate_priors}, minus \code{sd_round}, \code{sd_channel}, and \code{sd_other} (if provided), and enriched with \code{latent_bit_round}, \code{latent_bit_channel}, and \code{sdcorr_pairs} (if \code{bit_org} supplied).
 #' @inheritSection misread.qc Flip-rate priors
+#' @examples
+#' # Minimal three-round, two-channel bit organization for a 6-bit codebook
+#' bit_org <- data.frame(
+#'   imagingRound = c(0, 0, 1, 1, 2, 2),
+#'   color        = c("A", "B", "A", "B", "A", "B")
+#' )
+#' build_corr_priors(
+#'   bit_org         = bit_org,
+#'   fliprate_priors = list(w_round = 0.6, w_channel = 0.2)
+#' )
 #' @export
 build_corr_priors <- function(
     bit_org         = NULL,
@@ -126,7 +136,7 @@ build_corr_priors <- function(
     # Initialize list for flip rate priors
     fr_priors <- list()
     if (length(fliprate_priors) > 0) {
-      if (class(fliprate_priors) != "list") stop("fliprate_priors must be a list")
+      if (!inherits(fliprate_priors, "list")) stop("fliprate_priors must be a list")
       if (all(c("w_round", "w_channel") %in% names(fliprate_priors))) {
         if (fliprate_priors$w_round + fliprate_priors$w_channel > 1) stop("w_round + w_channel must be <= 1")
       }
@@ -227,8 +237,28 @@ build_corr_priors <- function(
 #'    \item \code{sd_round}: For use with bit_org; Prior sd for bit pairs sharing an imaging round (tier 1, widest/most permissive), default 0.2 (matches the package's prior \code{sdcorr} default).
 #'    \item \code{sd_channel}: For use with bit_org; Prior sd for bit pairs sharing a color channel but not a round (tier 2), default 0.1.
 #'    \item \code{sd_other}: For use with bit_org; Prior sd for all remaining bit pairs (tier 3, pinned near \code{expectedcorr}), default 0.01.
-#' } 
+#' }
 #' Any element omitted from the supplied list falls back to its default. These values are used as the Gaussian prior-penalty term (when \code{weights$prior} or \code{weights$dispersion} are non-zero) and to draw the initial parameter point(s) before fitting begins. When \code{bit_org} is also supplied, \code{latent_bit_round} and \code{latent_bit_channel} will be extracted automatically and \code{sdcorr_pairs} will be automatically built from these two factors plus the values for \code{sd_round}, \code{sd_channel}, and \code{sd_other} (see \code{build_corr_priors()}).
+#' @examples
+#' # Toy 6-bit codebook with 2 genes and 2 blanks (min pairwise Hamming distance 4)
+#' codebook <- matrix(c(
+#'   0, 0, 1, 0, 1, 1,
+#'   0, 1, 0, 1, 0, 1,
+#'   1, 0, 0, 1, 1, 0,
+#'   1, 1, 1, 0, 0, 0
+#' ), nrow = 4, byrow = TRUE)
+#' rownames(codebook) <- c("Gene1", "Gene2", "Blank1", "Blank2")
+#'
+#' STdata <- data.frame(
+#'   rates     = c(500, 800, 50, 30),
+#'   variance  = c(25, 25, 10, 10),
+#'   counts    = c(480, 790, 55, 25),
+#'   row.names = rownames(codebook)
+#' )
+#'
+#' qc <- misread.qc(STdata, codebook, n_forks = 1, max_flips = 2, maxeval = 20)
+#' qc$fliprates
+#' qc$erctc_plus
 #' @export
 misread.qc <- function(
     STdata,
@@ -307,6 +337,30 @@ misread.qc <- function(
 #'    \item \code{PPV_by_step}: a data frame, one row per accepted MCMCSA step and one column per gene barcode, of the simulated PPV for that barcode at that step -- \code{misread.qc.DG()}-specific; \code{misread.qc()} fits a single point and has no chain of steps to trace.
 #' }
 #' @inheritSection misread.qc Flip-rate priors
+#' @examples
+#' # Toy 6-bit codebook with 2 genes and 2 blanks (min pairwise Hamming distance 4)
+#' codebook <- matrix(c(
+#'   0, 0, 1, 0, 1, 1,
+#'   0, 1, 0, 1, 0, 1,
+#'   1, 0, 0, 1, 1, 0,
+#'   1, 1, 1, 0, 0, 0
+#' ), nrow = 4, byrow = TRUE)
+#' rownames(codebook) <- c("Gene1", "Gene2", "Blank1", "Blank2")
+#'
+#' STdata <- data.frame(
+#'   rates     = c(500, 800, 50, 30),
+#'   variance  = c(25, 25, 10, 10),
+#'   counts    = c(480, 790, 55, 25),
+#'   row.names = rownames(codebook)
+#' )
+#'
+#' # Tiny schedule and cell count, just to keep the example fast
+#' dg <- misread.qc.DG(
+#'   STdata, codebook,
+#'   resamples = 2, burnin = 2, FR_search = 2, N_cells = 50,
+#'   n_forks = 1, n_tracker_updates = 0, max_calls_per_step = 10
+#' )
+#' dg$fliprates
 #' @export
 misread.qc.DG <- function(
     STdata,
@@ -421,6 +475,25 @@ misread.qc.DG <- function(
 #'    \item \code{sim_counts}: A matrix giving the actual simulated count per barcode (columns) for each simulation (rows).
 #'    }
 #' @inheritSection misread.qc Flip-rate priors
+#' @examples
+#' # Toy 6-bit codebook with 2 genes and 2 blanks (min pairwise Hamming distance 4)
+#' codebook <- matrix(c(
+#'   0, 0, 1, 0, 1, 1,
+#'   0, 1, 0, 1, 0, 1,
+#'   1, 0, 0, 1, 1, 0,
+#'   1, 1, 1, 0, 0, 0
+#' ), nrow = 4, byrow = TRUE)
+#' rownames(codebook) <- c("Gene1", "Gene2", "Blank1", "Blank2")
+#'
+#' STdata <- data.frame(
+#'   rates     = c(500, 800, 50, 30),
+#'   variance  = c(25, 25, 10, 10),
+#'   counts    = c(480, 790, 55, 25),
+#'   row.names = rownames(codebook)
+#' )
+#'
+#' bm <- sim.benchmark(STdata, codebook, n_sims = 2, n_forks = 1, max_flips = 2, maxeval = 20)
+#' bm$fr_stip
 #' @export
 sim.benchmark <- function(
     STdata,
@@ -489,6 +562,24 @@ sim.benchmark <- function(
 #' @param qc List, results from misread.qc function.
 #' @param min_PPV Numeric, PPV cutoff for "good" barcodes, defaults to 0.8.
 #' @return ggplot object showing estimated PPV, with its 95\% confidence interval, for each barcode with cutoff.
+#' @examples
+#' codebook <- matrix(c(
+#'   0, 0, 1, 0, 1, 1,
+#'   0, 1, 0, 1, 0, 1,
+#'   1, 0, 0, 1, 1, 0,
+#'   1, 1, 1, 0, 0, 0
+#' ), nrow = 4, byrow = TRUE)
+#' rownames(codebook) <- c("Gene1", "Gene2", "Blank1", "Blank2")
+#'
+#' STdata <- data.frame(
+#'   rates     = c(500, 800, 50, 30),
+#'   variance  = c(25, 25, 10, 10),
+#'   counts    = c(480, 790, 55, 25),
+#'   row.names = rownames(codebook)
+#' )
+#'
+#' qc <- misread.qc(STdata, codebook, n_forks = 1, max_flips = 2, maxeval = 20)
+#' plot_PPV(qc)
 #' @export
 plot_PPV <- function(
     qc,
@@ -540,6 +631,24 @@ plot_PPV <- function(
 #' 
 #' @param qc List, results from misread.qc function.
 #' @return ggplot object showing predicted vs observed counts for each barcode.
+#' @examples
+#' codebook <- matrix(c(
+#'   0, 0, 1, 0, 1, 1,
+#'   0, 1, 0, 1, 0, 1,
+#'   1, 0, 0, 1, 1, 0,
+#'   1, 1, 1, 0, 0, 0
+#' ), nrow = 4, byrow = TRUE)
+#' rownames(codebook) <- c("Gene1", "Gene2", "Blank1", "Blank2")
+#'
+#' STdata <- data.frame(
+#'   rates     = c(500, 800, 50, 30),
+#'   variance  = c(25, 25, 10, 10),
+#'   counts    = c(480, 790, 55, 25),
+#'   row.names = rownames(codebook)
+#' )
+#'
+#' qc <- misread.qc(STdata, codebook, n_forks = 1, max_flips = 2, maxeval = 20)
+#' plot_counts(qc)
 #' @export
 plot_counts <- function(
     qc
@@ -619,6 +728,29 @@ plot_counts <- function(
 #' 
 #' @param qc List, results from either the \code{misread.qc} function or the \code{sim.benchmark} function.
 #' @return ggplot object showing estimated flip rates for each bit and flip type; a distribution (violin plots) when \code{qc} comes from \code{sim.benchmark}, or point estimates when \code{qc} comes from \code{misread.qc}.
+#' @examples
+#' codebook <- matrix(c(
+#'   0, 0, 1, 0, 1, 1,
+#'   0, 1, 0, 1, 0, 1,
+#'   1, 0, 0, 1, 1, 0,
+#'   1, 1, 1, 0, 0, 0
+#' ), nrow = 4, byrow = TRUE)
+#' rownames(codebook) <- c("Gene1", "Gene2", "Blank1", "Blank2")
+#'
+#' STdata <- data.frame(
+#'   rates     = c(500, 800, 50, 30),
+#'   variance  = c(25, 25, 10, 10),
+#'   counts    = c(480, 790, 55, 25),
+#'   row.names = rownames(codebook)
+#' )
+#'
+#' # Point estimates from a single misread.qc fit
+#' qc <- misread.qc(STdata, codebook, n_forks = 1, max_flips = 2, maxeval = 20)
+#' plot_fr(qc)
+#'
+#' # Distribution across replicates from sim.benchmark
+#' bm <- sim.benchmark(STdata, codebook, n_sims = 2, n_forks = 1, max_flips = 2, maxeval = 20)
+#' plot_fr(bm)
 #' @export
 plot_fr <- function(
     qc

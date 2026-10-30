@@ -143,6 +143,34 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// mQC_DG
+List mQC_DG(NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int resamples, int burnin, int FR_search, double max_step_size, int min_step_size_divider, double max_temperature, double min_temperature_scale, int n_tracker_updates, int n_forks, int N_cells, List fliprate_priors, List weights, int max_fs_bc, int max_calls_per_step, unsigned int seed);
+RcppExport SEXP _flipFISH_mQC_DG(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP resamplesSEXP, SEXP burninSEXP, SEXP FR_searchSEXP, SEXP max_step_sizeSEXP, SEXP min_step_size_dividerSEXP, SEXP max_temperatureSEXP, SEXP min_temperature_scaleSEXP, SEXP n_tracker_updatesSEXP, SEXP n_forksSEXP, SEXP N_cellsSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP max_fs_bcSEXP, SEXP max_calls_per_stepSEXP, SEXP seedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type bc_counts(bc_countsSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type codebook(codebookSEXP);
+    Rcpp::traits::input_parameter< int >::type maxHam(maxHamSEXP);
+    Rcpp::traits::input_parameter< int >::type resamples(resamplesSEXP);
+    Rcpp::traits::input_parameter< int >::type burnin(burninSEXP);
+    Rcpp::traits::input_parameter< int >::type FR_search(FR_searchSEXP);
+    Rcpp::traits::input_parameter< double >::type max_step_size(max_step_sizeSEXP);
+    Rcpp::traits::input_parameter< int >::type min_step_size_divider(min_step_size_dividerSEXP);
+    Rcpp::traits::input_parameter< double >::type max_temperature(max_temperatureSEXP);
+    Rcpp::traits::input_parameter< double >::type min_temperature_scale(min_temperature_scaleSEXP);
+    Rcpp::traits::input_parameter< int >::type n_tracker_updates(n_tracker_updatesSEXP);
+    Rcpp::traits::input_parameter< int >::type n_forks(n_forksSEXP);
+    Rcpp::traits::input_parameter< int >::type N_cells(N_cellsSEXP);
+    Rcpp::traits::input_parameter< List >::type fliprate_priors(fliprate_priorsSEXP);
+    Rcpp::traits::input_parameter< List >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< int >::type max_fs_bc(max_fs_bcSEXP);
+    Rcpp::traits::input_parameter< int >::type max_calls_per_step(max_calls_per_stepSEXP);
+    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(mQC_DG(bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc, max_calls_per_step, seed));
+    return rcpp_result_gen;
+END_RCPP
+}
 // tr_sum_check
 double tr_sum_check(int bc, const std::vector<double>& rate10, const std::vector<double>& rate01, const std::vector<double>& corr1, const std::vector<double>& corr0);
 RcppExport SEXP _flipFISH_tr_sum_check(SEXP bcSEXP, SEXP rate10SEXP, SEXP rate01SEXP, SEXP corr1SEXP, SEXP corr0SEXP) {
@@ -288,34 +316,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// mQC_DG
-List mQC_DG(NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int resamples, int burnin, int FR_search, double max_step_size, int min_step_size_divider, double max_temperature, double min_temperature_scale, int n_tracker_updates, int n_forks, int N_cells, List fliprate_priors, List weights, int max_fs_bc, int max_calls_per_step, unsigned int seed);
-RcppExport SEXP _flipFISH_mQC_DG(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP resamplesSEXP, SEXP burninSEXP, SEXP FR_searchSEXP, SEXP max_step_sizeSEXP, SEXP min_step_size_dividerSEXP, SEXP max_temperatureSEXP, SEXP min_temperature_scaleSEXP, SEXP n_tracker_updatesSEXP, SEXP n_forksSEXP, SEXP N_cellsSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP max_fs_bcSEXP, SEXP max_calls_per_stepSEXP, SEXP seedSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericMatrix >::type bc_counts(bc_countsSEXP);
-    Rcpp::traits::input_parameter< IntegerMatrix >::type codebook(codebookSEXP);
-    Rcpp::traits::input_parameter< int >::type maxHam(maxHamSEXP);
-    Rcpp::traits::input_parameter< int >::type resamples(resamplesSEXP);
-    Rcpp::traits::input_parameter< int >::type burnin(burninSEXP);
-    Rcpp::traits::input_parameter< int >::type FR_search(FR_searchSEXP);
-    Rcpp::traits::input_parameter< double >::type max_step_size(max_step_sizeSEXP);
-    Rcpp::traits::input_parameter< int >::type min_step_size_divider(min_step_size_dividerSEXP);
-    Rcpp::traits::input_parameter< double >::type max_temperature(max_temperatureSEXP);
-    Rcpp::traits::input_parameter< double >::type min_temperature_scale(min_temperature_scaleSEXP);
-    Rcpp::traits::input_parameter< int >::type n_tracker_updates(n_tracker_updatesSEXP);
-    Rcpp::traits::input_parameter< int >::type n_forks(n_forksSEXP);
-    Rcpp::traits::input_parameter< int >::type N_cells(N_cellsSEXP);
-    Rcpp::traits::input_parameter< List >::type fliprate_priors(fliprate_priorsSEXP);
-    Rcpp::traits::input_parameter< List >::type weights(weightsSEXP);
-    Rcpp::traits::input_parameter< int >::type max_fs_bc(max_fs_bcSEXP);
-    Rcpp::traits::input_parameter< int >::type max_calls_per_step(max_calls_per_stepSEXP);
-    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
-    rcpp_result_gen = Rcpp::wrap(mQC_DG(bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc, max_calls_per_step, seed));
-    return rcpp_result_gen;
-END_RCPP
-}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_flipFISH_lower_tri_pairs", (DL_FUNC) &_flipFISH_lower_tri_pairs, 1},
@@ -326,6 +326,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_flipFISH_mQC_counts_at", (DL_FUNC) &_flipFISH_mQC_counts_at, 6},
     {"_flipFISH_mQC_ehc_jacobian_at", (DL_FUNC) &_flipFISH_mQC_ehc_jacobian_at, 6},
     {"_flipFISH_test_fr_recovery", (DL_FUNC) &_flipFISH_test_fr_recovery, 12},
+    {"_flipFISH_mQC_DG", (DL_FUNC) &_flipFISH_mQC_DG, 18},
     {"_flipFISH_tr_sum_check", (DL_FUNC) &_flipFISH_tr_sum_check, 5},
     {"_flipFISH_bvn_cdf_uppertail_test", (DL_FUNC) &_flipFISH_bvn_cdf_uppertail_test, 3},
     {"_flipFISH_dg_find_sigma_RootBisection_test", (DL_FUNC) &_flipFISH_dg_find_sigma_RootBisection_test, 3},
@@ -337,7 +338,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_flipFISH_rng_poisson_draw_test", (DL_FUNC) &_flipFISH_rng_poisson_draw_test, 3},
     {"_flipFISH_rng_normal_paramtype_draw_test", (DL_FUNC) &_flipFISH_rng_normal_paramtype_draw_test, 5},
     {"_flipFISH_dg_ppois_lower_test", (DL_FUNC) &_flipFISH_dg_ppois_lower_test, 2},
-    {"_flipFISH_mQC_DG", (DL_FUNC) &_flipFISH_mQC_DG, 18},
     {NULL, NULL, 0}
 };
 
