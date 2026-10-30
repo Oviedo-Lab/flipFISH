@@ -2972,7 +2972,7 @@ SpotSim make_SpotSim_DG(
     // comment for why that's both correct and fork-safe.
     Vint active;
     for (int b = 0; b < N_barcodes; ++b) {if (true_counts[b] > 0) {active.push_back(b);}}
-
+   
     // Batch active barcodes across forks (same pattern as make_SpotSim())
     int n_active = active.size();
     int n_use    = std::max(1, std::min(n_forks, std::max(1, n_active)));
@@ -3006,7 +3006,7 @@ SpotSim make_SpotSim_DG(
         for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
       }
     );
-
+   
     sim.read_counts.resize(N_barcodes, 0);
     sim.corrected_counts.resize(N_barcodes, 0);
     sim.hit_counts.resize(N_barcodes, 0);
@@ -3034,40 +3034,43 @@ SpotSim make_SpotSim_DG(
      */
   }
 
-// Mean of x (no NaN handling -- see dg_median_skipna()/dg_quantile_skipna() when that's needed).
+// Mean of x 
 double dg_mean(const Vdbl& x) {
-  return std::accumulate(x.begin(), x.end(), 0.0) / static_cast<double>(x.size());
-}
+    return std::accumulate(x.begin(), x.end(), 0.0) / static_cast<double>(x.size());
+    // no NaN handling -- see dg_median_skipna()/dg_quantile_skipna() when that's needed
+  }
 
-// Median of x, skipping NaN entries (NA_REAL if nothing finite is left), matching R's median().
+// Median of x, skipping NaN entries (NA_REAL if nothing finite is left), matching R's median()
 double dg_median_skipna(Vdbl x) {
-  Vdbl finite;
-  finite.reserve(x.size());
-  for (double xi : x) {if (!std::isnan(xi)) {finite.push_back(xi);}}
-  if (finite.empty()) {return NA_REAL;}
-  std::sort(finite.begin(), finite.end());
-  size_t n = finite.size();
-  return n % 2 == 1 ? finite[n / 2] : (finite[n / 2 - 1] + finite[n / 2]) / 2.0;
+    Vdbl finite;
+    finite.reserve(x.size());
+    for (double xi : x) {if (!std::isnan(xi)) {finite.push_back(xi);}}
+    if (finite.empty()) {return NA_REAL;}
+    std::sort(finite.begin(), finite.end());
+    size_t n = finite.size();
+    return n % 2 == 1 ? finite[n / 2] : (finite[n / 2 - 1] + finite[n / 2]) / 2.0;
+    // Matches R's median() with NAs removed: for an even count of finite values, the mean of the two middle ones.
+  }
 
-  /* Matches R's median() with NAs removed: for an even count of finite values, the mean of the
-   * two middle ones. */
-}
+// Quantile of x at probability q, skipping NaN entries, matching R's default quantile (type = 7).
+double dg_quantile_skipna(
+    Vdbl   x, 
+    double q
+  ) {
+    Vdbl finite;
+    finite.reserve(x.size());
+    for (double xi : x) {if (!std::isnan(xi)) {finite.push_back(xi);}}
+    if (finite.empty()) {return NA_REAL;}
+    std::sort(finite.begin(), finite.end());
+    size_t n  = finite.size();
+    if (n == 1) {return finite[0];}
+    double h  = (static_cast<double>(n) - 1.0) * q;
+    size_t lo = static_cast<size_t>(std::floor(h));
+    size_t hi = static_cast<size_t>(std::ceil(h));
+    return finite[lo] + (h - static_cast<double>(lo)) * (finite[hi] - finite[lo]);
+  }
 
-// Quantile of x at probability q, skipping NaN entries, matching R's default quantile(type = 7).
-double dg_quantile_skipna(Vdbl x, double q) {
-  Vdbl finite;
-  finite.reserve(x.size());
-  for (double xi : x) {if (!std::isnan(xi)) {finite.push_back(xi);}}
-  if (finite.empty()) {return NA_REAL;}
-  std::sort(finite.begin(), finite.end());
-  size_t n = finite.size();
-  if (n == 1) {return finite[0];}
-  double h       = (static_cast<double>(n) - 1.0) * q;
-  size_t lo      = static_cast<size_t>(std::floor(h));
-  size_t hi      = static_cast<size_t>(std::ceil(h));
-  return finite[lo] + (h - static_cast<double>(lo)) * (finite[hi] - finite[lo]);
-}
-
+// Run DG simulation and compute msle
 DGStepResult dg_simulation_step(
     const ST_data&          STdata,
     const FlipRates&        fr,
@@ -3078,10 +3081,11 @@ DGStepResult dg_simulation_step(
     int                     n_forks,
     boost::random::mt19937& rng
   ) {
+    // FLAGGED FOR REVIEW
     const Codebook& cb       = STdata.cb;
     int             N_genes  = cb.genes.size();
     int             N_blanks = cb.blanks.size();
-
+   
     // 1. Draw this step's true counts and simulate/decode spots
     Vint true_counts = dg_draw_true_counts(STdata, fr, N_cells, rng);
     SpotSim sim = make_SpotSim_DG(true_counts, cb, fr, STdata.correction_table, ran_seed, n_forks);
@@ -3162,7 +3166,7 @@ Vint dg_sample_without_replacement(
     }
     idx.resize(k_use);
     return idx;
-
+   
     /*
      * Partial Fisher-Yates via the caller's boost::random::mt19937, so the whole MCMCSA walk's
      * reproducibility is controlled by mQC_DG()'s own `seed` argument, not R's set.seed() -- matching
@@ -3172,15 +3176,14 @@ Vint dg_sample_without_replacement(
      */
   }
 
-// dg_simulation_step()'s sim_msle, plus mQC_DG()'s optional prior/dispersion and feasibility penalty
-// terms (each only added when its weight is > 0) -- the full per-step/initial MCMCSA objective.
+// Full MCMCSA objective.
 double dg_penalized_msle(
-    double                 base_msle,
-    const FlipRates&       fr,
-    const FlipRatePriors&  fr_priors,
-    const Weights&         w,
-    const Codebook&        cb,
-    int                    max_fs_bc
+    double                base_msle,
+    const FlipRates&      fr,
+    const FlipRatePriors& fr_priors,
+    const Weights&        w,
+    const Codebook&       cb,
+    int                   max_fs_bc
   ) {
     double msle = base_msle;
     if (w.prior > 0.0 || w.dispersion > 0.0) {
@@ -3192,6 +3195,8 @@ double dg_penalized_msle(
       // ^ ... also shared with the objective function in mQC
     }
     return msle;
+    // ^ ... dg_simulation_step()'s sim_msle, plus mQC_DG()'s optional prior/dispersion and feasibility penalty
+    // terms (each only added when its weight is > 0) -- 
   }
 
 // C++ engine behind misread.qc.DG(): fits FlipRates via Markov Chain Monte Carlo Simulated Annealing over dichotomized Gaussians.
@@ -3299,7 +3304,7 @@ List mQC_DG(
     Rcpp::Rcout << "\n\nRunning Markov chain steps: \n\nRunning initial steps ..." << std::endl;
     int          step = 0, ctr = 0, last_step = 0, last_ctr = 0; // Initialize counters
     int          attempts_this_step     = 0;                     // resets whenever step advances; see max_calls_per_step above
-    bool         maintain_gene_identity = false;                 // NEED DESCRIPTION
+    bool         maintain_gene_identity = false;                 // see below
     double       rate10_mean            = NA_REAL; 
     double       rate01_mean            = NA_REAL;
     const double FR_sample_fraction     = 0.8;                   // last 20% of the flip-rate search window feeds the burn-in reset means
@@ -3310,6 +3315,21 @@ List mQC_DG(
       for (double p : pt) {progress_tracker.push_back(static_cast<int>(std::round(p)));}
       progress_tracker.back() = n_steps;
     }
+    
+    /*
+     * maintain_gene_identity (dg_simulation_step()'s flag) controls how simulated and observed
+     * per-barcode counts get paired off before the weighted msle is computed:
+     *   false -> both sides are sorted descending independently, and the i-th largest simulated
+     *            count is compared to the i-th largest observed count regardless of gene identity
+     *            (a loose, distribution-shape-only comparison).
+     *   true  -> the observed descending rank order is applied to both sides, so a gene's
+     *            simulated count is compared only against that same gene's observed count
+     *            (a strict, gene-matched comparison).
+     * It starts false for the initial simulation and throughout the flip-rate search below, then
+     * flips to true (just below, once) when the walk exits FR_search and enters burn-in, so the
+     * loose shape-only objective is used to find reasonable flip rates quickly, while the stricter
+     * gene-matched objective is used once burn-in/resampling need faithful per-gene fits.
+     */
    
     // MCMC walk
     while (step < n_steps) {
