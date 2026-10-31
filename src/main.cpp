@@ -9,7 +9,7 @@
 #include <unordered_set>
 #include <map>          // std::map, used by draw_structured_corr() to group bits by round/channel
 #include <numeric>      // std::accumulate
-#include "fork_utils.h" // run_forked_batches() -- shared fork/pipe map-reduce, Windows-guarded
+#include "mc_parallel_utils.h" // batch map-reduce dispatched via parallel::mcparallel()/mccollect(), Windows-guarded
 #include <nloptrAPI.h>  // L-BFGS and other gradient-based optimizers, via nloptr's bundled NLopt --
                         // plain C API only: nloptrAPI.h proxies each call through R's CCallable
                         // registry (R_GetCCallable("nloptr", ...)) rather than linking a system
@@ -425,6 +425,21 @@ FlipRates pack_fr(
     // Precompute log flip rates used in TR
     fill_log_rates(fr);
     return fr;
+  }
+
+// Inverse of pack_fr(): flattens a FlipRates struct back to [rate10 | rate01 | corr1 | corr0].
+// Used to pass the current trial point across the fork boundary when dispatching batches via
+// parallel::mcparallel() (the packed struct itself isn't a plain R-serializable vector).
+Vdbl unpack_fr(
+    const FlipRates& fr
+  ) {
+    Vdbl out;
+    out.reserve(fr.rate10.size() + fr.rate01.size() + fr.corr1.size() + fr.corr0.size());
+    out.insert(out.end(), fr.rate10.begin(), fr.rate10.end());
+    out.insert(out.end(), fr.rate01.begin(), fr.rate01.end());
+    out.insert(out.end(), fr.corr1.begin(),  fr.corr1.end());
+    out.insert(out.end(), fr.corr0.begin(),  fr.corr0.end());
+    return out;
   }
 
 // Extract flip rate priors from input
@@ -1444,6 +1459,109 @@ std::tuple<double, double, double> expected_bc_count(
     return {count_read, count_corrected, count_hit};
   }
 
+// Per-batch worker shared by expected_bc_counts()'s serial (n_forks<=1) and parallel paths: plain
+// C++ types throughout (no Rcpp marshalling) since the serial path -- the common case -- runs this
+// directly in-process on every nlopt evaluation.
+struct EccBatchResult {
+    Vdbl erc, ecc, ehc;                        // size = batch_indices.size()
+    Vdbl grad_ecc_flat, grad_erc_flat, grad_ehc_flat; // size = batch_indices.size() * n_params when requested, else empty
+  };
+
+EccBatchResult compute_ecc_batch(
+    const FlipRates& fr,
+    const Vint&      bc_counts,
+    const V64&       barcodes,
+    const LUTr&      cti,
+    const Vint&      batch_indices,
+    int              max_flips,
+    int              n_params,
+    bool             do_grad,
+    bool             do_grad_erc,
+    bool             do_grad_ehc
+  ) {
+    int bsize = batch_indices.size();
+    EccBatchResult res;
+    res.erc.assign(bsize, 0.0);
+    res.ecc.assign(bsize, 0.0);
+    res.ehc.assign(bsize, 0.0);
+    if (do_grad)     res.grad_ecc_flat.assign(static_cast<size_t>(bsize) * n_params, 0.0);
+    if (do_grad_erc) res.grad_erc_flat.assign(static_cast<size_t>(bsize) * n_params, 0.0);
+    if (do_grad_ehc) res.grad_ehc_flat.assign(static_cast<size_t>(bsize) * n_params, 0.0);
+
+    Vdbl grad_ecc_b(do_grad     ? n_params : 0, 0.0);
+    Vdbl grad_erc_b(do_grad_erc ? n_params : 0, 0.0);
+    Vdbl grad_ehc_b(do_grad_ehc ? n_params : 0, 0.0);
+
+    for (int bi = 0; bi < bsize; ++bi) {
+      int b = batch_indices[bi];
+      if (do_grad)     std::fill(grad_ecc_b.begin(), grad_ecc_b.end(), 0.0);
+      if (do_grad_erc) std::fill(grad_erc_b.begin(), grad_erc_b.end(), 0.0);
+      if (do_grad_ehc) std::fill(grad_ehc_b.begin(), grad_ehc_b.end(), 0.0);
+      std::tuple<double, double, double> erchc = expected_bc_count(
+        barcodes[b], fr, bc_counts, barcodes, cti.at(b), max_flips,
+        do_grad     ? &grad_ecc_b : nullptr,
+        do_grad_erc ? &grad_erc_b : nullptr,
+        do_grad_ehc ? &grad_ehc_b : nullptr
+      );
+      res.erc[bi] = std::get<0>(erchc);
+      res.ecc[bi] = std::get<1>(erchc);
+      res.ehc[bi] = std::get<2>(erchc);
+      if (do_grad)     std::copy(grad_ecc_b.begin(), grad_ecc_b.end(), res.grad_ecc_flat.begin() + bi * n_params);
+      if (do_grad_erc) std::copy(grad_erc_b.begin(), grad_erc_b.end(), res.grad_erc_flat.begin() + bi * n_params);
+      if (do_grad_ehc) std::copy(grad_ehc_b.begin(), grad_ehc_b.end(), res.grad_ehc_flat.begin() + bi * n_params);
+    }
+    return res;
+  }
+
+// Shared, read-only, non-owning context for one expected_bc_counts() call's worth of batches: just
+// pointers into the caller's own (longer-lived) bc_counts/barcodes/cti, so building this context to
+// fork across costs nothing beyond the pointers themselves -- no copy of cti (which can hold many
+// thousands of entries) is ever made.
+struct EccBatchCtx {
+    const Vint* bc_counts;
+    const V64*  barcodes;
+    const LUTr* cti;
+  };
+
+// Computes one batch, for dispatch via parallel::mcparallel() (mc_parallel_utils.h) from a forked
+// child -- see compute_ecc_batch() above for the actual math, shared with the serial path.
+// [[Rcpp::export]]
+List mc_batch_expected_bc_counts(
+    SEXP                       ctx_sexp,
+    const std::vector<double>& FR,
+    int                        N_bits,
+    IntegerVector              indices,
+    int                        max_flips,
+    bool                       do_grad,
+    bool                       do_grad_erc,
+    bool                       do_grad_ehc
+  ) {
+    XPtr<EccBatchCtx> ctx(ctx_sexp);
+    FlipRates fr        = pack_fr(Vdbl(FR.begin(), FR.end()), N_bits);
+    int       n_params  = static_cast<int>(FR.size());
+    Vint      batch_indices(indices.begin(), indices.end());
+
+    EccBatchResult res = compute_ecc_batch(
+      fr, *(ctx->bc_counts), *(ctx->barcodes), *(ctx->cti), batch_indices, max_flips, n_params,
+      do_grad, do_grad_erc, do_grad_ehc
+    );
+
+    int bsize = batch_indices.size();
+    NumericMatrix grad_ecc_mat(do_grad     ? bsize : 0, do_grad     ? n_params : 0);
+    NumericMatrix grad_erc_mat(do_grad_erc ? bsize : 0, do_grad_erc ? n_params : 0);
+    NumericMatrix grad_ehc_mat(do_grad_ehc ? bsize : 0, do_grad_ehc ? n_params : 0);
+    for (int bi = 0; bi < bsize; ++bi) {
+      if (do_grad)     for (int k = 0; k < n_params; ++k) {grad_ecc_mat(bi, k) = res.grad_ecc_flat[bi * n_params + k];}
+      if (do_grad_erc) for (int k = 0; k < n_params; ++k) {grad_erc_mat(bi, k) = res.grad_erc_flat[bi * n_params + k];}
+      if (do_grad_ehc) for (int k = 0; k < n_params; ++k) {grad_ehc_mat(bi, k) = res.grad_ehc_flat[bi * n_params + k];}
+    }
+
+    return List::create(
+      _["erc"] = wrap(res.erc), _["ecc"] = wrap(res.ecc), _["ehc"] = wrap(res.ehc),
+      _["grad_ecc"] = grad_ecc_mat, _["grad_erc"] = grad_erc_mat, _["grad_ehc"] = grad_ehc_mat
+    );
+  }
+
 // Estimate expected barcode counts (read, expected, and hit), as a function of flip rates and true barcode counts, for all barcodes.
 std::tuple<Vdbl, Vdbl, Vdbl> expected_bc_counts(
     const FlipRates& fr,                      // FlipRates struct holding rate10, rate01, and corr
@@ -1463,126 +1581,84 @@ std::tuple<Vdbl, Vdbl, Vdbl> expected_bc_counts(
     bool do_grad     = (grad_ecc != nullptr);
     bool do_grad_erc = do_grad && (grad_erc != nullptr);
     bool do_grad_ehc = do_grad && (grad_ehc != nullptr);
-    Vdbl ecc(N_barcodes, 0.0); // expected corrected counts
-    Vdbl erc(N_barcodes, 0.0); // expected read counts
-    Vdbl ehc(N_barcodes, 0.0); // expected hit (i.e., correctly read) counts
-   
-    // Construct batches of barcodes to process in parallel
-    std::vector<Vint> barcode_batches(n_forks);
-    for (int batch = 0; batch < n_forks; ++batch) {
-      int start = (batch * N_barcodes) / n_forks;
-      int end   = ((batch + 1) * N_barcodes) / n_forks;
-      for (int i = start; i < end; ++i) {barcode_batches[batch].push_back(i);}
+
+    int n_use = n_forks;
+#ifdef _WIN32
+    n_use = 1; // parallel::mcparallel() has no Windows equivalent (no fork())
+#endif
+
+    // Serial (n_use<=1): run compute_ecc_batch() directly in-process, on every barcode, no forking.
+    if (n_use <= 1) {
+      Vint all_indices(N_barcodes);
+      for (int i = 0; i < N_barcodes; ++i) {all_indices[i] = i;}
+      EccBatchResult res = compute_ecc_batch(fr, bc_counts, barcodes, cti, all_indices, max_flips, n_params, do_grad, do_grad_erc, do_grad_ehc);
+      if (do_grad)     *grad_ecc = res.grad_ecc_flat;
+      if (do_grad_erc) *grad_erc = res.grad_erc_flat;
+      if (do_grad_ehc) *grad_ehc = res.grad_ehc_flat;
+      return {res.erc, res.ecc, res.ehc};
     }
-    if (n_forks == 1 && barcode_batches[0].size() != N_barcodes) {
-      Rcpp::stop("Error in batching barcodes for simulation. Expected all barcodes to be in one batch when n_forks=1.");
+
+    // Parallel: split barcodes into n_use contiguous batches, dispatch each via
+    // parallel::mcparallel()/mccollect() (mc_parallel_utils.h), then reduce into erc/ecc/ehc/grad_*.
+    std::vector<Vint> batches(n_use);
+    for (int batch = 0; batch < n_use; ++batch) {
+      int start = (batch * N_barcodes) / n_use;
+      int end   = ((batch + 1) * N_barcodes) / n_use;
+      for (int i = start; i < end; ++i) {batches[batch].push_back(i);}
     }
-   
-    // Child payload layout (per barcode in batch):
-    //   [erc_0..erc_{N-1} | ecc_0..ecc_{N-1} | ehc_0..ehc_{N-1} | grad_ecc_b0..b{N-1} | grad_erc_b0..b{N-1} (if requested) | grad_ehc_b0..b{N-1} (if requested)]
-    // where each grad_*_b is n_params doubles. The grad_ecc block is present when do_grad=true; the
-    // grad_erc and grad_ehc blocks are each independently present when do_grad_erc/do_grad_ehc=true,
-    // in that fixed order (erc before ehc) whenever both are requested. Run via run_forked_batches()
-    // (fork_utils.h): batches run in forked children when n_forks > 1 (POSIX only), else serially
-    // in this process -- see that header for why both cases share this same per-batch logic.
-    int n_grad_blocks = do_grad ? (1 + (do_grad_erc ? 1 : 0) + (do_grad_ehc ? 1 : 0)) : 0;
-   
-    run_forked_batches<double>(
-      n_forks,
-      // batch_payload_size
-      [&](int i) -> size_t {
-        return static_cast<size_t>(3 + n_grad_blocks * n_params) * barcode_batches[i].size();
+
+    EccBatchCtx* raw_ctx = new EccBatchCtx{&bc_counts, &barcodes, &cti};
+    XPtr<EccBatchCtx> ctx_ptr(raw_ctx, true);
+    Vdbl     FR_flat  = unpack_fr(fr);
+    Function batch_fn = Environment::namespace_env("flipFISH")["mc_batch_expected_bc_counts"];
+
+    Vdbl erc(N_barcodes, 0.0), ecc(N_barcodes, 0.0), ehc(N_barcodes, 0.0);
+    if (do_grad)     grad_ecc->assign(static_cast<size_t>(N_barcodes) * n_params, 0.0);
+    if (do_grad_erc) grad_erc->assign(static_cast<size_t>(N_barcodes) * n_params, 0.0);
+    if (do_grad_ehc) grad_ehc->assign(static_cast<size_t>(N_barcodes) * n_params, 0.0);
+
+    run_mc_batches(
+      n_use,
+      // build_call
+      [&](int i) -> Language {
+        IntegerVector idx(batches[i].begin(), batches[i].end());
+        return Language(batch_fn, ctx_ptr, FR_flat, N_bits, idx, max_flips, do_grad, do_grad_erc, do_grad_ehc);
       },
-      // compute_batch
-      [&](int i) -> Vdbl {
-        int  N_barcodes_batch = barcode_batches[i].size();
-        int  payload_size     = (3 + n_grad_blocks * n_params) * N_barcodes_batch;
-        Vdbl erchc_child(payload_size, 0.0);
-        Vdbl grad_ecc_b(do_grad     ? n_params : 0, 0.0); // per-barcode ecc-gradient buffer
-        Vdbl grad_erc_b(do_grad_erc ? n_params : 0, 0.0); // per-barcode erc-gradient buffer
-        Vdbl grad_ehc_b(do_grad_ehc ? n_params : 0, 0.0); // per-barcode ehc-gradient buffer
-       
-        // Fixed block offsets within the grad region (ecc block always first when do_grad; erc
-        // block next if requested; ehc block after that, right after whichever of ecc/erc precedes it)
-        int ecc_grad_start = 3 * N_barcodes_batch;
-        int erc_grad_start = ecc_grad_start + N_barcodes_batch * n_params;
-        int ehc_grad_start = erc_grad_start + (do_grad_erc ? N_barcodes_batch * n_params : 0);
-        
-        for (int b = 0; b < N_barcodes_batch; ++b) {
-          if (do_grad)     std::fill(grad_ecc_b.begin(), grad_ecc_b.end(), 0.0);
-          if (do_grad_erc) std::fill(grad_erc_b.begin(), grad_erc_b.end(), 0.0);
-          if (do_grad_ehc) std::fill(grad_ehc_b.begin(), grad_ehc_b.end(), 0.0);
-          std::tuple<double, double, double> erchc = expected_bc_count(
-            barcodes[barcode_batches[i][b]],
-            fr, bc_counts, barcodes,
-            cti.at(barcode_batches[i][b]),
-            max_flips,
-            do_grad     ? &grad_ecc_b : nullptr,
-            do_grad_erc ? &grad_erc_b : nullptr,
-            do_grad_ehc ? &grad_ehc_b : nullptr
-          );
-          erchc_child[b]                      = std::get<0>(erchc); // expected read count
-          erchc_child[b + N_barcodes_batch]   = std::get<1>(erchc); // expected corrected count
-          erchc_child[b + 2*N_barcodes_batch] = std::get<2>(erchc); // expected hit count
-          if (do_grad) {
-            std::copy(grad_ecc_b.begin(), grad_ecc_b.end(),
-                      erchc_child.begin() + ecc_grad_start + b*n_params);
-          }
-          if (do_grad_erc) {
-            std::copy(grad_erc_b.begin(), grad_erc_b.end(),
-                      erchc_child.begin() + erc_grad_start + b*n_params);
-          }
-          if (do_grad_ehc) {
-            std::copy(grad_ehc_b.begin(), grad_ehc_b.end(),
-                      erchc_child.begin() + ehc_grad_start + b*n_params);
+      // reduce
+      [&](int i, SEXP result) {
+        List          res   = result;
+        NumericVector r_erc = res["erc"], r_ecc = res["ecc"], r_ehc = res["ehc"];
+        int bsize = batches[i].size();
+        for (int bi = 0; bi < bsize; ++bi) {
+          int bidx  = batches[i][bi];
+          erc[bidx] = r_erc[bi];
+          ecc[bidx] = r_ecc[bi];
+          ehc[bidx] = r_ehc[bi];
+        }
+        if (do_grad) {
+          NumericMatrix gm = res["grad_ecc"];
+          for (int bi = 0; bi < bsize; ++bi) {
+            int bidx = batches[i][bi];
+            for (int k = 0; k < n_params; ++k) {(*grad_ecc)[bidx * n_params + k] = gm(bi, k);}
           }
         }
-        return erchc_child;
-      },
-      // reduce_batch
-      [&](int i, const Vdbl& erchc_child) {
-        int N_barcodes_batch = barcode_batches[i].size();
-
-        // Same fixed block offsets as compute_batch used to build this payload (see above)
-        int ecc_grad_start = 3 * N_barcodes_batch;
-        int erc_grad_start = ecc_grad_start + N_barcodes_batch * n_params;
-        int ehc_grad_start = erc_grad_start + (do_grad_erc ? N_barcodes_batch * n_params : 0);
-
-        for (int b = 0; b < N_barcodes_batch; ++b) {
-          int bc_idx = barcode_batches[i][b];
-          erc[bc_idx] += erchc_child[b];
-          ecc[bc_idx] += erchc_child[b + N_barcodes_batch];
-          ehc[bc_idx] += erchc_child[b + 2*N_barcodes_batch];
-          if (do_grad) {
-            std::copy(
-              erchc_child.begin() + ecc_grad_start + b*n_params,
-              erchc_child.begin() + ecc_grad_start + (b+1)*n_params,
-              grad_ecc->begin() + bc_idx * n_params
-            );
-          }
-          if (do_grad_erc) {
-            std::copy(
-              erchc_child.begin() + erc_grad_start + b*n_params,
-              erchc_child.begin() + erc_grad_start + (b+1)*n_params,
-              grad_erc->begin() + bc_idx * n_params
-            );
-          }
-          if (do_grad_ehc) {
-            std::copy(
-              erchc_child.begin() + ehc_grad_start + b*n_params,
-              erchc_child.begin() + ehc_grad_start + (b+1)*n_params,
-              grad_ehc->begin() + bc_idx * n_params
-            );
+        if (do_grad_erc) {
+          NumericMatrix gm = res["grad_erc"];
+          for (int bi = 0; bi < bsize; ++bi) {
+            int bidx = batches[i][bi];
+            for (int k = 0; k < n_params; ++k) {(*grad_erc)[bidx * n_params + k] = gm(bi, k);}
           }
         }
-      },
-      // batch_error_context
-      [&](int i) -> std::string {
-        return "\nBatch size: " + std::to_string(barcode_batches[i].size()) + " barcodes, from " +
-               std::to_string(barcode_batches[i][0]) + " to " + std::to_string(barcode_batches[i].back()) + ".";
+        if (do_grad_ehc) {
+          NumericMatrix gm = res["grad_ehc"];
+          for (int bi = 0; bi < bsize; ++bi) {
+            int bidx = batches[i][bi];
+            for (int k = 0; k < n_params; ++k) {(*grad_ehc)[bidx * n_params + k] = gm(bi, k);}
+          }
+        }
       }
     );
-   
+
     return {erc, ecc, ehc};
   }
 
@@ -2395,7 +2471,7 @@ NumericMatrix mQC_ehc_jacobian_at(
      * corrected-count one. Added for the delta-method PPV confidence interval (PPV_b = ehc_b/ecc_b, so
      * its gradient needs both Jacobians via the quotient rule) -- see mQC()'s CI computation.
      * 
-     * Initial draft of this function written by Claude Sonnet 5. 
+     * Initial draft of this function written by Claude Sonnet 5.
      */
   }
 
@@ -2473,68 +2549,109 @@ Vint simulate_barcode_spots(
     return rch_counts;
   }
 
+// Per-batch worker shared by make_SpotSim()'s serial (n_forks<=1) and parallel paths.
+Vint compute_spotsim_batch(
+    const Vint&      bc_counts,
+    const Codebook&  cb,
+    const FlipRates& fr,
+    const LUT&       correction_table,
+    int              ran_seed,
+    const Vint&      batch_indices
+  ) {
+    int  cache_size = 3 * static_cast<int>(cb.barcodes.size());
+    Vint rch_counts_batch(cache_size, 0);
+    for (int b : batch_indices) {
+      boost::random::mt19937 rng(ran_seed + b);
+      Vint temp_vec = simulate_barcode_spots(b, bc_counts[b], fr, correction_table, cb.barcodes, rng);
+      for (int j = 0; j < cache_size; ++j) {rch_counts_batch[j] += temp_vec[j];}
+    }
+    return rch_counts_batch;
+  }
+
+// Shared, read-only, non-owning context for one make_SpotSim() call's worth of batches -- just
+// pointers into the caller's own (longer-lived) cb/correction_table.
+struct SpotSimCtx {
+    const Codebook* cb;
+    const LUT*      correction_table;
+  };
+
+// Computes one batch, for dispatch via parallel::mcparallel() (mc_parallel_utils.h) from a forked
+// child -- see compute_spotsim_batch() above for the actual math, shared with the serial path.
+// [[Rcpp::export]]
+IntegerVector mc_batch_spotsim(
+    SEXP                       ctx_sexp,
+    IntegerVector              bc_counts_r,
+    const std::vector<double>& FR,
+    int                        N_bits,
+    int                        ran_seed,
+    IntegerVector              indices
+  ) {
+    XPtr<SpotSimCtx> ctx(ctx_sexp);
+    Vint      bc_counts(bc_counts_r.begin(), bc_counts_r.end());
+    FlipRates fr = pack_fr(Vdbl(FR.begin(), FR.end()), N_bits);
+    Vint      batch_indices(indices.begin(), indices.end());
+    Vint      result = compute_spotsim_batch(bc_counts, *(ctx->cb), fr, *(ctx->correction_table), ran_seed, batch_indices);
+    return wrap(result);
+  }
+
 SpotSim make_SpotSim(
     const Vint&      bc_counts,             // Ground-truth counts, per barcode
-    const Codebook&  cb, 
-    const FlipRates& fr, 
+    const Codebook&  cb,
+    const FlipRates& fr,
     const LUT&       correction_table,
     int              ran_seed,
     int              n_forks
   ) {
-    
+
     // Initialize spot sim
     SpotSim sim;
-    
-    // Extract hyperparameters 
-    int total_spots = std::accumulate(bc_counts.begin(), bc_counts.end(), 0);
-    int N_barcodes  = cb.barcodes.size();
-    int N_bits      = cb.N_bits;
-    
-    // Construct batches of barcodes to simulate in parallel
-    std::vector<Vint> barcode_batches(n_forks);
-    for (int i = 0; i < N_barcodes; ++i) {barcode_batches[i % n_forks].push_back(i);}
-    if (n_forks == 1 && barcode_batches[0].size() != N_barcodes) {
-      Rcpp::stop("Error in batching barcodes for simulation. Expected all barcodes to be in one batch when n_forks=1.");
-    }
-    
-    // For each barcode, simulate and decode spot counts
-    Rcpp::Rcout << "Simulating and decoding spot counts for each barcode." << std::endl; 
+    int N_barcodes = cb.barcodes.size();
     int cache_size = 3 * N_barcodes;
+
+    int n_use = n_forks;
+#ifdef _WIN32
+    n_use = 1; // parallel::mcparallel() has no Windows equivalent (no fork())
+#endif
+
+    // Construct batches of barcodes to simulate in parallel (round-robin across n_use batches)
+    std::vector<Vint> barcode_batches(n_use);
+    for (int i = 0; i < N_barcodes; ++i) {barcode_batches[i % n_use].push_back(i);}
+
+    // For each barcode, simulate and decode spot counts
+    Rcpp::Rcout << "Simulating and decoding spot counts for each barcode." << std::endl;
     Vint rch_counts(cache_size, 0);
-    // Run via run_forked_batches() (fork_utils.h): batches run in forked children when
-    // n_forks > 1 (POSIX only), else serially in this process.
-    run_forked_batches<int>(
-      n_forks,
-      // batch_payload_size
-      [&](int /*i*/) -> size_t {return static_cast<size_t>(cache_size);},
-      // compute_batch
-      [&](int i) -> Vint {
-        Vint rch_counts_batch(cache_size, 0);
-        for (int b : barcode_batches[i]) {
-          boost::random::mt19937 rng(ran_seed + b);
-          Vint temp_vec = simulate_barcode_spots(
-            b,
-            bc_counts[b],
-            fr,
-            correction_table,
-            cb.barcodes,
-            rng
-          );
-          for (int j = 0; j < cache_size; ++j) {rch_counts_batch[j] += temp_vec[j];}
+
+    if (n_use <= 1) {
+      Vint batch_result = compute_spotsim_batch(bc_counts, cb, fr, correction_table, ran_seed, barcode_batches[0]);
+      for (int j = 0; j < cache_size; ++j) {rch_counts[j] += batch_result[j];}
+    } else {
+      // Dispatch batches via parallel::mcparallel()/mccollect() (mc_parallel_utils.h)
+      SpotSimCtx* raw_ctx = new SpotSimCtx{&cb, &correction_table};
+      XPtr<SpotSimCtx> ctx_ptr(raw_ctx, true);
+      IntegerVector bc_counts_r(bc_counts.begin(), bc_counts.end());
+      Vdbl     FR_flat  = unpack_fr(fr);
+      Function batch_fn = Environment::namespace_env("flipFISH")["mc_batch_spotsim"];
+
+      run_mc_batches(
+        n_use,
+        // build_call
+        [&](int i) -> Language {
+          IntegerVector idx(barcode_batches[i].begin(), barcode_batches[i].end());
+          return Language(batch_fn, ctx_ptr, bc_counts_r, FR_flat, cb.N_bits, ran_seed, idx);
+        },
+        // reduce
+        [&](int /*i*/, SEXP result) {
+          IntegerVector temp_vec = result;
+          for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
         }
-        return rch_counts_batch;
-      },
-      // reduce_batch
-      [&](int /*i*/, const Vint& temp_vec) {
-        for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
-      }
-    );
+      );
+    }
 
     // Resize vectors to count spots per barcode
     sim.read_counts.resize(N_barcodes, 0);
     sim.corrected_counts.resize(N_barcodes, 0);
     sim.hit_counts.resize(N_barcodes, 0);
-    
+
     // Parse out accumulations to spot sim
     const int read_offset      = 0;
     const int corrected_offset = N_barcodes;
@@ -2544,7 +2661,7 @@ SpotSim make_SpotSim(
       sim.corrected_counts[b]  = rch_counts[corrected_offset + b];
       sim.hit_counts[b]        = rch_counts[hit_offset + b];
     }
-    
+
     return sim;
   }
 
@@ -2953,6 +3070,62 @@ std::pair<Vdbl, Eigen::MatrixXd> dg_precompute_barcode_noise(
   }
 
 // Simulate and decode spot counts for every barcode with a nonzero true count this step, via DG spot generation.
+// Per-batch worker shared by make_SpotSim_DG()'s serial (n_forks<=1) and parallel paths. Each
+// active barcode's noise model (nearPD projection + Cholesky factor, via
+// dg_precompute_barcode_noise()) is computed inside whichever process -- a forked child, or this
+// process itself in the serial case -- ends up simulating that barcode's spots, rather than
+// upfront for all active barcodes; dg_precompute_barcode_noise() is a native nearPD port
+// (dg_nearPD_native()), so it's fork-safe, and distributing it across batches this way needs no
+// extra payload -- each batch only ever needs the precompute results for barcodes it alone
+// simulates, and (as before) sends back just its simulated counts.
+Vint compute_spotsim_dg_batch(
+    const Vint&      true_counts,
+    const Codebook&  cb,
+    const FlipRates& fr,
+    const LUT&       correction_table,
+    int              ran_seed,
+    const Vint&      batch_indices
+  ) {
+    int  N_bits     = cb.N_bits;
+    int  cache_size = 3 * static_cast<int>(cb.barcodes.size());
+    Vint rch_counts_batch(cache_size, 0);
+    for (int b : batch_indices) {
+      auto                   pre = dg_precompute_barcode_noise(b, fr, cb.barcodes, N_bits);
+      boost::random::mt19937 rng(ran_seed + b);
+      Vint temp_vec = simulate_barcode_spots_DG(
+        b, true_counts[b], pre.first, pre.second, correction_table, cb.barcodes, N_bits, rng
+      );
+      for (int j = 0; j < cache_size; ++j) {rch_counts_batch[j] += temp_vec[j];}
+    }
+    return rch_counts_batch;
+  }
+
+// Shared, read-only, non-owning context for one make_SpotSim_DG() call's worth of batches -- just
+// pointers into the caller's own (longer-lived) cb/correction_table.
+struct SpotSimDGCtx {
+    const Codebook* cb;
+    const LUT*      correction_table;
+  };
+
+// Computes one batch, for dispatch via parallel::mcparallel() (mc_parallel_utils.h) from a forked
+// child -- see compute_spotsim_dg_batch() above for the actual math, shared with the serial path.
+// [[Rcpp::export]]
+IntegerVector mc_batch_spotsim_dg(
+    SEXP                       ctx_sexp,
+    IntegerVector              true_counts_r,
+    const std::vector<double>& FR,
+    int                        N_bits,
+    int                        ran_seed,
+    IntegerVector              indices
+  ) {
+    XPtr<SpotSimDGCtx> ctx(ctx_sexp);
+    Vint      true_counts(true_counts_r.begin(), true_counts_r.end());
+    FlipRates fr = pack_fr(Vdbl(FR.begin(), FR.end()), N_bits);
+    Vint      batch_indices(indices.begin(), indices.end());
+    Vint      result = compute_spotsim_dg_batch(true_counts, *(ctx->cb), fr, *(ctx->correction_table), ran_seed, batch_indices);
+    return wrap(result);
+  }
+
 SpotSim make_SpotSim_DG(
     const Vint&      true_counts,
     const Codebook&  cb,
@@ -2963,50 +3136,49 @@ SpotSim make_SpotSim_DG(
   ) {
     SpotSim sim;
     int N_barcodes = cb.barcodes.size();
-    int N_bits     = cb.N_bits;
-   
-    // Active barcodes (nonzero true count this step). Each active barcode's noise model (nearPD
-    // projection + Cholesky factor, via dg_precompute_barcode_noise()) is computed inside whichever
-    // process -- a forked child, or this process itself when n_use==1 -- ends up simulating that
-    // barcode's spots, rather than upfront here for all active barcodes; see this function's closing
-    // comment for why that's both correct and fork-safe.
+
+    // Active barcodes (nonzero true count this step)
     Vint active;
     for (int b = 0; b < N_barcodes; ++b) {if (true_counts[b] > 0) {active.push_back(b);}}
-   
+
     // Batch active barcodes across forks (same pattern as make_SpotSim())
     int n_active = active.size();
     int n_use    = std::max(1, std::min(n_forks, std::max(1, n_active)));
+#ifdef _WIN32
+    n_use = 1; // parallel::mcparallel() has no Windows equivalent (no fork())
+#endif
     std::vector<Vint> barcode_batches(n_use);
     for (int i = 0; i < n_active; ++i) {barcode_batches[i % n_use].push_back(active[i]);}
-   
+
     int  cache_size = 3 * N_barcodes;
     Vint rch_counts(cache_size, 0);
-   
-    // Run via run_forked_batches() (fork_utils.h): batches run in forked children when
-    // n_use > 1 (POSIX only), else serially in this process.
-    run_forked_batches<int>(
-      n_use,
-      // batch_payload_size
-      [&](int /*i*/) -> size_t {return static_cast<size_t>(cache_size);},
-      // compute_batch
-      [&](int i) -> Vint {
-        Vint rch_counts_batch(cache_size, 0);
-        for (int b : barcode_batches[i]) {
-          auto                    pre = dg_precompute_barcode_noise(b, fr, cb.barcodes, N_bits);
-          boost::random::mt19937  rng(ran_seed + b);
-          Vint temp_vec = simulate_barcode_spots_DG(
-            b, true_counts[b], pre.first, pre.second, correction_table, cb.barcodes, N_bits, rng
-          );
-          for (int j = 0; j < cache_size; ++j) {rch_counts_batch[j] += temp_vec[j];}
+
+    if (n_use <= 1) {
+      Vint batch_result = compute_spotsim_dg_batch(true_counts, cb, fr, correction_table, ran_seed, barcode_batches[0]);
+      for (int j = 0; j < cache_size; ++j) {rch_counts[j] += batch_result[j];}
+    } else {
+      // Dispatch batches via parallel::mcparallel()/mccollect() (mc_parallel_utils.h)
+      SpotSimDGCtx* raw_ctx = new SpotSimDGCtx{&cb, &correction_table};
+      XPtr<SpotSimDGCtx> ctx_ptr(raw_ctx, true);
+      IntegerVector true_counts_r(true_counts.begin(), true_counts.end());
+      Vdbl     FR_flat  = unpack_fr(fr);
+      Function batch_fn = Environment::namespace_env("flipFISH")["mc_batch_spotsim_dg"];
+
+      run_mc_batches(
+        n_use,
+        // build_call
+        [&](int i) -> Language {
+          IntegerVector idx(barcode_batches[i].begin(), barcode_batches[i].end());
+          return Language(batch_fn, ctx_ptr, true_counts_r, FR_flat, cb.N_bits, ran_seed, idx);
+        },
+        // reduce
+        [&](int /*i*/, SEXP result) {
+          IntegerVector temp_vec = result;
+          for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
         }
-        return rch_counts_batch;
-      },
-      // reduce_batch
-      [&](int /*i*/, const Vint& temp_vec) {
-        for (int j = 0; j < cache_size; ++j) {rch_counts[j] += temp_vec[j];}
-      }
-    );
-   
+      );
+    }
+
     sim.read_counts.resize(N_barcodes, 0);
     sim.corrected_counts.resize(N_barcodes, 0);
     sim.hit_counts.resize(N_barcodes, 0);
@@ -3019,19 +3191,6 @@ SpotSim make_SpotSim_DG(
       sim.hit_counts[b]       = rch_counts[hit_offset + b];
     }
     return sim;
-   
-    /*
-     * Via DG (correlated-Gaussian-noise) spot generation. Mirrors make_SpotSim()'s fork/pipe
-     * parallelism (batches barcodes across n_forks processes, same pipe-based int-buffer handoff).
-     * Each active barcode's precompute (dg_precompute_barcode_noise(): nearPD projection + Cholesky
-     * -- the heavier numerical cost per active barcode, an iterative eigendecomposition-based
-     * projection) now runs inside whichever process actually simulates that barcode, rather than
-     * serially in the parent for every active barcode before forking. That used to be forced by
-     * dg_nearest_corr_matrix()'s R callback (not fork-safe); now that it's a native nearPD port
-     * (dg_nearPD_native()), it's itself fork-safe, and distributing it across n_forks this way needs
-     * no new pipe payload -- each child only ever needs the precompute results for barcodes it alone
-     * simulates, and (as before) sends back just its simulated counts.
-     */
   }
 
 // Mean of x 

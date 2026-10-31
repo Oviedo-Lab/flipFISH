@@ -33,6 +33,24 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// mc_batch_expected_bc_counts
+List mc_batch_expected_bc_counts(SEXP ctx_sexp, const std::vector<double>& FR, int N_bits, IntegerVector indices, int max_flips, bool do_grad, bool do_grad_erc, bool do_grad_ehc);
+RcppExport SEXP _flipFISH_mc_batch_expected_bc_counts(SEXP ctx_sexpSEXP, SEXP FRSEXP, SEXP N_bitsSEXP, SEXP indicesSEXP, SEXP max_flipsSEXP, SEXP do_gradSEXP, SEXP do_grad_ercSEXP, SEXP do_grad_ehcSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type ctx_sexp(ctx_sexpSEXP);
+    Rcpp::traits::input_parameter< const std::vector<double>& >::type FR(FRSEXP);
+    Rcpp::traits::input_parameter< int >::type N_bits(N_bitsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type indices(indicesSEXP);
+    Rcpp::traits::input_parameter< int >::type max_flips(max_flipsSEXP);
+    Rcpp::traits::input_parameter< bool >::type do_grad(do_gradSEXP);
+    Rcpp::traits::input_parameter< bool >::type do_grad_erc(do_grad_ercSEXP);
+    Rcpp::traits::input_parameter< bool >::type do_grad_ehc(do_grad_ehcSEXP);
+    rcpp_result_gen = Rcpp::wrap(mc_batch_expected_bc_counts(ctx_sexp, FR, N_bits, indices, max_flips, do_grad, do_grad_erc, do_grad_ehc));
+    return rcpp_result_gen;
+END_RCPP
+}
 // mQC
 List mQC(NumericMatrix bc_counts, IntegerMatrix codebook, int maxHam, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, List weights, int n_restarts, int max_fs_bc);
 RcppExport SEXP _flipFISH_mQC(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP weightsSEXP, SEXP n_restartsSEXP, SEXP max_fs_bcSEXP) {
@@ -121,6 +139,22 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// mc_batch_spotsim
+IntegerVector mc_batch_spotsim(SEXP ctx_sexp, IntegerVector bc_counts_r, const std::vector<double>& FR, int N_bits, int ran_seed, IntegerVector indices);
+RcppExport SEXP _flipFISH_mc_batch_spotsim(SEXP ctx_sexpSEXP, SEXP bc_counts_rSEXP, SEXP FRSEXP, SEXP N_bitsSEXP, SEXP ran_seedSEXP, SEXP indicesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type ctx_sexp(ctx_sexpSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type bc_counts_r(bc_counts_rSEXP);
+    Rcpp::traits::input_parameter< const std::vector<double>& >::type FR(FRSEXP);
+    Rcpp::traits::input_parameter< int >::type N_bits(N_bitsSEXP);
+    Rcpp::traits::input_parameter< int >::type ran_seed(ran_seedSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type indices(indicesSEXP);
+    rcpp_result_gen = Rcpp::wrap(mc_batch_spotsim(ctx_sexp, bc_counts_r, FR, N_bits, ran_seed, indices));
+    return rcpp_result_gen;
+END_RCPP
+}
 // test_fr_recovery
 List test_fr_recovery(NumericMatrix bc_counts, IntegerMatrix codebook, int n_sims, int maxHam, int n_forks, int max_flips, int report_freq, int maxeval, List fliprate_priors, List stip_fliprate_priors, List weights, int n_restarts);
 RcppExport SEXP _flipFISH_test_fr_recovery(SEXP bc_countsSEXP, SEXP codebookSEXP, SEXP n_simsSEXP, SEXP maxHamSEXP, SEXP n_forksSEXP, SEXP max_flipsSEXP, SEXP report_freqSEXP, SEXP maxevalSEXP, SEXP fliprate_priorsSEXP, SEXP stip_fliprate_priorsSEXP, SEXP weightsSEXP, SEXP n_restartsSEXP) {
@@ -140,6 +174,22 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< List >::type weights(weightsSEXP);
     Rcpp::traits::input_parameter< int >::type n_restarts(n_restartsSEXP);
     rcpp_result_gen = Rcpp::wrap(test_fr_recovery(bc_counts, codebook, n_sims, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, stip_fliprate_priors, weights, n_restarts));
+    return rcpp_result_gen;
+END_RCPP
+}
+// mc_batch_spotsim_dg
+IntegerVector mc_batch_spotsim_dg(SEXP ctx_sexp, IntegerVector true_counts_r, const std::vector<double>& FR, int N_bits, int ran_seed, IntegerVector indices);
+RcppExport SEXP _flipFISH_mc_batch_spotsim_dg(SEXP ctx_sexpSEXP, SEXP true_counts_rSEXP, SEXP FRSEXP, SEXP N_bitsSEXP, SEXP ran_seedSEXP, SEXP indicesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type ctx_sexp(ctx_sexpSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type true_counts_r(true_counts_rSEXP);
+    Rcpp::traits::input_parameter< const std::vector<double>& >::type FR(FRSEXP);
+    Rcpp::traits::input_parameter< int >::type N_bits(N_bitsSEXP);
+    Rcpp::traits::input_parameter< int >::type ran_seed(ran_seedSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type indices(indicesSEXP);
+    rcpp_result_gen = Rcpp::wrap(mc_batch_spotsim_dg(ctx_sexp, true_counts_r, FR, N_bits, ran_seed, indices));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -320,12 +370,15 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_flipFISH_lower_tri_pairs", (DL_FUNC) &_flipFISH_lower_tri_pairs, 1},
     {"_flipFISH_unique_Hamming_cb", (DL_FUNC) &_flipFISH_unique_Hamming_cb, 1},
+    {"_flipFISH_mc_batch_expected_bc_counts", (DL_FUNC) &_flipFISH_mc_batch_expected_bc_counts, 8},
     {"_flipFISH_mQC", (DL_FUNC) &_flipFISH_mQC, 11},
     {"_flipFISH_mQC_msle_at", (DL_FUNC) &_flipFISH_mQC_msle_at, 9},
     {"_flipFISH_mQC_ecc_jacobian_at", (DL_FUNC) &_flipFISH_mQC_ecc_jacobian_at, 6},
     {"_flipFISH_mQC_counts_at", (DL_FUNC) &_flipFISH_mQC_counts_at, 6},
     {"_flipFISH_mQC_ehc_jacobian_at", (DL_FUNC) &_flipFISH_mQC_ehc_jacobian_at, 6},
+    {"_flipFISH_mc_batch_spotsim", (DL_FUNC) &_flipFISH_mc_batch_spotsim, 6},
     {"_flipFISH_test_fr_recovery", (DL_FUNC) &_flipFISH_test_fr_recovery, 12},
+    {"_flipFISH_mc_batch_spotsim_dg", (DL_FUNC) &_flipFISH_mc_batch_spotsim_dg, 6},
     {"_flipFISH_mQC_DG", (DL_FUNC) &_flipFISH_mQC_DG, 18},
     {"_flipFISH_tr_sum_check", (DL_FUNC) &_flipFISH_tr_sum_check, 5},
     {"_flipFISH_bvn_cdf_uppertail_test", (DL_FUNC) &_flipFISH_bvn_cdf_uppertail_test, 3},

@@ -9,6 +9,10 @@ unique_Hamming_cb <- function(codebook) {
     .Call(`_flipFISH_unique_Hamming_cb`, codebook)
 }
 
+mc_batch_expected_bc_counts <- function(ctx_sexp, FR, N_bits, indices, max_flips, do_grad, do_grad_erc, do_grad_ehc) {
+    .Call(`_flipFISH_mc_batch_expected_bc_counts`, ctx_sexp, FR, N_bits, indices, max_flips, do_grad, do_grad_erc, do_grad_ehc)
+}
+
 mQC <- function(bc_counts, codebook, maxHam, n_forks, max_flips, report_freq = 1L, maxeval = 1000L, fliprate_priors, weights, n_restarts = 1L, max_fs_bc = 40L) {
     .Call(`_flipFISH_mQC`, bc_counts, codebook, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, weights, n_restarts, max_fs_bc)
 }
@@ -29,8 +33,16 @@ mQC_ehc_jacobian_at <- function(FR, bc_counts, codebook, maxHam, n_forks, max_fl
     .Call(`_flipFISH_mQC_ehc_jacobian_at`, FR, bc_counts, codebook, maxHam, n_forks, max_flips)
 }
 
+mc_batch_spotsim <- function(ctx_sexp, bc_counts_r, FR, N_bits, ran_seed, indices) {
+    .Call(`_flipFISH_mc_batch_spotsim`, ctx_sexp, bc_counts_r, FR, N_bits, ran_seed, indices)
+}
+
 test_fr_recovery <- function(bc_counts, codebook, n_sims, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, stip_fliprate_priors, weights, n_restarts = 1L) {
     .Call(`_flipFISH_test_fr_recovery`, bc_counts, codebook, n_sims, maxHam, n_forks, max_flips, report_freq, maxeval, fliprate_priors, stip_fliprate_priors, weights, n_restarts)
+}
+
+mc_batch_spotsim_dg <- function(ctx_sexp, true_counts_r, FR, N_bits, ran_seed, indices) {
+    .Call(`_flipFISH_mc_batch_spotsim_dg`, ctx_sexp, true_counts_r, FR, N_bits, ran_seed, indices)
 }
 
 mQC_DG <- function(bc_counts, codebook, maxHam, resamples, burnin, FR_search, max_step_size, min_step_size_divider, max_temperature, min_temperature_scale, n_tracker_updates, n_forks, N_cells, fliprate_priors, weights, max_fs_bc = 40L, max_calls_per_step = 0L, seed = 726354819L) {

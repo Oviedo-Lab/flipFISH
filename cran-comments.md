@@ -7,59 +7,23 @@
 
 ## R CMD check results
 
-`R CMD check --as-cran` currently reports 2 WARNINGs and 5 NOTEs. Notes on each:
+`R CMD check --as-cran` currently reports 1 WARNING and 5 NOTEs. Notes on each:
 
-### WARNING: compiled code calls `_exit`
+### WARNING: compiler warning during install (local environment artifact)
 
 ```
-File 'flipFISH/libs/flipFISH.so':
-  Found '__exit', possibly from '_exit' (C), '_Exit' (C)
-    Object: 'main.o'
+/Library/Frameworks/R.framework/Resources/include/R_ext/Boolean.h:62:36: warning: unknown warning
+group '-Wfixed-enum-extension', ignored [-Wunknown-warning-option]
 ```
 
-This comes from `src/fork_utils.h`'s `run_forked_batches()`, a small fork()/pipe() map-reduce
-helper used by the handful of `src/main.cpp` functions that distribute per-barcode work across
-processes (`expected_bc_counts()`, `make_SpotSim()`, `make_SpotSim_DG()`). Each of these is called
-on every evaluation of the package's optimizers (every L-BFGS objective evaluation in
-`misread.qc()`, every MCMCSA step in `misread.qc.DG()`), so this is a hot path, not an incidental
-one.
-
-**Why `_exit()` specifically, and why it is safe here.** After `fork()`, each child computes its
-batch and writes the result to its pipe; `_exit()` (not `exit()`) is used deliberately so the
-child skips C++ static destructors, `atexit()` handlers, and C stdio buffer flushes it shares with
-the parent -- running any of those twice (once implicitly via the parent's own eventual exit) is
-the actual hazard `_exit()` avoids. The child never calls back into R: every `Rcpp::stop()`/R API
-call in the file is confined to the parent process (verified by inspection -- the only two calls
-inside the `if (pid == 0)` child branch are `write()` and `_exit()` themselves). Windows is handled
-by `#ifdef _WIN32` excluding the whole fork()/pipe() path from compilation there -- every batch
-just runs serially in-process on Windows, which `R/main.R`'s `check_forks()` also enforces at the R
-level (`n_forks` is forced to 1 off of POSIX).
-
-**Why not use `parallel::mclapply()` instead.** This was evaluated directly rather than assumed.
-Benchmarking `run_forked_batches()` against an equivalent `parallel::mclapply()` implementation,
-batching the same payload sizes:
-
-* On realistic per-call workloads (the package's own 819-barcode/28-bit reference codebook), the
-  hand-rolled path is 5-30% faster than the `mclapply()` equivalent at matched fork counts, because
-  it moves raw binary buffers through pipes instead of paying R's `serialize()`/`unserialize()`
-  cost per worker.
-* On small per-call workloads -- common here, since both optimizers call this on every single
-  iteration -- `mclapply()`'s per-worker overhead dominates and can make parallelizing actively
-  counterproductive (observed: `mclapply()` at 8 workers *slower* than running serially, 0.0071s vs
-  0.0024s, while the hand-rolled path stayed flat at ~0.0019s regardless of fork count).
-
-Given `expected_bc_counts()` alone runs on every optimizer iteration (hundreds of times per fit),
-these per-call differences compound across a full fit. The custom mechanism is a deliberate,
-measured choice for this access pattern, not premature optimization, and the compiled-code WARNING
-above is understood and accepted as the tradeoff for it.
-
-### No `@examples` yet (not currently flagged, but worth noting)
-
-`tests/testthat.R` now wires the existing `testthat` suite (5 files) up to `R CMD check`
-("checking tests ... Running 'testthat.R' ... OK"), so that no longer shows as a WARNING.
-`@examples` have not been added yet, and vignettes were deliberately moved to
-`vignettes/articles/` (pkgdown-only, not built as package vignettes) since their content is still
-under active revision. Known outstanding work, not yet resolved.
+This originates from R's own installed header (`R_ext/Boolean.h`), not from this package's code or
+`src/Makevars` (which sets no custom warning flags). It stems from a version mismatch on this local
+machine between the Apple clang R itself was built with and the newer Apple clang on `$PATH` used
+to compile packages (Xcode has been updated since this R binary was built); the header's
+`#pragma clang diagnostic ignored "-Wfixed-enum-extension"` targets a warning-group name the newer
+clang no longer recognizes under that spelling. Not expected to reproduce on CRAN's own build
+machines, where the R binary and compiler toolchain are matched; will be confirmed via
+win-builder/R-hub/mac-builder before submission.
 
 ### NOTE: `nloptr` listed in Imports but not imported from
 
@@ -92,13 +56,9 @@ HTML Tidy installed here), not the package.
 
 ### NOTE: R code for possible problems
 
-Almost entirely `plot.MCMCsteps` (the unfinished function explicitly out of scope for this pass)
--- its undefined globals (`.DG_title_size`, `sim_mse`, etc.) and missing `ggplot2`/`stats`
-bindings will be resolved when it is finished and exported like the other `plot_*` functions. The
-one unrelated item, `if (class(fliprate_priors) != "list")` in `build_corr_priors()`
-(`R/main.R`), is a real (if harmless here) style issue -- `class(x) == "list"` only works because
-a plain list's `class()` is always exactly `"list"` -- not yet fixed; `inherits(fliprate_priors,
-"list")` would be the correct form.
+Entirely `plot.MCMCsteps` (the unfinished function explicitly out of scope for this pass) -- its
+undefined globals (`.DG_title_size`, `sim_mse`, etc.) and missing `ggplot2`/`stats` bindings will
+be resolved when it is finished and exported like the other `plot_*` functions.
 
 ## Downstream dependencies
 
